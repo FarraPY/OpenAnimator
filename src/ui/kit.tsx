@@ -97,7 +97,7 @@ export function TooltipLayer() {
 
 // ── menús desplegables ──────────────────────────────────────────────────────
 export type MenuItem =
-  | { label: ReactNode; icon?: IconName; hint?: ReactNode; kbd?: string; checked?: boolean; danger?: boolean; disabled?: boolean; onSelect: () => void; desc?: ReactNode }
+  | { label: ReactNode; icon?: IconName; iconColor?: string; hint?: ReactNode; kbd?: string; checked?: boolean; danger?: boolean; disabled?: boolean; onSelect: () => void; desc?: ReactNode }
   | { sep: true }
   | { header: ReactNode }
 
@@ -140,7 +140,7 @@ export function Menu({ anchor, items, onClose, align = 'start', width, placement
         return (
           <div key={i} className={cx('menu-item', it.danger && 'danger', it.disabled && 'disabled', hi === i && 'hi', !!it.desc && 'has-desc')}
             onMouseEnter={() => setHi(i)} onClick={() => { if (it.disabled) return; onClose(); it.onSelect() }}>
-            <span className="menu-check">{it.checked ? <Icon name="check" size={14} stroke={2.2} /> : it.icon ? <Icon name={it.icon} size={15} /> : null}</span>
+            <span className="menu-check" style={it.iconColor && !it.checked ? { color: it.iconColor } : undefined}>{it.checked ? <Icon name="check" size={14} stroke={2.2} /> : it.icon ? <Icon name={it.icon} size={15} /> : null}</span>
             <span className="menu-label">{it.label}{it.desc && <span className="menu-desc">{it.desc}</span>}</span>
             {it.hint && <span className="menu-hint">{it.hint}</span>}
             {it.kbd && <Kbd>{it.kbd}</Kbd>}

@@ -67,6 +67,13 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
   const askClaude = (text: string) => { setTab('claude'); setInject({ text, n: Date.now() }) }
+  const fittedTl = useRef(false)
+  useEffect(() => {
+    if (!touch || !tl || fittedTl.current) return
+    fittedTl.current = true
+    const want = 18 + 36 + tl.tracks.length * 64 + 14 // agarradera + regla + pistas (tamaños táctiles) + margen
+    setTlH(Math.round(Math.min(window.innerHeight * 0.45, Math.max(tlH, want))))
+  }, [tl])
   useBack(() => {
     if (full) { setFull(false); return true }
     if (drawer) { setDrawer(null); return true }
@@ -144,9 +151,12 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
     }
     setSel(nsel)
   })
-  const addTrack = (type: TrackType) => mutate((d) => {
-    const n = d.tracks.filter((x) => x.type === type).length + 1
-    const tr: Track = { id: uid('t'), name: `${TRACK_NAME[type]} ${n}`, type, clips: [] }
+  /** Pista nueva; el nombre define el rol y el color de las de audio (Voz, Música, SFX: ver trackRole). */
+  const addTrack = (type: TrackType, base = TRACK_NAME[type]) => mutate((d) => {
+    const taken = new Set(d.tracks.map((x) => x.name))
+    let name = base, n = 2
+    while (taken.has(name)) name = `${base} ${n++}`
+    const tr: Track = { id: uid('t'), name, type, clips: [] }
     if (type === 'audio') d.tracks.push(tr)
     else { const i = d.tracks.findIndex((x) => x.type === 'audio'); d.tracks.splice(i < 0 ? d.tracks.length : i, 0, tr) }
   })
@@ -488,10 +498,14 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
           <div className="tl-bar">
             <Button size="sm" variant="ghost" icon="plus" iconRight="chevron-down" onClick={addMenu.open}>Pista</Button>
             {addMenu.render([
-              { label: 'Pista de escenas', icon: 'code', desc: 'HTML/SVG animado', onSelect: () => addTrack('scene') },
-              { label: 'Pista de video', icon: 'video', desc: 'Videos e imágenes', onSelect: () => addTrack('video') },
-              { label: 'Pista de audio', icon: 'music', desc: 'Voz, música y efectos', onSelect: () => addTrack('audio') },
-            ], { width: 240 })}
+              { label: 'Pista de escenas', icon: 'code', iconColor: TYPE_COLOR.scene, desc: 'HTML/SVG animado', onSelect: () => addTrack('scene') },
+              { label: 'Pista de video', icon: 'video', iconColor: TYPE_COLOR.video, desc: 'Videos e imágenes', onSelect: () => addTrack('video') },
+              { sep: true },
+              { label: 'Pista de voz', icon: 'mic', iconColor: TYPE_COLOR.voice, desc: 'Narración y diálogos', onSelect: () => addTrack('audio', 'Voz') },
+              { label: 'Pista de música', icon: 'music', iconColor: TYPE_COLOR.music, desc: 'Música de fondo', onSelect: () => addTrack('audio', 'Música') },
+              { label: 'Pista de efectos (SFX)', icon: 'wave', iconColor: TYPE_COLOR.sfx, desc: 'Golpes, whooshes, ambiente', onSelect: () => addTrack('audio', 'SFX') },
+              { label: 'Otra pista de audio', icon: 'volume', iconColor: TYPE_COLOR.audio, onSelect: () => addTrack('audio') },
+            ], { width: 270 })}
             <Divider vertical />
             <Button size="sm" variant="ghost" icon="scissors" tip="Cortar en el cursor" kbd="S" onClick={() => splitAt(t)} />
             <Button size="sm" variant="ghost" icon="copy" tip="Duplicar" kbd="Ctrl+D" onClick={dupSel} disabled={!sel.length} />

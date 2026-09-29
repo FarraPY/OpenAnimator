@@ -280,9 +280,12 @@ html.touch .clip.dragging { opacity: .92; box-shadow: inset 0 0 0 2.5px #fff, 0 
 html.touch .playhead { width: 2px; }
 html.touch .playhead::before { content: ''; position: absolute; top: 0; left: -8px; width: 18px; height: 14px; background: #ff4f6d; clip-path: polygon(0 0, 100% 0, 50% 100%); }
 html.touch .note-mark { transform: scale(1.35); transform-origin: 50% 100%; }
-html.touch .tl-resize { top: -14px; height: 28px; touch-action: none; }
-html.touch .tl-resize::before { content: ''; position: absolute; left: 50%; top: 11px; width: 52px; height: 5px; margin-left: -26px; border-radius: 3px; background: var(--line-3); }
-html.touch .tl-resize:hover::after { display: none; }
+/* Agarradera para cambiar el alto del timeline: una franja propia (no tapa la regla ni la barra). */
+html.touch .tl-resize { position: relative; top: 0; flex: none; height: 18px; background: var(--bg-0); border-bottom: 1px solid var(--line); touch-action: none; }
+html.touch .tl-resize::before { content: ''; position: absolute; left: 50%; top: 6px; width: 56px; height: 5px; margin-left: -28px; border-radius: 3px; background: var(--line-3); }
+/* Sin :hover/:active en la agarradera: Chrome "atrae" los toques cercanos hacia los elementos con efecto
+   al tocar, y le robaría los toques al borde de la regla. La regla sí lo tiene (así gana los suyos). */
+html.touch .tl-ruler:active { background: var(--bg-2); }
 
 /* ── Vista de Claude (pantalla propia) ───────────────────────────────── */
 .claude-view { position: absolute; inset: 0; z-index: 50; display: flex; background: var(--bg-1); animation: viewIn .22s var(--ease); }
