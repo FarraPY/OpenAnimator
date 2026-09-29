@@ -85,10 +85,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   historial cambia (imágenes quitadas por tamaño: `trimImages`). Imágenes a Claude ≤ 1920 px por lado. Streaming ansioso
   de herramientas → validar entrada (`__json_buf` estricto + `validateInput`). `fallbacks: 'default'`.
 - Claude con el plan (por defecto, `settings.claude.backend = 'termux'`): el Claude Code oficial corre en Termux.
-  La app instala y arranca por `RUN_COMMAND` (`TermuxLink.java`) un puente (`android/termux/bridge.mjs`, token por
-  stdin, 127.0.0.1:47821) que lanza `claude -p` stream-json con `--tools ""` y sólo el MCP `openanimator`
-  (`oa-mcp.mjs` → puente → app → `tools.ts`): los proyectos viven en la app. El protocolo del chat es el de la PC
-  (`electron/claude-session.ts`, compartido); `code.ts` es el transporte. Nunca leer credenciales de Claude.
+  La app instala y arranca por `RUN_COMMAND` (`TermuxLink.java`) un puente (`android/termux/bridge.mjs`, node directo,
+  token en `~/.openanimator/token`, 127.0.0.1:47821) que lanza `claude -p` stream-json con `--tools ""` y sólo el MCP
+  `openanimator` (`oa-mcp.mjs` → puente → app → `tools.ts`): los proyectos viven en la app. El protocolo del chat es el
+  de la PC (`electron/claude-session.ts`, compartido); `code.ts` es el transporte. Nunca leer credenciales de Claude.
+  Si el puente no arranca, el error trae la salida de Termux y `~/.openanimator/bridge.log`. Trampa vista en la
+  tablet: Node.js nuevo con OpenSSL viejo no enlaza (`CANNOT LINK EXECUTABLE`) → la preparación hace `yes | pkg upgrade`.
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
 - Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
