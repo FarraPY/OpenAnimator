@@ -8,7 +8,6 @@ import android.content.ContentResolver;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -71,8 +70,13 @@ public class MainActivity extends Activity {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-        server = new AppServer(getAssets(), fs);
         bridge = new Bridge(this, fs, new Secrets(new File(getFilesDir(), "secrets.json")));
+        server = new AppServer(getAssets(), fs, new AppServer.PageToken() {
+            @Override
+            public String next() {
+                return bridge.newPageToken();
+            }
+        });
         createWebView();
         handleIntent(getIntent());
     }
@@ -350,12 +354,6 @@ public class MainActivity extends Activity {
                 return true;
             }
             return false;
-        }
-
-        @Override
-        public void onPageStarted(WebView view, String url, Bitmap favicon) {
-            // Página nueva (o recargada): el puente entrega un token nuevo a la interfaz.
-            if (url != null && url.startsWith(AppServer.APP_ORIGIN)) bridge.resetToken();
         }
 
         @Override

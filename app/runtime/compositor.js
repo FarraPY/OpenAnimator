@@ -413,15 +413,10 @@
       } else if (m.type === 'probe') {
         post({ type: 'probe', id: m.id, result: await probeScene(m.src) });
       } else if (m.type === 'frame') {
-        // Un fotograma como imagen (base64). format: jpeg | png | bitmap (ImageBitmap transferible).
+        // Un fotograma como imagen (base64). format: jpeg | png.
         var cv = await rasterAt(m.t, m.width, m.height);
-        if (m.format === 'bitmap') {
-          var bmp = await createImageBitmap(cv);
-          window.parent.postMessage({ source: 'oa-compositor', type: 'frame', id: m.id, t: m.t, bitmap: bmp, width: cv.width, height: cv.height }, '*', [bmp]);
-        } else {
-          var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
-          post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: await canvasData(cv, mime, m.quality || 0.92), width: cv.width, height: cv.height });
-        }
+        var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
+        post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: await canvasData(cv, mime, m.quality || 0.92), width: cv.width, height: cv.height });
       }
     } catch (err) {
       post({ type: 'error', id: m.id, message: String(err && err.message || err) });

@@ -4,7 +4,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.media.MediaMuxer;
 import android.opengl.EGL14;
@@ -65,12 +64,18 @@ final class Encoder {
         thread = Executors.newSingleThreadExecutor();
         job = new Job(fs, a);
         final Job j = job;
-        return run(new Callable<JSONObject>() {
-            @Override
-            public JSONObject call() throws Exception {
-                return j.init();
-            }
-        });
+        try {
+            return run(new Callable<JSONObject>() {
+                @Override
+                public JSONObject call() throws Exception {
+                    return j.init();
+                }
+            });
+        } catch (Exception e) {
+            // Un codificador a medio configurar se libera ya (si no, queda tomado hasta la próxima exportación).
+            cancel();
+            throw e;
+        }
     }
 
     void audio(byte[] pcm) throws IOException {
@@ -98,7 +103,13 @@ final class Encoder {
             return run(new Callable<JSONObject>() {
                 @Override
                 public JSONObject call() throws Exception {
-                    return j.finish();
+                    try {
+                        return j.finish();
+                    } catch (Exception e) {
+                        // Falló al cerrar (sin espacio, el codificador no terminó…): se libera todo y se borra el parcial.
+                        j.release(true);
+                        throw e;
+                    }
                 }
             });
         } finally {
@@ -564,15 +575,5 @@ final class Encoder {
             int e = GLES20.glGetError();
             if (e != GLES20.GL_NO_ERROR) throw new IOException("OpenGL " + what + ": 0x" + Integer.toHexString(e));
         }
-    }
-
-    /** Encoders the device has, for the export dialog. */
-    static boolean hasEncoder(String mime) {
-        MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-        for (MediaCodecInfo info : mcl.getCodecInfos()) {
-            if (!info.isEncoder()) continue;
-            for (String t : info.getSupportedTypes()) if (t.equalsIgnoreCase(mime)) return true;
-        }
-        return false;
     }
 }

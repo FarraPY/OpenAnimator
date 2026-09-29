@@ -71,9 +71,11 @@ export class Renderer {
     return this.exclusive(async () => {
       await this.ready
       await new Promise((resolve, reject) => {
-        this.reloading = { type: 'reload', resolve, reject }
+        const entry: Pending = { type: 'reload', resolve, reject }
+        this.reloading = entry
         this.post({ type: 'reload' })
-        setTimeout(() => { if (this.reloading) { this.reloading = null; resolve(false) } }, 30000)
+        // Sólo este pedido: el plazo de uno viejo no puede soltar la recarga siguiente.
+        setTimeout(() => { if (this.reloading === entry) { this.reloading = null; resolve(false) } }, 30000)
       })
     })
   }
@@ -84,15 +86,6 @@ export class Renderer {
       await this.ready
       const r = await this.request<{ data: string; mime: string; width: number; height: number }>('frame', { t, width, height, format, quality })
       return r
-    })
-  }
-
-  /** Fotograma como ImageBitmap (sin compresión), para la exportación con WebCodecs. */
-  bitmap(t: number, width: number, height: number) {
-    return this.exclusive(async () => {
-      await this.ready
-      const r = await this.request<{ bitmap: ImageBitmap }>('frame', { t, width, height, format: 'bitmap' })
-      return r.bitmap
     })
   }
 
@@ -141,6 +134,15 @@ async function getRenderer(projectId: string, tlId: string) {
 
 export function closeFramePool(projectId?: string) {
   for (const [k, r] of pool) if (!projectId || k.startsWith(projectId + '|')) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
+}
+
+/**
+ * Ancho para que la imagen no pase de maxSide por lado (la API pide como mucho 2000 px cuando la
+ * conversación tiene muchas imágenes; un proyecto vertical a 1920 de ancho mediría 3413 de alto).
+ */
+export function fitWidth(projectId: string, width: number, maxSide = 1920) {
+  const pr = readProject(projectId)
+  return Math.max(160, Math.min(width, maxSide, Math.floor((maxSide * pr.width) / pr.height)))
 }
 
 function sizeFor(projectId: string, width: number) {
@@ -207,11 +209,14 @@ export async function contactSheet(projectId: string, tlId: string | undefined, 
     const a = Math.max(0, opts.from ?? 0), b = Math.min(tl.duration, opts.to ?? tl.duration)
     times = Array.from({ length: n }, (_, i) => +(a + ((b - a) * (i + 0.5)) / n).toFixed(3))
   }
-  const cols = opts.cols || Math.min(4, times.length)
-  const frames = await renderFrames(projectId, tid, times, opts.width || 480, true, 'jpeg')
-  const { w, h } = sizeFor(projectId, opts.width || 480)
-  const rows = Math.ceil(frames.length / cols)
+  const cols = Math.max(1, Math.min(8, Math.round(opts.cols || Math.min(4, times.length))))
+  const rows = Math.ceil(times.length / cols)
   const pad = 8
+  // La hoja entera entra en 1990 px por lado (ver fitWidth).
+  const fit = Math.floor(Math.min((1990 - pad) / cols - pad, (((1990 - pad) / rows - pad) * pr.width) / pr.height))
+  const tw = Math.max(160, Math.min(opts.width || 480, fit))
+  const frames = await renderFrames(projectId, tid, times, tw, true, 'jpeg')
+  const { w, h } = sizeFor(projectId, tw)
   const cv = document.createElement('canvas')
   cv.width = pad + cols * (w + pad); cv.height = pad + rows * (h + pad)
   const g = cv.getContext('2d')!
@@ -221,7 +226,7 @@ export async function contactSheet(projectId: string, tlId: string | undefined, 
     g.drawImage(bmp, pad + (i % cols) * (w + pad), pad + Math.floor(i / cols) * (h + pad), w, h)
     bmp.close()
   }
-  return { png: await toBase64(cv, 'image/png'), times }
+  return { jpeg: await toBase64(cv, 'image/jpeg', 0.88), times }
 }
 
 export type AuditIssue = { kind: string; text: string; clip?: string; t: number; box?: number[] }

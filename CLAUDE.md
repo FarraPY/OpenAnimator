@@ -22,7 +22,8 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   Tabs, Badge, Empty…; `icons.tsx`: íconos SVG propios). Usarlo siempre; no `<select>` ni emojis como íconos.
 - Diálogos con `useDialogs()` (`components/Dialogs.tsx`): `window.prompt` NO existe en Electron.
 - Tooltips: atributo `data-tip` (+ `data-kbd` para el atajo). Tokens de color/medidas en `src/styles.css`.
-- Ajustes: esquema en `electron/settings.ts` (`DEFAULTS` + merge profundo); en la interfaz `useApp().updateSettings`.
+- Ajustes: esquema en `electron/settings.ts`; `DEFAULTS` + merge profundo en `electron/settings-defaults.ts` (sin Node:
+  lo comparte Android); en la interfaz `useApp().updateSettings`.
 
 ## Plugins, plantillas y análisis de video
 - `electron/plugins.ts`: ChatGPT vía Codex CLI (cuenta del usuario, `codex exec --json`; las imágenes quedan en
@@ -70,17 +71,22 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente
   nativo (`window.AndroidBridge`, `src/android/host.ts`). `src/platform.ts` (`isAndroid`, `projectUrl`,
   `compositorUrl`) resuelve las diferencias: nunca escribir `oa://` a mano en la interfaz.
-- Orígenes: interfaz `https://appassets.androidplatform.net` (+ `/fs/` datos, `/app/` recursos) y proyectos
-  `https://oaproject.androidplatform.net/p/<id>/` (escenas, `__oa/` compositor). El puente pide un token que
-  se entrega una sola vez por carga de página (`B.init()`).
+- Orígenes: interfaz `https://appassets.androidplatform.net` (+ `/fs/` datos, con CSP sandbox; `/app/` recursos)
+  y proyectos `https://oaproject.androidplatform.net/p/<id>/` (escenas, `__oa/` compositor).
+  El puente pide un token nuevo por carga, que Java mete en el documento principal
+  (`<meta name="oa-bridge">`, `AppServer.page`): los iframes de los proyectos también ven el puente, no el token.
 - Claves: sólo en Java (Keystore). La interfaz manda `{{secret:NOMBRE}}` y Java lo reemplaza **sólo en
   cabeceras** y sólo hacia el host de ese servicio (`SECRET_HOSTS` en `Bridge.java`).
 - Chat: `agent.ts` usa `@anthropic-ai/sdk` con `fetch` nativo (`nativeFetch`: eventos head + chunk). Historial
   sólo-agregar; sistema y herramientas congelados por conversación y guardados en `<proyecto>/.oa-chat/`
-  (imágenes aparte en `img/`); los cambios de opciones van como notas en el próximo mensaje. Streaming ansioso
+  (imágenes aparte en `img/`); los cambios de opciones van como notas en el próximo mensaje. Un 400 o un
+  rechazo antes de responder deshace el mensaje (`rollback` en `run`); `block_binding: drop_block` por si el
+  historial cambia (imágenes quitadas por tamaño: `trimImages`). Imágenes a Claude ≤ 1920 px por lado. Streaming ansioso
   de herramientas → validar entrada (`__json_buf` estricto + `validateInput`). `fallbacks: 'default'`.
 - Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
   la exportación manda JPEG a `enc.frame` (MediaCodec + EGL) y el audio mezclado con Web Audio a `enc.audio`.
+  El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
+  nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles
   (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
   `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.

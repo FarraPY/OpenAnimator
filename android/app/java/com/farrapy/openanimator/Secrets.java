@@ -77,10 +77,6 @@ final class Secrets {
         }
     }
 
-    boolean has(String name) {
-        return !get(name).isEmpty();
-    }
-
     /** "sk-…a1B2", like the PC version. */
     String masked(String name) {
         String v = get(name);

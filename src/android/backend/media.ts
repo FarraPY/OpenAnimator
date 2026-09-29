@@ -1,7 +1,9 @@
 /**
- * Datos de los medios sin FFmpeg (Android): duración con los elementos <audio>/<video>,
- * formas de onda con Web Audio y miniaturas de video con <canvas>. Cacheados en data/cache.
+ * Datos de los medios sin FFmpeg (Android): duración con los elementos <audio>/<video>, audio
+ * decodificado en Java (MediaCodec, por tramos: un video largo no entra en la memoria del WebView)
+ * y miniaturas de video con <canvas>. Cacheados en data/cache.
  */
+import { host } from '../host'
 import { fs, hash, join } from './fsx'
 
 export const PEAKS_PER_SEC = 100
@@ -53,11 +55,34 @@ export function probe(rel: string): Promise<{ duration: number; video: { codec: 
 /** Duración de un audio en segundos (0 si no se puede leer). */
 export async function probeDuration(rel: string) { return (await probe(rel)).duration }
 
-/** Decodifica un audio (o la pista de audio de un video) a la frecuencia pedida. */
-export async function decodeAudio(rel: string, sampleRate = 48000): Promise<AudioBuffer> {
-  const data = await fs.readBytes(rel)
-  const ctx = new OfflineAudioContext(2, 1, sampleRate)
-  return ctx.decodeAudioData(data)
+let seq = 0
+
+/** Cabecera WAV (PCM 16 bits) para un bloque de muestras intercaladas. */
+function wavHeader(bytes: number, rate: number, channels: number) {
+  const h = new DataView(new ArrayBuffer(44))
+  const wr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)) }
+  wr(0, 'RIFF'); h.setUint32(4, 36 + bytes, true); wr(8, 'WAVE'); wr(12, 'fmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true)
+  h.setUint16(22, channels, true); h.setUint32(24, rate, true); h.setUint32(28, rate * channels * 2, true); h.setUint16(32, channels * 2, true)
+  h.setUint16(34, 16, true); wr(36, 'data'); h.setUint32(40, bytes, true)
+  return h.buffer
+}
+
+/**
+ * Un tramo del audio de un archivo (o de la pista de audio de un video): Java lo decodifica a PCM y
+ * Web Audio lo pasa a `sampleRate` (con su remuestreo de calidad). null si el tramo cae después del
+ * final; falla si el archivo no tiene audio o la tablet no lo puede leer.
+ */
+export async function decodeRange(rel: string, start: number, duration: number, sampleRate: number): Promise<AudioBuffer | null> {
+  const out = join(CACHE, 'pcm', `${Date.now().toString(36)}-${++seq}.pcm`)
+  try {
+    const r = await host().callAsync<{ sampleRate: number; channels: number; frames: number }>('audio.decode', { path: rel, start, duration, out })
+    if (!r.frames || !r.channels) return null
+    const pcm = await fs.readBytes(out)
+    const wav = await new Blob([wavHeader(pcm.byteLength, r.sampleRate, r.channels), pcm]).arrayBuffer()
+    return await new OfflineAudioContext(1, 1, sampleRate).decodeAudioData(wav)
+  } finally {
+    if (fs.exists(out)) fs.delete(out)
+  }
 }
 
 /** Picos de amplitud (Uint8 en base64) a PEAKS_PER_SEC por segundo, para la forma de onda del timeline. */
@@ -66,24 +91,10 @@ export function audioPeaks(rel: string): Promise<{ rate: number; data: string }>
   const out = join(CACHE, 'peaks', `${k}.b64`)
   if (fs.exists(out)) return Promise.resolve({ rate: PEAKS_PER_SEC, data: fs.readText(out) })
   return once(out, async () => {
-    const sr = 8000, win = sr / PEAKS_PER_SEC
-    let buf: AudioBuffer
-    try { buf = await decodeAudio(rel, sr) } catch { throw new Error('No se pudo leer el audio') }
-    const n = Math.ceil(buf.length / win)
-    const peaks = new Uint8Array(n)
-    const chans = Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c))
-    for (let i = 0; i < n; i++) {
-      let max = 0
-      const a = i * win, b = Math.min(buf.length, a + win)
-      for (const ch of chans) for (let j = a; j < b; j++) { const v = Math.abs(ch[j]); if (v > max) max = v }
-      // Escala con raíz para que las partes suaves (voz baja, música de fondo) se vean.
-      peaks[i] = Math.min(255, Math.round(Math.sqrt(Math.min(1, max)) * 255))
-    }
-    let bin = ''
-    for (let i = 0; i < peaks.length; i += 0x8000) bin += String.fromCharCode.apply(null, Array.from(peaks.subarray(i, i + 0x8000)))
-    const b64 = btoa(bin)
-    fs.writeText(out, b64)
-    return { rate: PEAKS_PER_SEC, data: b64 }
+    let r: { rate: number; data: string }
+    try { r = await host().callAsync('audio.peaks', { path: rel, perSec: PEAKS_PER_SEC }) } catch { throw new Error('No se pudo leer el audio') }
+    fs.writeText(out, r.data)
+    return r
   })
 }
 

@@ -21,6 +21,7 @@ import { basename, blobToBase64, dirname, fs, hash, join, uniqueName } from './f
 import { projectDir, readProject } from './projects'
 import { ensureNotes, getSettings, NOTES_FILE } from './settings'
 import { aiGuide, listSkills, runTool, TOOL_DEFS, toolKind, type ToolContent, validateInput } from './tools'
+import { holdAwake } from './wake'
 
 type Msg = { role: 'user' | 'assistant'; content: any[] }
 type Opts = { model: string; effort: string; permissionMode: string }
@@ -257,6 +258,18 @@ function approxBytes(x: any): number {
   return 8
 }
 const MAX_BYTES = 22_000_000
+/** La API acepta hasta 100 imágenes por pedido. */
+const MAX_IMAGES = 90
+const KEEP_IMAGES = 8
+const isImage = (b: any) => b && typeof b === 'object' && b.type === 'image'
+function countImages(msgs: Msg[]) {
+  let n = 0
+  for (const m of msgs) for (const b of m.content) {
+    if (isImage(b)) n++
+    else if (b?.type === 'tool_result' && Array.isArray(b.content)) for (const c of b.content) if (isImage(c)) n++
+  }
+  return n
+}
 
 // ── la conversación ───────────────────────────────────────────────────────────
 let seq = 0
@@ -292,6 +305,7 @@ class AgentChat {
   private dirty = new Map<string, Partial<ChatItem>>()
   private flushTimer = 0
   private saved = false
+  private saveTimer = 0
   private killed = false
 
   constructor(public projectId: string, public opts: Opts & { saver: boolean; extra: string }, stored?: Stored | null) {
@@ -357,7 +371,12 @@ class AgentChat {
   }
 
   // ── guardado ──
+  /** Guardado agrupado durante el turno (el JSON de una conversación larga pesa varios MB). */
+  private saveSoon() {
+    if (!this.saveTimer) this.saveTimer = window.setTimeout(() => { this.saveTimer = 0; this.save() }, 2000)
+  }
   save() {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = 0 }
     if (!this.messages.length && !this.summary) return
     try {
       const dir = chatDir(this.projectId)
@@ -417,6 +436,24 @@ class AgentChat {
     else this.messages.push({ role: 'user', content: blocks })
   }
 
+  /**
+   * Si un turno largo junta demasiadas capturas (más de 90 imágenes o casi 32 MB), las más viejas
+   * se cambian por un texto y quedan las últimas 8. Rompe la caché y la API descarta el razonamiento
+   * posterior a ese punto (block_binding), pero el turno sigue en vez de fallar.
+   */
+  private trimImages() {
+    if (countImages(this.messages) <= MAX_IMAGES && approxBytes(this.messages) <= MAX_BYTES) return
+    const gone = { type: 'text', text: '[imagen quitada para que la conversación entre en el pedido]' }
+    let seen = 0, removed = 0
+    const keep = (b: any) => { if (!isImage(b)) return b; if (++seen <= KEEP_IMAGES) return b; removed++; return gone }
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      const m = this.messages[i]
+      const content = [...m.content].reverse().map((b) => (b?.type === 'tool_result' && Array.isArray(b.content) ? { ...b, content: [...b.content].reverse().map(keep).reverse() } : keep(b))).reverse()
+      if (removed) this.messages[i] = { ...m, content }
+    }
+    if (removed) this.notice(`Quité ${removed} imagen(es) viejas de la conversación para que entre en el pedido (Claude ya no las ve). Si vas a seguir mucho más, compactala.`, 'warn')
+  }
+
   private params(messages: Msg[], model: string, effort: string) {
     const mi = modelInfo(model)
     const p: any = {
@@ -425,25 +462,26 @@ class AgentChat {
       tools: this.tools, messages,
       cache_control: { type: 'ephemeral' },
     }
+    const betas: string[] = []
     if (mi.adaptive) {
-      p.thinking = { type: 'adaptive', display: 'summarized' }
+      // Si algo del historial cambiara (una imagen perdida, imágenes quitadas por tamaño), la API
+      // descarta el razonamiento viejo en vez de rechazar el pedido: la conversación sigue.
+      p.thinking = { type: 'adaptive', display: 'summarized', block_binding: { prefix_mismatch_behavior: 'drop_block' } }
+      betas.push('thinking-binding-controls-2026-08-01')
       if (effort) p.output_config = { effort }
     } else if (effort !== 'low') {
       p.thinking = { type: 'enabled', budget_tokens: effort === 'high' ? 10000 : effort === 'xhigh' || effort === 'max' ? 16000 : 4000 }
     }
-    if (mi.fallbacks) { p.fallbacks = 'default'; p.betas = ['server-side-fallback-2026-07-01'] }
+    if (mi.fallbacks) { p.fallbacks = 'default'; betas.push('server-side-fallback-2026-07-01') }
+    if (betas.length) p.betas = betas
     return p
-  }
-
-  private keepAwake(on: boolean) {
-    try { if (getSettings().android?.keepAwake !== false || !on) host().call('app.keepScreenOn', { on }) } catch { /* sin puente */ }
   }
 
   private async run(text: string, images: Array<{ mediaType: string; data: string }>) {
     this.busy = true
     this.interrupted = false
     this.state()
-    this.keepAwake(true)
+    const release = holdAwake()
     const t0 = Date.now()
     const costBefore = this.stats.cost
     let error = ''
@@ -460,28 +498,38 @@ class AgentChat {
         this.title = clean.split('\n')[0].slice(0, 80) || 'Conversación'
       }
       const blocks: any[] = []
-      if (this.summary && !this.messages.length) {
-        blocks.push({ type: 'text', text: `Resumen de la conversación anterior (se compactó para liberar contexto):\n\n${this.summary}` })
+      const summary = this.summary && !this.messages.length ? this.summary : undefined
+      if (summary) {
+        blocks.push({ type: 'text', text: `Resumen de la conversación anterior (se compactó para liberar contexto):\n\n${summary}` })
         this.summary = undefined
       }
-      for (const im of images) blocks.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
+      for (const im of images) { const f = await fitImage(im); blocks.push({ type: 'image', source: { type: 'base64', media_type: f.mediaType, data: f.data } }) }
       blocks.push({ type: 'text', text })
-      for (const n of this.notes.splice(0)) blocks.push({ type: 'text', text: `(Nota de la app: ${n})` })
+      const notes = this.notes.splice(0)
+      for (const n of notes) blocks.push({ type: 'text', text: `(Nota de la app: ${n})` })
       if (this.opts.permissionMode === 'plan') blocks.push({ type: 'text', text: PLAN_NOTE })
       const nMsgs = this.messages.length
       const lastUser = this.messages[nMsgs - 1]?.role === 'user' ? this.messages[nMsgs - 1] : null
       const nBlocks = lastUser?.content.length ?? 0
       this.appendUser(blocks)
-      this.save()
-      try { await this.loop() } catch (e) {
-        // La API rechazó el pedido (400) antes de responder nada: se deshace este mensaje para que
-        // la conversación no quede trabada con él.
-        if (e instanceof Anthropic.BadRequestError && this.messages.length === (lastUser ? nMsgs : nMsgs + 1) && this.messages[this.messages.length - 1].role === 'user') {
-          if (lastUser) lastUser.content = lastUser.content.slice(0, nBlocks)
-          else this.messages.length = nMsgs
-        }
+      this.saveSoon()
+      // Si la API rechaza el mensaje (400) o Claude lo declina antes de responder nada, se deshace
+      // (con el resumen y las notas que llevaba): la conversación no queda trabada con él.
+      const rollback = () => {
+        const last = this.messages[this.messages.length - 1]
+        if (this.messages.length !== (lastUser ? nMsgs : nMsgs + 1) || last.role !== 'user') return
+        // (por índice: trimImages puede haber reemplazado el mensaje por una copia)
+        if (lastUser) this.messages[nMsgs - 1] = { ...last, content: last.content.slice(0, nBlocks) }
+        else this.messages.length = nMsgs
+        if (summary) this.summary = summary
+        this.notes.unshift(...notes)
+      }
+      let outcome: 'refusal' | void
+      try { outcome = await this.loop() } catch (e) {
+        if (e instanceof Anthropic.BadRequestError) rollback()
         throw e
       }
+      if (outcome === 'refusal') rollback()
     } catch (e: any) {
       if (!(e instanceof Interrupted) && !(e instanceof Anthropic.APIUserAbortError) && e?.name !== 'AbortError') error = explain(e)
     } finally {
@@ -496,7 +544,7 @@ class AgentChat {
       this.busy = false
       this.abort = null
       this.save()
-      this.keepAwake(false)
+      release()
       this.state()
       const next = this.queue.shift()
       if (next && !this.killed) setTimeout(() => this.send(next.text, next.images, next.files), 30)
@@ -504,11 +552,12 @@ class AgentChat {
   }
 
   /** Pedidos al modelo y herramientas, hasta que Claude termina su turno. */
-  private async loop() {
+  private async loop(): Promise<'refusal' | void> {
     const model = this.opts.model, effort = this.opts.effort
     let jsonRetries = 0
     for (let step = 0; step < 400; step++) {
       if (this.interrupted) throw new Interrupted()
+      this.trimImages()
       let msg: any
       try {
         msg = await this.request(this.params(this.messages, model, effort))
@@ -526,11 +575,11 @@ class AgentChat {
         // No se guarda el intento rechazado: el usuario puede reformular.
         const cat = msg.stop_details?.category
         this.notice(`Claude no puede ayudar con este pedido${cat ? ` (${cat})` : ''}.${msg.stop_details?.explanation ? ' ' + msg.stop_details.explanation : ''} Probá reformularlo.`, 'warn')
-        return
+        return 'refusal'
       }
       const content = echoContent(msg.content)
       this.messages.push({ role: 'assistant', content })
-      this.save()
+      this.saveSoon()
       const uses = content.filter((b: any) => b.type === 'tool_use')
       if (stop === 'pause_turn') continue
       if (uses.length) {
@@ -538,7 +587,7 @@ class AgentChat {
           ? uses.map((b: any) => { this.patch(this.toolItems.get(b.id), { status: 'error', isError: true, result: 'Respuesta cortada por longitud' }); return errResult(b.id, 'Tu respuesta se cortó por longitud (max_tokens) y esta entrada quedó incompleta: no se ejecutó. Dividí el trabajo en partes más chicas (p. ej. Write con menos contenido y después Edit).') })
           : await this.runTools(uses)
         this.messages.push({ role: 'user', content: results })
-        this.save()
+        this.saveSoon()
         continue
       }
       if (stop === 'max_tokens') this.notice('La respuesta se cortó por largo. Pedile que siga.', 'warn')
@@ -565,7 +614,6 @@ class AgentChat {
     const stream = client().beta.messages.stream(params, { signal: ac.signal })
     const blockItem = new Map<number, string>()
     const started = new Map<string, number>()
-    const toolIdx = new Map<number, string>()
     let lastInput = 0
     for await (const ev of stream as any) {
       switch (ev.type) {
@@ -587,7 +635,6 @@ class AgentChat {
             const it: ChatItem = { id: nid('tool'), kind: 'tool', name: b.name, input: {}, status: 'ejecutando' }
             this.toolItems.set(b.id, it.id)
             blockItem.set(ev.index, it.id)
-            toolIdx.set(ev.index, it.id)
             this.push(it)
           } else if (b.type === 'fallback') {
             this.notice(`${modelLabel(b.from?.model)} no siguió con este pedido; continúa ${modelLabel(b.to?.model)}.`)
@@ -788,6 +835,26 @@ export function respondPermission(id: string, itemId: string, allow: boolean, al
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function setChatOptions(id: string, patch: any, label: string) { chats.get(id)?.setOptions(patch || {}, String(label || 'Opciones actualizadas.')) }
 export function compactChat(id: string, instructions?: string) { return chats.get(id)?.compact(instructions) }
+
+/**
+ * Una imagen del usuario que pase de 1920 px por lado se achica (con muchas imágenes en la
+ * conversación la API rechaza las de más de 2000 px; p. ej. el fotograma de un proyecto vertical).
+ */
+async function fitImage(im: { mediaType: string; data: string }): Promise<{ mediaType: string; data: string }> {
+  const MAX = 1920
+  try {
+    const bmp = await createImageBitmap(new Blob([Uint8Array.from(atob(im.data), (c) => c.charCodeAt(0))], { type: im.mediaType }))
+    const s = MAX / Math.max(bmp.width, bmp.height)
+    if (s >= 1) { bmp.close(); return im }
+    const cv = document.createElement('canvas')
+    cv.width = Math.max(1, Math.round(bmp.width * s)); cv.height = Math.max(1, Math.round(bmp.height * s))
+    cv.getContext('2d')!.drawImage(bmp, 0, 0, cv.width, cv.height)
+    bmp.close()
+    const png = im.mediaType === 'image/png'
+    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, png ? 'image/png' : 'image/jpeg', 0.9))
+    return blob ? { mediaType: png ? 'image/png' : 'image/jpeg', data: await blobToBase64(blob) } : im
+  } catch { return im }
+}
 
 // ── adjuntos: se copian a <proyecto>/adjuntos/ ────────────────────────────────
 const IMG = /\.(png|jpe?g|webp|gif|bmp)$/i

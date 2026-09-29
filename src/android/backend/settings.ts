@@ -1,38 +1,21 @@
 /** Ajustes en Android: el mismo esquema que la PC (electron/settings.ts) más lo propio de la tablet. */
 import type { Settings } from '../../api'
+import { DEFAULTS as PC_DEFAULTS, mergeSettings } from '../../../electron/settings-defaults'
 import { fs } from './fsx'
 
 const FILE = 'settings.json'
 
-export const DEFAULTS: Settings = {
-  ui: { accent: 'violet', density: 'comfortable', reduceMotion: false, openLastProject: false, confirmDelete: true, homeView: 'grid', homeSort: 'recent' },
-  editor: { snap: true, snapFrames: true, followPlayhead: true, waveforms: true, imageDuration: 5, defaultZoom: 60, stageBg: 'dark', safeAreas: false, thirds: false, showChat: true },
-  // En Android no hay Claude Code: el chat usa la API de Claude con la clave del usuario.
-  claude: { permissionMode: 'acceptEdits', model: 'claude-opus-5-5', effort: '', extraInstructions: '', saver: true, showThinking: true, showCost: true, autoAttachFrame: false, claudePath: '' },
-  export: {},
-  exportPrefs: { defaultDir: '', openFolderWhenDone: false, notify: true },
-  plugins: {
-    image: 'auto', voice: 'auto', ask: 'auto', transcribe: 'auto',
-    codex: { enabled: false, path: '', model: '' },
-    openai: { enabled: true, chatModel: 'gpt-5', imageModel: 'gpt-image-1', imageQuality: 'high' },
-    gemini: { enabled: true, chatModel: 'gemini-2.5-pro', imageModel: 'gemini-2.5-flash-image' },
-    openrouter: { enabled: true, chatModel: 'openai/gpt-5' },
-    elevenlabs: { enabled: true, voiceId: '', voiceName: '', modelId: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1 },
-    fish: { enabled: true, voiceId: '', voiceName: '', model: 's2.1-pro-free', temperature: 0.7, topP: 0.7, speed: 1, volume: 0, latency: 'normal', v: 2 },
-    whisper: { enabled: false, python: '', model: '', device: 'auto' },
-    ytdlp: { path: '' },
-  },
+/**
+ * Los de la PC (electron/settings-defaults.ts) con lo propio de la tablet: Claude por API (sin
+ * Claude Code), sin Codex ni Whisper local, y las preferencias de pantalla y exportación.
+ */
+export const DEFAULTS: Settings = mergeSettings(structuredClone(PC_DEFAULTS) as Settings, {
+  claude: { model: 'claude-opus-5-5' },
+  plugins: { codex: { enabled: false }, whisper: { enabled: false, model: '' } },
   android: { immersive: true, uiScale: 1, debug: false, saveToGallery: true, keepAwake: true },
   androidExport: { codec: 'avc', quality: 'high', bitrate: 0, height: 0, fps: 0, audio: true, audioBitrate: 192 },
-}
-
-const isObj = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x)
-function merge<T>(base: T, over: any): T {
-  if (!isObj(base) || !isObj(over)) return (over === undefined ? base : over) as T
-  const out: any = { ...base }
-  for (const k of Object.keys(over)) out[k] = isObj((base as any)[k]) && isObj(over[k]) && k !== 'export' ? merge((base as any)[k], over[k]) : over[k]
-  return out
-}
+})
+const merge = mergeSettings
 
 let cache: Settings | null = null
 

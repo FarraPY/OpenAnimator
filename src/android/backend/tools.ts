@@ -281,14 +281,14 @@ export async function runTool(name: string, input: any, ctx: ToolCtx): Promise<T
     }
     case 'oa_ver_fotogramas': {
       const times: number[] = (input.times || [0]).slice(0, 8)
-      const frames = await F.renderFrames(project, input.timeline, times, Math.min(1920, input.width || 960), true, 'jpeg')
+      const frames = await F.renderFrames(project, input.timeline, times, F.fitWidth(project, input.width || 960), true, 'jpeg')
       const out: ToolContent = []
       for (const f of frames) { out.push({ type: 'text', text: `t=${f.t}s` }); out.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: f.data } }) }
       return out
     }
     case 'oa_hoja_contactos': {
       const r = await F.contactSheet(project, input.timeline, input)
-      return [{ type: 'text', text: 'Instantes: ' + r.times.join(', ') + ' s' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: r.png } }]
+      return [{ type: 'text', text: 'Instantes: ' + r.times.join(', ') + ' s' }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: r.jpeg } }]
     }
     case 'oa_auditar_layout': {
       const r = await F.auditLayout(project, input.timeline, input)

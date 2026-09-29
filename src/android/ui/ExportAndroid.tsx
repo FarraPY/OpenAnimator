@@ -2,22 +2,20 @@
  * Exportar en la tablet: el codificador de hardware (H.264 / HEVC) con presets claros, progreso con
  * vista previa del fotograma que se está codificando y, al terminar, galería / compartir / abrir.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { call, fmtSize, fmtTime, on, Project, Timeline } from '../../api'
 import { useApp } from '../../App'
 import Modal from '../../components/Modal'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon, IconName } from '../../ui/icons'
 import { Badge, Button, Field, NumberInput, Progress, Segmented, Select, Switch, TextInput } from '../../ui/kit'
+import { autoBitrate, type ExportQuality as Quality } from '../bitrate'
 
-type Quality = 'low' | 'medium' | 'high' | 'max'
 type Codec = 'avc' | 'hevc'
 type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; gallery?: string; size?: number; encoder?: string; preview?: string }
 type Saved = { path: string; name: string; size: number; mtime: number }
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
-const BPP: Record<Quality, number> = { low: 0.05, medium: 0.08, high: 0.12, max: 0.2 }
-const bitrateOf = (w: number, h: number, fps: number, q: Quality, codec: Codec) => Math.min(100e6, Math.max(1e6, w * h * fps * BPP[q] * (codec === 'hevc' ? 0.7 : 1)))
 const QUALITY: Array<{ value: Quality; label: string }> = [{ value: 'low', label: 'Baja' }, { value: 'medium', label: 'Media' }, { value: 'high', label: 'Alta' }, { value: 'max', label: 'Máxima' }]
 const PHASE: Record<string, string> = { preparando: 'Preparando', audio: 'Mezclando el audio', render: 'Renderizando', final: 'Escribiendo el archivo', listo: 'Listo', error: 'Error', cancelado: 'Cancelado' }
 const PRESETS: Array<{ id: string; name: string; sub: string; icon: IconName; res: number; codec: Codec; quality: Quality }> = [
@@ -54,25 +52,33 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
 
   useEffect(() => { call<Timeline>('timeline:get', project.id, tlId).then((x) => { setTl(x); setRange({ start: 0, end: +x.duration.toFixed(2) }) }).catch(() => setTl(null)) }, [tlId])
   useEffect(() => { call<Saved[]>('export:list').then(setSaved).catch(() => {}) }, [job, prog?.phase])
-  // La vista previa llega cada tanto: se conserva la última entre eventos.
-  useEffect(() => on('export:progress', (p: Prog) => { if (p.id === job) setProg((old) => ({ ...p, preview: p.preview || old?.preview })) }), [job])
+  // Escucha desde el principio: una exportación que falla enseguida puede avisar antes de que
+  // export:start devuelva su id. La vista previa llega cada tanto: se conserva la última.
+  const latest = useRef(new Map<string, Prog>())
+  const jobRef = useRef<string | null>(null)
+  useEffect(() => on('export:progress', (p: Prog) => {
+    const next = { ...p, preview: p.preview || latest.current.get(p.id)?.preview }
+    latest.current.set(p.id, next)
+    if (p.id === jobRef.current) setProg(next)
+  }), [])
 
   const { w, h } = sizeFor(res)
   const dur = tl ? (useRange ? Math.max(0, range.end - range.start) : tl.duration) : 0
-  const vbps = bitrateOf(w, h, fps, quality, codec)
+  const vbps = autoBitrate(w, h, fps, quality, codec)
   const estimate = (vbps + (audio ? 192000 : 0)) * dur / 8
   const preset = PRESETS.find((p) => p.res === res && p.codec === codec && p.quality === quality)?.id || 'custom'
   const resOptions = useMemo(() => [720, 1080, 1440, 2160].map((x) => ({ value: x, label: `${x}p`, hint: `${sizeFor(x).w}×${sizeFor(x).h}` })), [aspect])
 
   const start = async () => {
-    if (!tl || dur <= 0) { toast('No hay nada para exportar en ese timeline', true); return }
+    if (!tl || dur < 1 / fps) { toast('No hay nada para exportar en ese timeline (o en el rango elegido)', true); return }
     updateSettings({ androidExport: { codec, quality, height: res, fps: fps === project.fps ? 0 : fps, audio, bitrate: 0, audioBitrate: 192 } })
     try {
       const id = await call<string>('export:start', {
         projectId: project.id, timeline: tlId, range: useRange ? range : null, width: w, height: h, fps, codec, quality, audio, audioBitrate: 192,
         name: name.trim() || project.name,
       })
-      setJob(id); setProg({ id, phase: 'preparando', message: 'Preparando…', done: 0, total: 1 })
+      jobRef.current = id
+      setJob(id); setProg(latest.current.get(id) || { id, phase: 'preparando', message: 'Preparando…', done: 0, total: 1 })
     } catch (e: any) { toast(e.message, true) }
   }
   const cancel = async () => {
@@ -106,7 +112,7 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
           <div className="grow" />
           <Button icon="share" onClick={() => call('export:share', file).catch((e) => toast(e.message, true))}>Compartir</Button>
           <Button variant="primary" icon="play" onClick={() => call('export:open', file).catch((e) => toast(e.message, true))}>Ver el video</Button>
-        </> : failed ? <><div className="grow" /><Button onClick={() => { setJob(null); setProg(null) }}>Volver a los ajustes</Button><Button variant="primary" onClick={onClose}>Cerrar</Button></>
+        </> : failed ? <><div className="grow" /><Button onClick={() => { jobRef.current = null; setJob(null); setProg(null) }}>Volver a los ajustes</Button><Button variant="primary" onClick={onClose}>Cerrar</Button></>
           : <><span className="t3" style={{ fontSize: 13 }}>No cierres la app ni bloquees la pantalla mientras exporta.</span><div className="grow" /><Button onClick={close}>Ocultar</Button><Button variant="danger" icon="stop" onClick={cancel}>Cancelar</Button></>}>
         {done ? (
           <div className="xp-done">
@@ -140,7 +146,7 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
   // ── ajustes ──
   return (
     <Modal size="wide" icon="export" title="Exportar video" subtitle="Se codifica con el hardware de la tablet y se guarda en la galería." onClose={onClose}
-      footer={<><span className="t3" style={{ fontSize: 13 }}>{w}×{h} · {fps} fps · {codec === 'hevc' ? 'HEVC' : 'H.264'}{audio ? ' + AAC' : ' · sin audio'}</span><div className="grow" /><Button onClick={onClose}>Cancelar</Button><Button variant="primary" icon="export" onClick={start} disabled={!tl || dur <= 0}>Exportar</Button></>}>
+      footer={<><span className="t3" style={{ fontSize: 13 }}>{w}×{h} · {fps} fps · {codec === 'hevc' ? 'HEVC' : 'H.264'}{audio ? ' + AAC' : ' · sin audio'}</span><div className="grow" /><Button onClick={onClose}>Cancelar</Button><Button variant="primary" icon="export" onClick={start} disabled={!tl || dur < 1 / fps}>Exportar</Button></>}>
       <div className="xp-presets">
         {PRESETS.map((p) => (
           <button key={p.id} type="button" className={`xp-preset ${preset === p.id ? 'on' : ''}`} disabled={p.codec === 'hevc' && !hevcOk}

@@ -48,7 +48,8 @@ function events() {
 function androidHost(): Host {
   const B = (window as any).AndroidBridge
   const init = JSON.parse(B.init())
-  const token: string | undefined = init.token
+  // Java pone el token de esta carga dentro del documento (los iframes de los proyectos no lo ven).
+  const token = document.querySelector<HTMLMetaElement>('meta[name="oa-bridge"]')?.content
   if (!token) throw new Error('El puente con Android no está disponible (recargá la app).')
   const pending = new Map<string, Pending>()
   ;(window as any).__oaNative = (id: string, msg: any) => {

@@ -33,12 +33,19 @@ final class AppServer {
     static final String APP_ORIGIN = "https://" + APP_HOST;
     private static final Pattern RANGE = Pattern.compile("bytes=(\\d*)-(\\d*)");
 
+    /** Token nuevo del puente para cada carga de la interfaz (ver Bridge.newPageToken). */
+    interface PageToken {
+        String next();
+    }
+
     private final AssetManager assets;
     private final Fs fs;
+    private final PageToken pageToken;
 
-    AppServer(AssetManager assets, Fs fs) {
+    AppServer(AssetManager assets, Fs fs, PageToken pageToken) {
         this.assets = assets;
         this.fs = fs;
+        this.pageToken = pageToken;
     }
 
     WebResourceResponse handle(WebResourceRequest req) {
@@ -53,17 +60,25 @@ final class AppServer {
         String path = u.getPath() == null ? "/" : u.getPath();
         try {
             if (app) {
-                if (path.startsWith("/fs/")) return file(fs.resolve(path.substring(4)), req, h, false, null, head);
+                if (path.startsWith("/fs/")) {
+                    // La carpeta de datos se lee con fetch/img/audio/video, nunca como página: un HTML de un
+                    // proyecto abierto acá correría en el origen de la interfaz (con acceso a todo).
+                    h.put("Content-Security-Policy", "sandbox; default-src 'none'");
+                    h.put("X-Frame-Options", "DENY");
+                    h.put("X-Content-Type-Options", "nosniff");
+                    return file(fs.resolve(safeRel(path.substring(4))), req, h, false, null, head);
+                }
                 if (path.equals("/") || path.isEmpty()) path = "/index.html";
+                if (path.equals("/index.html") && req.isForMainFrame() && !head) return page(h);
                 return asset("www" + path, h, head);
             }
             if (path.startsWith("/app/")) return asset("www" + path, h, head);
-            if (path.startsWith("/ut/")) return file(fs.resolve("templates/" + path.substring(4)), req, h, false, null, head);
+            if (path.startsWith("/ut/")) return file(fs.resolve("templates/" + safeRel(path.substring(4))), req, h, false, null, head);
             if (path.startsWith("/p/")) {
                 String rest = path.substring(3);
                 int slash = rest.indexOf('/');
                 if (slash <= 0) return error(404, "Not Found", h);
-                String id = rest.substring(0, slash), rel = rest.substring(slash + 1);
+                String id = rest.substring(0, slash), rel = safeRel(rest.substring(slash + 1));
                 if (id.contains("..") || id.contains("\\")) return error(404, "Not Found", h);
                 if (rel.startsWith("__oa/")) return asset("www/app/runtime/" + rel.substring(5), h, head);
                 return file(fs.resolve("projects/" + id + "/" + rel), req, h, true, id, head);
@@ -71,7 +86,17 @@ final class AppServer {
             return error(404, "Not Found", h);
         } catch (IOException e) {
             return error(404, "Not Found", h);
+        } catch (RuntimeException e) {
+            // Un pedido raro (Range inválido, ruta con "..") no puede tirar la app: shouldInterceptRequest no lo ataja.
+            return error(400, "Bad Request", h);
         }
+    }
+
+    /** Ruta relativa sin ".." ni barras invertidas (una escena no puede leer fuera de su proyecto). */
+    private static String safeRel(String rel) {
+        if (rel.indexOf('\\') >= 0) throw new IllegalArgumentException("ruta inválida");
+        for (String part : rel.split("/")) if (part.equals("..")) throw new IllegalArgumentException("ruta inválida");
+        return rel;
     }
 
     private static Map<String, String> baseHeaders(boolean app) {
@@ -88,6 +113,24 @@ final class AppServer {
 
     private static String encodingFor(String mime) {
         return MimeTypes.isText(mime) ? "UTF-8" : null;
+    }
+
+    /**
+     * La interfaz con el token del puente de esta carga. Viaja dentro del documento principal (nunca
+     * a un iframe ni a un fetch), así que ya está antes de que corra cualquier script de la página.
+     */
+    private WebResourceResponse page(Map<String, String> h) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (InputStream in = assets.open("www/index.html")) {
+            byte[] buf = new byte[16384];
+            for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+        }
+        String html = new String(out.toByteArray(), StandardCharsets.UTF_8);
+        String meta = "<meta name=\"oa-bridge\" content=\"" + pageToken.next() + "\">";
+        int i = html.indexOf("<head>");
+        html = i >= 0 ? html.substring(0, i + 6) + meta + html.substring(i + 6) : meta + html;
+        h.put("Cache-Control", "no-store");
+        return new WebResourceResponse("text/html", "UTF-8", 200, "OK", h, new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
     }
 
     private WebResourceResponse asset(String path, Map<String, String> h, boolean head) {

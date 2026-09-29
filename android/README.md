@@ -103,4 +103,9 @@ node android/dev/server.mjs --port 5190 --mock-claude   # http://localhost:5190
 ```
 
 Con `--mock-claude` los pedidos a la API los responde un Claude simulado con un guion fijo (crea una
-escena, la pone en el timeline y mira fotogramas), para probar el chat sin gastar.
+escena, la pone en el timeline y mira fotogramas), para probar el chat sin gastar. Un mensaje con
+`[rechazo]` simula que Claude declina el pedido y uno con `[error400]`, que la API lo rechaza.
+
+El servidor escucha sólo en `127.0.0.1` (su puente no tiene token). El audio que en la tablet
+decodifica Java (`AudioDecoder.java`: formas de onda, mezcla de la exportación, transcripción) acá
+lo hace ffmpeg.

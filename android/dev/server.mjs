@@ -7,7 +7,10 @@
  *   http://localhost:PORT      → la interfaz (como https://appassets.androidplatform.net)
  *   http://127.0.0.1:PORT      → los proyectos (como https://oaproject.androidplatform.net)
  *
- *   node android/dev/server.mjs [--port 5190] [--data carpeta] [--mock-claude]
+ *   node android/dev/server.mjs [--port 5190] [--data carpeta] [--mock-claude] [--host 127.0.0.1]
+ *
+ * El puente no tiene token: por defecto sólo escucha en 127.0.0.1 (con --host 0.0.0.0 cualquiera en
+ * la red podría leer y escribir la carpeta de datos).
  *
  * El codificador de video (MediaCodec) se imita con ffmpeg y los selectores de archivos con
  * POST /__dev/pick (la próxima selección devuelve esos archivos). Con --mock-claude, los pedidos a
@@ -18,12 +21,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { execFileSync, spawn } from 'node:child_process'
+import { execFile, execFileSync, spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def }
 const PORT = +arg('port', process.env.PORT || 5190)
+const HOST = arg('host', '127.0.0.1')
 const DATA = path.resolve(arg('data', path.join(os.tmpdir(), 'oa-android-dev')))
 const WWW = path.resolve(arg('www', path.join(ROOT, 'android', 'build', 'www')))
 const MOCK = process.argv.includes('--mock-claude') || process.env.OA_MOCK_CLAUDE === '1'
@@ -120,6 +124,38 @@ function encFinish() {
 }
 function encCancel() { if (enc) { fs.rmSync(enc.tmp, { recursive: true, force: true }); enc = null } }
 
+// ── audio (MediaExtractor + MediaCodec en la tablet; ffprobe/ffmpeg acá) ──────
+const run = (cmd, args, opts = {}) => new Promise((res, rej) => execFile(cmd, args, { maxBuffer: 1 << 30, encoding: 'buffer', ...opts }, (e, out, err) => (e ? rej(new Error(`${cmd}: ${String(err || e.message).trim().split('\n').pop()}`)) : res(out))))
+async function audioFormat(file) {
+  const j = JSON.parse((await run('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate,channels', '-of', 'json', file])).toString())
+  const st = j.streams?.[0]
+  if (!st) throw new Error('El archivo no tiene audio')
+  return { sampleRate: +st.sample_rate, channels: +st.channels }
+}
+async function audioDecode(a) {
+  const file = resolve(a.path), out = resolve(a.out)
+  if (!fs.statSync(file).isFile()) throw new Error('No existe el archivo: ' + a.path)
+  if (!(a.duration > 0 && a.duration <= 600)) throw new Error('Duración inválida')
+  const f = await audioFormat(file)
+  const pcm = await run('ffmpeg', ['-v', 'error', '-ss', String(Math.max(0, a.start || 0)), '-t', String(a.duration), '-i', file, '-vn', '-f', 's16le', '-acodec', 'pcm_s16le', '-'])
+  fs.mkdirSync(path.dirname(out), { recursive: true })
+  fs.writeFileSync(out, pcm)
+  return { ...f, frames: Math.floor(pcm.length / (2 * f.channels)) }
+}
+async function audioPeaks(a) {
+  const file = resolve(a.path), perSec = a.perSec || 100
+  const f = await audioFormat(file)
+  const pcm = await run('ffmpeg', ['-v', 'error', '-i', file, '-vn', '-f', 's16le', '-acodec', 'pcm_s16le', '-'])
+  const s = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length >> 1), ch = f.channels, win = Math.max(1, Math.floor(f.sampleRate / perSec))
+  const frames = Math.floor(s.length / ch), out = []
+  for (let i = 0; i + win <= frames; i += win) {
+    let max = 0
+    for (let j = i * ch; j < (i + win) * ch; j++) { const v = Math.abs(s[j]) / 32768; if (v > max) max = v }
+    out.push(Math.min(255, Math.round(Math.sqrt(Math.min(1, max)) * 255)))
+  }
+  return { rate: perSec, data: Buffer.from(out).toString('base64') }
+}
+
 // ── selector de archivos de prueba ────────────────────────────────────────────
 let nextPick = []
 function pickFiles() {
@@ -189,6 +225,9 @@ function mockScript(body) {
   const last = msgs[msgs.length - 1]
   const texts = Array.isArray(last?.content) ? last.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n') : String(last?.content || '')
   if (/Escribí un resumen completo/.test(texts)) return [{ type: 'text', text: 'Resumen: el usuario pidió una escena de saludo; creé scenes/hola.html, la puse en el timeline y la verifiqué.' }]
+  // Para probar cómo se recupera el chat: "[rechazo]" → Claude declina; "[error400]" → la API rechaza el pedido.
+  if (/\[rechazo\]/.test(texts)) return 'refusal'
+  if (/\[error400\]/.test(texts)) return 'error400'
   const endsWithResults = Array.isArray(last?.content) && last.content.some((b) => b.type === 'tool_result')
   let lastUse = null
   if (endsWithResults) for (let i = msgs.length - 1; i >= 0 && !lastUse; i--) if (msgs[i].role === 'assistant') lastUse = msgs[i].content.filter((b) => b.type === 'tool_use').pop() || null
@@ -217,6 +256,11 @@ function mockClaude(req, res, body) {
     return
   }
   const blocks = mockScript(body)
+  if (blocks === 'error400') {
+    res.writeHead(400, { 'content-type': 'application/json', 'request-id': 'req_mock' })
+    res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Pedido inválido (simulado)' } }))
+    return
+  }
   const id = 'msg_' + crypto.randomUUID().replace(/-/g, '').slice(0, 20)
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'request-id': 'req_mock' })
   const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`)
@@ -225,7 +269,8 @@ function mockClaude(req, res, body) {
   const chunks = (s, n) => { const out = []; for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n)); return out }
   let i = 0
   const steps = []
-  for (const b of blocks) {
+  const refusal = blocks === 'refusal'
+  for (const b of refusal ? [] : blocks) {
     const index = i++
     if (b.type === 'thinking') {
       steps.push(() => ev('content_block_start', { index, content_block: { type: 'thinking', thinking: '', signature: '' } }))
@@ -240,8 +285,8 @@ function mockClaude(req, res, body) {
     }
     steps.push(() => ev('content_block_stop', { index }))
   }
-  const stop = blocks.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn'
-  steps.push(() => ev('message_delta', { delta: { stop_reason: stop, stop_sequence: null }, usage: { output_tokens: 180 } }))
+  const stop = refusal ? 'refusal' : blocks.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn'
+  steps.push(() => ev('message_delta', { delta: { stop_reason: stop, stop_sequence: null, ...(refusal ? { stop_details: { type: 'refusal', category: 'simulado', explanation: null } } : {}) }, usage: { output_tokens: refusal ? 2 : 180 } }))
   steps.push(() => { ev('message_stop', {}); res.end() })
   const tick = () => { const s = steps.shift(); if (!s) return; s(); if (steps.length) setTimeout(tick, 15) }
   setTimeout(tick, 120)
@@ -353,6 +398,8 @@ async function async(method, a, id, emit) {
     case 'file.open': console.log('[abrir archivo]', a.path); return true
     case 'gallery.save': { const src = resolve(a.path); const dir = path.join(DATA, '.dev-gallery'); fs.mkdirSync(dir, { recursive: true }); fs.copyFileSync(src, path.join(dir, a.name || path.basename(src))); return { uri: 'content://dev/gallery/' + (a.name || path.basename(src)), folder: 'Movies/OpenAnimator' } }
     case 'clipboard.image': return true
+    case 'audio.decode': return await audioDecode(a)
+    case 'audio.peaks': return await audioPeaks(a)
     case 'enc.frame': return encFrame(a.data)
     case 'enc.finish': return await encFinish()
   }
@@ -400,6 +447,8 @@ const server = http.createServer(async (req, res) => {
     const p = decodeURIComponent(u.pathname)
     const isProject = u.hostname === '127.0.0.1'
     if (!isProject) {
+      // Una escena (otro origen) no puede usar el puente con un POST "simple".
+      if (p.startsWith('/__') && req.headers.origin && req.headers.origin !== APP_ORIGIN) { res.writeHead(403); res.end(); return }
       if (req.method === 'POST' && p === '/__bridge') {
         const { method, args } = JSON.parse((await readBody(req)).toString('utf8'))
         let out
@@ -424,6 +473,8 @@ const server = http.createServer(async (req, res) => {
     // origen de los proyectos
     const cors = { 'Access-Control-Allow-Origin': APP_ORIGIN }
     if (p.startsWith('/app/')) { const f = inside(WWW, '.' + p); if (f) return sendFile(req, res, f, cors) }
+    // Como AppServer.safeRel: una escena no puede leer fuera de su proyecto.
+    if (p.split('/').includes('..') || p.includes('\\')) { res.writeHead(400, cors); res.end(); return }
     if (p.startsWith('/ut/')) { const f = resolve('templates/' + p.slice(4)); return sendFile(req, res, f, cors) }
     const m = /^\/p\/([^/]+)\/(.*)$/.exec(p)
     if (m) {
@@ -439,7 +490,7 @@ const server = http.createServer(async (req, res) => {
     res.end(String(e?.message || e))
   }
 })
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, HOST, () => {
   console.log(`OpenAnimator (Android, dev) en ${APP_ORIGIN}  ·  proyectos: ${PROJECT_ORIGIN}`)
   console.log(`datos: ${DATA}${MOCK ? '  ·  Claude simulado' : ''}`)
 })

@@ -3,18 +3,21 @@
  * resolución de salida (las escenas son vectoriales: 4K nítido), y el codificador de hardware de la
  * tablet (MediaCodec, ver Encoder.java) lo convierte en H.264/HEVC + AAC dentro de un MP4.
  *
- *  1. Mezcla del audio del timeline con Web Audio (por ventanas de 30 s) → PCM → Java.
+ *  1. Mezcla del audio del timeline con Web Audio (por ventanas de 30 s; Java decodifica sólo el
+ *     tramo de cada archivo que suena en la ventana) → PCM → Java.
  *  2. Fotograma a fotograma: compositor → JPEG → Java decodifica, dibuja en la superficie del
  *     codificador y lo muxea. Mientras Java codifica uno, acá ya se dibuja el siguiente.
  *  3. El archivo queda en data/exports/ y, si está activado, se copia a la galería.
  */
 import type { Clip, Timeline } from '../../api'
+import { autoBitrate, type ExportQuality } from '../bitrate'
 import { host } from '../host'
 import { Renderer } from './frames'
-import { decodeAudio } from './media'
+import { decodeRange } from './media'
 import { basename, blobToBase64, fs, join, normalizeRel, uniqueName } from './fsx'
 import { projectDir, readProject, readTimeline } from './projects'
 import { getSettings } from './settings'
+import { holdAwake } from './wake'
 
 export type AndroidExportJob = {
   projectId: string
@@ -24,7 +27,7 @@ export type AndroidExportJob = {
   height: number
   fps: number
   codec: 'avc' | 'hevc'
-  quality: 'low' | 'medium' | 'high' | 'max'
+  quality: ExportQuality
   /** kbps; 0 = automático según la calidad. */
   bitrate?: number
   audio: boolean
@@ -45,12 +48,6 @@ const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 const IMG = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const SR = 48000
 
-/** Bits por píxel y por fotograma según la calidad (gráficos con texto nítido: generoso). */
-const BPP = { low: 0.05, medium: 0.08, high: 0.12, max: 0.2 }
-export function autoBitrate(w: number, h: number, fps: number, quality: AndroidExportJob['quality'], codec: 'avc' | 'hevc') {
-  const bps = w * h * fps * (BPP[quality] ?? BPP.high) * (codec === 'hevc' ? 0.7 : 1)
-  return Math.round(Math.min(100_000_000, Math.max(1_000_000, bps)))
-}
 
 function fadeGain(c: Clip, lt: number) {
   let g = 1
@@ -59,13 +56,13 @@ function fadeGain(c: Clip, lt: number) {
   return g
 }
 
-type Part = { buf: AudioBuffer; clip: Clip; vol: number }
+type Part = { file: string; clip: Clip; vol: number }
 
-/** Los audios que suenan en [t0, t1] (pistas de audio y el sonido de los videos), ya decodificados. */
+/** Los audios que suenan en [t0, t1] (pistas de audio y el sonido de los videos) y se pueden leer. */
 async function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Promise<Part[]> {
   const root = projectDir(projectId)!
   const solo = tl.tracks.some((t) => t.type === 'audio' && t.solo)
-  const decoded = new Map<string, Promise<AudioBuffer | null>>()
+  const readable = new Map<string, Promise<boolean>>()
   const parts: Part[] = []
   for (const tr of tl.tracks) {
     if (tr.type !== 'audio' && tr.type !== 'video') continue
@@ -79,10 +76,9 @@ async function audioParts(projectId: string, tl: Timeline, t0: number, t1: numbe
       let file: string
       try { file = join(root, normalizeRel(c.src)) } catch { continue }
       if (!fs.exists(file)) continue
-      // Un video sin pista de audio no se puede decodificar: simplemente no suma nada.
-      if (!decoded.has(file)) decoded.set(file, decodeAudio(file, SR).catch(() => null))
-      const buf = await decoded.get(file)
-      if (buf) parts.push({ buf, clip: c, vol })
+      // Un video sin pista de audio (o un formato que la tablet no lee) simplemente no suma nada.
+      if (!readable.has(file)) readable.set(file, decodeRange(file, 0, 0.1, SR).then(() => true, () => false))
+      if (await readable.get(file)) parts.push({ file, clip: c, vol })
     }
   }
   return parts
@@ -115,10 +111,12 @@ async function mixAudio(parts: Part[], t0: number, t1: number, check: () => void
       const a = Math.max(c.start, ws), b = Math.min(c.start + c.duration, we)
       if (b - a < 0.0005) continue
       const la = a - c.start, lb = b - c.start
-      const offset = (c.in || 0) + la
-      if (offset >= p.buf.duration) continue
+      let buf: AudioBuffer | null = null
+      try { buf = await decodeRange(p.file, (c.in || 0) + la, b - a, SR) } catch (e) { console.warn('No se pudo leer el audio', p.file, e) }
+      check()
+      if (!buf) continue
       const src = ctx.createBufferSource()
-      src.buffer = p.buf
+      src.buffer = buf
       const g = ctx.createGain()
       const fading = (c.fadeIn && la < c.fadeIn) || (c.fadeOut && lb > c.duration - c.fadeOut)
       if (fading) {
@@ -129,7 +127,7 @@ async function mixAudio(parts: Part[], t0: number, t1: number, check: () => void
         g.gain.setValueCurveAtTime(curve, a - ws, b - a)
       } else g.gain.value = p.vol
       src.connect(g).connect(ctx.destination)
-      src.start(a - ws, offset, b - a)
+      src.start(a - ws, 0, b - a)
     }
     const mixed = await ctx.startRendering()
     const bytes = new Uint8Array(pcm16(mixed).buffer)
@@ -164,8 +162,7 @@ class Export {
   }
 
   async run() {
-    const keep = getSettings().android?.keepAwake !== false
-    if (keep) try { host().call('app.keepScreenOn', { on: true }) } catch { /* sin puente */ }
+    const release = holdAwake()
     let started = false
     try {
       const r = await this.inner(() => { started = true })
@@ -177,7 +174,7 @@ class Export {
     } finally {
       this.renderer?.destroy()
       this.renderer = null
-      try { host().call('app.keepScreenOn', { on: false }) } catch { /* sin puente */ }
+      release()
     }
   }
 
@@ -208,7 +205,7 @@ class Export {
     const ready = this.renderer.ready
     this.check()
 
-    // Audio: primero se decodifica todo lo que suena, para saber si hay pista de audio
+    // Audio: primero se ve qué suena y se puede leer, para saber si el MP4 lleva pista de audio
     const parts = job.audio ? await audioParts(job.projectId, tl, start, end) : []
     this.check()
     await ready

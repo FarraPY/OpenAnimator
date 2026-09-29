@@ -188,7 +188,7 @@ h('frames:share', async (id, tl, t) => {
   await host().callAsync('file.share', { path, mime: 'image/png', title: 'Compartir fotograma' })
   return true
 })
-h('frames:contactSheet', async (id, tl, opts) => (await F.contactSheet(id, tl, opts)).png)
+h('frames:contactSheet', async (id, tl, opts) => (await F.contactSheet(id, tl, opts)).jpeg)
 h('frames:audit', (id, tl, opts) => F.auditLayout(id, tl, opts))
 
 // ── exportación (se completa en exporter.ts) ──────────────────────────────────
@@ -203,7 +203,6 @@ h('export:start', async (job) => (await import('./exporter')).startExport(job, (
 h('export:cancel', async (id) => (await import('./exporter')).cancelExport(id))
 h('export:list', async () => (await import('./exporter')).listExports())
 h('export:delete', (path: string) => { if (/^exports\/[^/]+$/.test(path)) fs.delete(path); return true })
-h('export:bitrate', async (w: number, hh: number, fps: number, quality: any, codec: any) => (await import('./exporter')).autoBitrate(w, hh, fps, quality, codec))
 h('export:clearCache', (id) => { const d = P.projectDir(id); if (d && fs.exists(join(d, '.oa-cache'))) return fs.deleteAsync(join(d, '.oa-cache')) })
 h('export:gallery', (path: string) => host().callAsync('gallery.save', { path }))
 h('export:share', (path: string) => host().callAsync('file.share', { path, title: 'Compartir video' }))

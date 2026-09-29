@@ -98,8 +98,16 @@ cp "$BUILD/apk/base.apk" "$BUILD/apk/unsigned.apk"
 "$ZIPALIGN" -f -p 4 "$BUILD/apk/unsigned.apk" "$BUILD/apk/aligned.apk"
 KS="${OA_KEYSTORE:-$HERE/keystore/openanimator.jks}"
 log "Firmando con $(basename "$KS")…"
-"$APKSIGNER" sign --ks "$KS" --ks-pass "pass:${OA_KEYSTORE_PASS:-openanimator}" --ks-key-alias "${OA_KEY_ALIAS:-openanimator}" \
-  --out "$OUT_APK" "$BUILD/apk/aligned.apk" 2>&1 | grep -v "JAVA_TOOL_OPTIONS" || true
-"$APKSIGNER" verify "$OUT_APK" 2>&1 | grep -v "JAVA_TOOL_OPTIONS" || true
+# Sin APK viejo a mano: si la firma falla, no queda un archivo anterior que parezca el nuevo.
+rm -f "$OUT_APK" "$OUT_APK.idsig"
+if ! "$APKSIGNER" sign --ks "$KS" --ks-pass "pass:${OA_KEYSTORE_PASS:-openanimator}" --ks-key-alias "${OA_KEY_ALIAS:-openanimator}" \
+  --out "$OUT_APK" "$BUILD/apk/aligned.apk" > "$BUILD/apk/sign.log" 2>&1; then
+  grep -v "JAVA_TOOL_OPTIONS" "$BUILD/apk/sign.log" || true
+  rm -f "$OUT_APK"; echo "Falló la firma del APK"; exit 1
+fi
+if ! "$APKSIGNER" verify "$OUT_APK" > "$BUILD/apk/sign.log" 2>&1; then
+  grep -v "JAVA_TOOL_OPTIONS" "$BUILD/apk/sign.log" || true
+  rm -f "$OUT_APK"; echo "El APK firmado no pasó la verificación"; exit 1
+fi
 rm -f "$OUT_APK.idsig"
 log "Listo: $OUT_APK ($(du -h "$OUT_APK" | cut -f1)) · versión $VERSION_NAME ($VERSION_CODE)"

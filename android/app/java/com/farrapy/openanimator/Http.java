@@ -57,6 +57,8 @@ final class Http {
         File saveTo;
         /** Deliver the response body as text chunks while it arrives (server-sent events). */
         boolean stream;
+        /** El pedido lleva una clave: no seguir redirecciones (la clave viajaría a otro host). */
+        boolean noRedirects;
         int timeoutMs = 300000;
     }
 
@@ -72,6 +74,7 @@ final class Http {
             c.setConnectTimeout(30000);
             c.setReadTimeout(Math.max(10000, r.timeoutMs));
             c.setUseCaches(false);
+            c.setInstanceFollowRedirects(!r.noRedirects);
             c.setRequestProperty("User-Agent", "OpenAnimator-Android/" + BuildInfo.VERSION_NAME);
             for (Map.Entry<String, String> e : r.headers.entrySet()) c.setRequestProperty(e.getKey(), e.getValue());
             if (r.body != null) {

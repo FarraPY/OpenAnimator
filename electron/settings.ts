@@ -3,6 +3,9 @@ import path from 'node:path'
 import { APP_DIR, DATA_DIR, SETTINGS_FILE } from './paths'
 import { DEFAULT_SETTINGS, ExportSettings } from './ffmpeg'
 import { readJSON, writeJSON } from './projects'
+import { DEFAULTS, mergeSettings as merge } from './settings-defaults'
+
+export { DEFAULTS }
 
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type Settings = {
@@ -60,33 +63,6 @@ export type PluginSettings = {
   whisper: { enabled: boolean; python: string; model: string; device: 'auto' | 'cuda' | 'cpu' }
   ytdlp: { path: string }
 }
-export const DEFAULTS: Settings = {
-  ui: { accent: 'violet', density: 'comfortable', reduceMotion: false, openLastProject: false, confirmDelete: true, homeView: 'grid', homeSort: 'recent' },
-  editor: { snap: true, snapFrames: true, followPlayhead: true, waveforms: true, imageDuration: 5, defaultZoom: 60, stageBg: 'dark', safeAreas: false, thirds: false, showChat: true },
-  claude: { permissionMode: 'acceptEdits', model: '', effort: '', extraInstructions: '', saver: true, showThinking: true, showCost: true, autoAttachFrame: false, claudePath: '' },
-  export: {},
-  exportPrefs: { defaultDir: '', openFolderWhenDone: false, notify: true },
-  plugins: {
-    image: 'auto', voice: 'auto', ask: 'auto', transcribe: 'auto',
-    codex: { enabled: true, path: '', model: '' },
-    openai: { enabled: true, chatModel: 'gpt-5', imageModel: 'gpt-image-1', imageQuality: 'high' },
-    gemini: { enabled: true, chatModel: 'gemini-2.5-pro', imageModel: 'gemini-2.5-flash-image' },
-    openrouter: { enabled: true, chatModel: 'openai/gpt-5' },
-    elevenlabs: { enabled: true, voiceId: '', voiceName: '', modelId: 'eleven_multilingual_v2', stability: 0.5, similarity: 0.75, style: 0, speed: 1 },
-    fish: { enabled: true, voiceId: '', voiceName: '', model: 's2.1-pro-free', temperature: 0.7, topP: 0.7, speed: 1, volume: 0, latency: 'normal', v: 2 },
-    whisper: { enabled: true, python: '', model: 'openai/whisper-large-v3-turbo', device: 'auto' },
-    ytdlp: { path: '' },
-  },
-}
-
-const isObj = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x)
-function merge<T>(base: T, over: any): T {
-  if (!isObj(base) || !isObj(over)) return (over === undefined ? base : over) as T
-  const out: any = { ...base }
-  for (const k of Object.keys(over)) out[k] = isObj((base as any)[k]) && isObj(over[k]) && k !== 'export' ? merge((base as any)[k], over[k]) : over[k]
-  return out
-}
-
 export function getSettings(): Settings {
   let raw: any
   try { raw = readJSON(SETTINGS_FILE) } catch { return structuredClone(DEFAULTS) }

@@ -8,7 +8,7 @@
 import type { PluginId, PluginStatus, Voice } from '../../api'
 import { host } from '../host'
 import { blobToBase64, fs, join, slugify } from './fsx'
-import { decodeAudio, probeDuration } from './media'
+import { decodeRange, probeDuration } from './media'
 import { projectDir } from './projects'
 import { getSettings } from './settings'
 
@@ -251,18 +251,40 @@ export async function sfx(projectId: string, req: { text: string; seconds?: numb
 }
 
 // ── transcripción ─────────────────────────────────────────────────────────────
-/** Audio mono 16 kHz en WAV (las APIs de transcripción tienen límite de tamaño). */
+/**
+ * Audio mono 16 kHz en WAV (las APIs de transcripción tienen límite de tamaño). Se decodifica de a
+ * un minuto: un video largo no entra entero en la memoria del WebView.
+ */
 async function lightAudio(rel: string, maxSec?: number): Promise<Blob> {
-  const buf = await decodeAudio(rel, 16000)
-  const len = Math.min(buf.length, maxSec ? Math.round(maxSec * 16000) : buf.length)
-  const mono = new Float32Array(len)
-  for (let c = 0; c < buf.numberOfChannels; c++) { const d = buf.getChannelData(c); for (let i = 0; i < len; i++) mono[i] += d[i] / buf.numberOfChannels }
-  const out = new DataView(new ArrayBuffer(44 + len * 2))
-  const wr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)) }
-  wr(0, 'RIFF'); out.setUint32(4, 36 + len * 2, true); wr(8, 'WAVE'); wr(12, 'fmt '); out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true)
-  out.setUint32(24, 16000, true); out.setUint32(28, 32000, true); out.setUint16(32, 2, true); out.setUint16(34, 16, true); wr(36, 'data'); out.setUint32(40, len * 2, true)
-  for (let i = 0; i < len; i++) out.setInt16(44 + i * 2, Math.max(-32768, Math.min(32767, Math.round(mono[i] * 32767))), true)
-  return new Blob([out.buffer], { type: 'audio/wav' })
+  const SR = 16000, WIN = 60
+  const parts: Int16Array<ArrayBuffer>[] = []
+  let len = 0
+  for (let t = 0; !maxSec || t < maxSec; t += WIN) {
+    const dur = maxSec ? Math.min(WIN, maxSec - t) : WIN
+    let buf: AudioBuffer | null
+    try { buf = await decodeRange(rel, t, dur, SR) } catch (e: any) {
+      if (t === 0) throw new Error(`No se pudo leer el audio: ${e?.message || e}`)
+      break
+    }
+    if (!buf) break
+    const pcm = new Int16Array(buf.length)
+    const chans = Array.from({ length: buf.numberOfChannels }, (_, c) => buf!.getChannelData(c))
+    for (let i = 0; i < buf.length; i++) {
+      let v = 0
+      for (const d of chans) v += d[i]
+      v /= chans.length
+      pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)))
+    }
+    parts.push(pcm)
+    len += pcm.length
+    if (buf.duration < dur - 0.05) break
+  }
+  if (!len) throw new Error('El archivo no tiene audio')
+  const h = new DataView(new ArrayBuffer(44))
+  const wr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)) }
+  wr(0, 'RIFF'); h.setUint32(4, 36 + len * 2, true); wr(8, 'WAVE'); wr(12, 'fmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true)
+  h.setUint32(24, SR, true); h.setUint32(28, SR * 2, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true); wr(36, 'data'); h.setUint32(40, len * 2, true)
+  return new Blob([h.buffer, ...parts], { type: 'audio/wav' })
 }
 
 export async function transcribe(rel: string, o: { provider?: string; maxSec?: number; lang?: string } = {}): Promise<{ text: string; words: Word[]; provider: string; lang?: string }> {

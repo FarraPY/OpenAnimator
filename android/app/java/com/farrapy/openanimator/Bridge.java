@@ -71,7 +71,6 @@ public final class Bridge {
     private final AtomicInteger reqCodes = new AtomicInteger(2000);
     private final Encoder encoder;
     private volatile String token;
-    private volatile boolean issued;
 
     private static final class Pending {
         final String id, kind;
@@ -89,15 +88,20 @@ public final class Bridge {
         this.fs = fs;
         this.secrets = secrets;
         this.encoder = new Encoder(fs);
-        resetToken();
+        newPageToken();
     }
 
-    /** A new page (reload) gets a new token; the old one stops working. */
-    void resetToken() {
+    /**
+     * Each load of the interface gets a new token inside its own document (AppServer.page); the
+     * previous one stops working. The bridge object is also visible to the project iframes, which
+     * never see the document, so they cannot use it.
+     */
+    String newPageToken() {
         byte[] b = new byte[24];
         new SecureRandom().nextBytes(b);
-        token = Base64.encodeToString(b, Base64.NO_WRAP | Base64.URL_SAFE);
-        issued = false;
+        String t = Base64.encodeToString(b, Base64.NO_WRAP | Base64.URL_SAFE);
+        token = t;
+        return t;
     }
 
     void destroy() {
@@ -108,16 +112,11 @@ public final class Bridge {
 
     // ── entrada desde JavaScript ─────────────────────────────────────────────────
 
+    /** Datos del equipo y de la app (el token no: viene en el documento, ver newPageToken). */
     @JavascriptInterface
     public String init() {
         try {
             JSONObject o = new JSONObject();
-            synchronized (this) {
-                if (!issued) {
-                    issued = true;
-                    o.put("token", token);
-                }
-            }
             o.put("info", appInfo());
             return o.toString();
         } catch (JSONException e) {
@@ -382,6 +381,16 @@ public final class Bridge {
                 resolve(id, ok(true));
                 return;
             }
+            case "audio.peaks":
+                resolve(id, ok(AudioDecoder.peaks(existingFile(a.getString("path")), Math.max(1, Math.min(1000, a.optInt("perSec", 100))))));
+                return;
+            case "audio.decode": {
+                // Tramos acotados: la exportación y la transcripción piden de a 30-60 s.
+                double dur = a.getDouble("duration");
+                if (!(dur > 0 && dur <= 600)) throw new IllegalArgumentException("Duración inválida");
+                resolve(id, ok(AudioDecoder.segment(existingFile(a.getString("path")), Math.max(0, a.optDouble("start", 0)), dur, fs.resolve(a.getString("out")))));
+                return;
+            }
             case "enc.frame":
                 encoder.frame(Base64.decode(a.getString("data"), Base64.DEFAULT));
                 resolve(id, ok(true));
@@ -392,6 +401,12 @@ public final class Bridge {
             default:
                 throw new IllegalArgumentException("Método desconocido: " + method);
         }
+    }
+
+    private File existingFile(String path) throws IOException {
+        File f = fs.resolve(path);
+        if (!f.isFile()) throw new IOException("No existe el archivo: " + path);
+        return f;
     }
 
     private Zip.Progress progress(final String id) {
@@ -424,7 +439,9 @@ public final class Bridge {
         if (hs != null) {
             for (Iterator<String> it = hs.keys(); it.hasNext(); ) {
                 String k = it.next();
-                r.headers.put(k, fillSecrets(hs.getString(k), r.url));
+                String raw = hs.getString(k), filled = fillSecrets(raw, r.url);
+                if (!filled.equals(raw)) r.noRedirects = true;
+                r.headers.put(k, filled);
             }
         }
         JSONObject body = a.optJSONObject("body");

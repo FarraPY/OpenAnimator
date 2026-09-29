@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark" />
   <meta name="theme-color" content="#0b0c0f" />
   <!-- Las escenas (HTML de los proyectos) viven en otro origen (__PROJECT_ORIGIN__): la interfaz sólo las muestra en iframes. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; img-src 'self' data: blob: __PROJECT_ORIGIN__; media-src 'self' data: blob: __PROJECT_ORIGIN__; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; frame-src __PROJECT_ORIGIN__; connect-src 'self' data: blob: __PROJECT_ORIGIN__; worker-src 'self' blob:; object-src 'none'; base-uri 'none'" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; img-src 'self' data: blob: __PROJECT_ORIGIN__; media-src 'self' data: blob: https: __PROJECT_ORIGIN__; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; frame-src __PROJECT_ORIGIN__; connect-src 'self' data: blob: __PROJECT_ORIGIN__; worker-src 'self' blob:; object-src 'none'; base-uri 'none'" />
   <title>OpenAnimator</title>
   <style>html,body{background:#0b0c0f;margin:0;height:100%}#boot{position:fixed;inset:0;display:grid;place-items:center;color:#8b90a0;font:500 15px system-ui,sans-serif}</style>
 </head>
