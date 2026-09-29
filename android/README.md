@@ -27,7 +27,7 @@ nunca la ve). La pantalla de ajustes te guía y muestra el estado de cada paso:
 1. Instalá **Termux** desde [F-Droid](https://f-droid.org/packages/com.termux/) o
    [GitHub](https://github.com/termux/termux-app/releases) (la de Google Play es experimental).
 2. Copiá el **comando de preparación** que muestra la app, pegalo en Termux y esperá a que diga
-   «Listo». Instala Node.js y Claude Code (con
+   «Listo». Actualiza Termux (`yes | pkg upgrade`), instala Node.js y Claude Code (con
    [claude-code-termux](https://github.com/gtbuchanan/claude-code-termux), unos 250 MB) y activa
    `allow-external-apps` para que OpenAnimator le pueda mandar comandos.
 3. Tocá **Permitir** (Android lo llama «ejecutar comandos en Termux»).
@@ -38,6 +38,10 @@ Para que Android no cierre Termux mientras Claude trabaja: en *Ajustes › Bater
 OpenAnimator sin restricciones y, en *Opciones de desarrollador*, activá «Desactivar restricciones de
 procesos secundarios». Como es un instalador de la comunidad, una actualización de Claude Code puede
 romperlo por un tiempo (el instalador se actualiza con `claude-code-termux-update`).
+
+Si al probar aparece `CANNOT LINK EXECUTABLE … cannot locate symbol`, a Termux le faltan
+actualizaciones (Termux no admite actualizar paquetes a medias): ejecutá `yes | pkg upgrade` en Termux
+y volvé a probar. Si falla otra cosa, el registro del puente está en `~/.openanimator/bridge.log`.
 
 ### Con una clave de la API
 

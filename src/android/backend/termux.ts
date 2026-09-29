@@ -24,6 +24,8 @@ const TOKEN_FILE = '.termux-token'
  * de la comunidad (el oficial no soporta Android) y el permiso para que otras apps le manden comandos.
  */
 export const SETUP_COMMAND = [
+  // Termux no admite actualizaciones a medias: un Node.js nuevo con OpenSSL viejo no arranca.
+  'yes | pkg upgrade',
   'pkg install -y nodejs',
   'curl -fsSL https://raw.githubusercontent.com/gtbuchanan/claude-code-termux/main/install.sh | bash',
   "mkdir -p ~/.termux && touch ~/.termux/termux.properties && sed -i '/^[[:space:]]*allow-external-apps/d' ~/.termux/termux.properties && echo 'allow-external-apps = true' >> ~/.termux/termux.properties && termux-reload-settings",
@@ -121,7 +123,10 @@ async function connectOrStart(): Promise<string> {
   for (let i = 0; i < 40; i++) {
     await sleep(i < 10 ? 250 : 500)
     const r = exited.result
-    if (r) throw new Error(`El puente de Termux se cerró al arrancar (código ${r.exitCode}): ${tail(r.stderr || r.stdout || r.errmsg) || 'sin detalles'}`)
+    if (r) {
+      const detail = tail(r.stderr || r.stdout || r.errmsg) || 'sin detalles'
+      throw new Error(hint(detail) ? `${hint(detail)} (Detalle: ${detail})` : `El puente de Termux se cerró al arrancar (código ${r.exitCode}): ${detail}`)
+    }
     try { const c = await open(); current = c.link; return c.link } catch (e) { last = e }
   }
   throw new Error(`El puente de Termux no arrancó (${last?.message || 'sin respuesta'}). ${await diagnose()}`)
@@ -141,10 +146,19 @@ async function diagnose() {
 
 /** Resultado de un comando en Termux (err -1 = sin error de Termux). */
 type RunResult = { stdout: string; stderr: string; exitCode: number; err: number; errmsg: string }
+
+/** Errores conocidos de Termux, con lo que hay que hacer. */
+function hint(text: string) {
+  if (/CANNOT LINK EXECUTABLE|cannot locate symbol/i.test(text)) return 'A Termux le faltan actualizaciones y Node.js no arranca: abrí Termux, ejecutá «yes | pkg upgrade» y volvé a probar.'
+  if (/node: (command )?not found|Falta Node\.js/i.test(text)) return 'Falta Node.js en Termux: corré el comando de preparación (paso 2) y volvé a probar.'
+  return ''
+}
+
 function checkRun(r: RunResult, what: string) {
   if (/allow-external-apps/i.test(r.errmsg || '')) throw new Error('Falta preparar Termux: pegá en Termux el comando de preparación (Ajustes › Claude) y volvé a intentar.')
   if (r.err !== undefined && r.err !== -1 && r.errmsg) throw new Error(`Termux no ejecutó ${what}: ${r.errmsg.split('\n')[0]}`)
-  if (r.exitCode !== 0) throw new Error(`${what} falló: ${(r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ') || `código ${r.exitCode}`}`)
+  const detail = (r.stderr || r.stdout || '').trim().split('\n').slice(-3).join(' ')
+  if (r.exitCode !== 0) throw new Error(hint(detail) || `${what} falló: ${detail || `código ${r.exitCode}`}`)
 }
 
 /** Copia los archivos del puente a ~/.openanimator (van dentro del APK: siempre de esta versión). */
@@ -158,6 +172,8 @@ async function install() {
     ...file('bridge.mjs', bridgeSrc, 'OA_BRIDGE_EOF'),
     ...file('oa-mcp.mjs', mcpSrc, 'OA_MCP_EOF'),
     'command -v node >/dev/null 2>&1 || { echo "Falta Node.js en Termux: corré el comando de preparación (pkg install nodejs)." >&2; exit 3; }',
+    // Que exista no alcanza: tiene que poder arrancar (con paquetes viejos no enlaza).
+    'v=$(node --version 2>&1) || { echo "$v" >&2; exit 4; }',
     'echo listo',
   ].join('\n') + '\n'
   const r = await host().callAsync<RunResult>('termux.run', { path: BASH, args: ['-s'], stdin: script, background: true, result: true, timeoutMs: 60000, label: 'OpenAnimator: instalar el puente' })
