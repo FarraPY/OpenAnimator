@@ -33,7 +33,11 @@ export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type Settings = {
   ui: { accent: 'violet' | 'blue' | 'teal' | 'green' | 'amber' | 'rose'; density: 'comfortable' | 'compact'; reduceMotion: boolean; openLastProject: boolean; confirmDelete: boolean; homeView: 'grid' | 'list'; homeSort: 'recent' | 'name' | 'duration' }
   editor: { snap: boolean; snapFrames: boolean; followPlayhead: boolean; waveforms: boolean; imageDuration: number; defaultZoom: number; stageBg: 'dark' | 'black' | 'gray' | 'checker'; safeAreas: boolean; thirds: boolean; showChat: boolean }
-  claude: { permissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'; model: string; effort: Effort | ''; extraInstructions: string; saver: boolean; showThinking: boolean; showCost: boolean; autoAttachFrame: boolean; claudePath: string }
+  claude: {
+    permissionMode: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'; model: string; effort: Effort | ''; extraInstructions: string; saver: boolean; showThinking: boolean; showCost: boolean; autoAttachFrame: boolean; claudePath: string
+    /** Sólo en Android: con el plan del usuario (Claude Code en Termux) o con una clave de la API. */
+    backend?: 'termux' | 'api'
+  }
   export: Partial<ExportSettings>
   exportPrefs: { defaultDir: string; openFolderWhenDone: boolean; notify: boolean }
   plugins: PluginSettings

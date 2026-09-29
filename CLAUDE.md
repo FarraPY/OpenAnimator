@@ -49,7 +49,8 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Modelos verificados con Claude Code: claude-opus-5-5, claude-sonnet-5, claude-haiku-4-5 (Fable 5.1 pide créditos).
 
 ## Chat, consumo y medios
-- `electron/claude.ts`: `ChatSession.stats()` mide el contexto con el `usage` de cada `message_start`
+- `electron/claude.ts` lanza el proceso; el protocolo (mensajes, permisos, opciones en caliente) está en
+  `electron/claude-session.ts` (sin Node, lo usa también la tablet). `stats()` mide el contexto con el `usage` de cada `message_start`
   (input + cache) y la ventana con `modelUsage[].contextWindow` del `result`; `compact()` manda `/compact`
   y el `system/compact_boundary` avisa. Modo ahorro (`settings.claude.saver`, activado por defecto) agrega
   reglas `SAVER` al system prompt. `oa_ver_fotogramas` usa 960 px por defecto (las imágenes son lo más caro).
@@ -83,6 +84,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   rechazo antes de responder deshace el mensaje (`rollback` en `run`); `block_binding: drop_block` por si el
   historial cambia (imágenes quitadas por tamaño: `trimImages`). Imágenes a Claude ≤ 1920 px por lado. Streaming ansioso
   de herramientas → validar entrada (`__json_buf` estricto + `validateInput`). `fallbacks: 'default'`.
+- Claude con el plan (por defecto, `settings.claude.backend = 'termux'`): el Claude Code oficial corre en Termux.
+  La app instala y arranca por `RUN_COMMAND` (`TermuxLink.java`) un puente (`android/termux/bridge.mjs`, token por
+  stdin, 127.0.0.1:47821) que lanza `claude -p` stream-json con `--tools ""` y sólo el MCP `openanimator`
+  (`oa-mcp.mjs` → puente → app → `tools.ts`): los proyectos viven en la app. El protocolo del chat es el de la PC
+  (`electron/claude-session.ts`, compartido); `code.ts` es el transporte. Nunca leer credenciales de Claude.
+- El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
+  objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
 - Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
   la exportación manda JPEG a `enc.frame` (MediaCodec + EGL) y el audio mezclado con Web Audio a `enc.audio`.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
@@ -90,5 +98,6 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles
   (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
   `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.
-- Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`.
+- Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`
+  (Termux se imita con el puente real y `android/dev/fake-claude.mjs`).
   APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.

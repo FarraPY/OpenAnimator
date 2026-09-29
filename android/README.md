@@ -15,11 +15,34 @@ tablets grandes (probada en tamaño de Galaxy Tab S8+), funciona en Android 8 o 
 
 ## Conectar Claude
 
-En la PC, OpenAnimator usa Claude Code con tu cuenta. En la tablet no hay Claude Code: el chat usa la
-**API de Claude** con una clave tuya.
+En **Ajustes › Claude (IA)** elegís cómo trabaja Claude en la tablet:
+
+### Con tu plan de Claude (Pro o Max)
+
+Claude Code no tiene versión oficial para Android, pero corre en **Termux** (una terminal Linux
+gratuita) con un instalador de la comunidad. OpenAnimator lo maneja por detrás: la conversación, las
+herramientas y los permisos son los mismos que en la PC, y la sesión de tu plan queda en Termux (la app
+nunca la ve). La pantalla de ajustes te guía y muestra el estado de cada paso:
+
+1. Instalá **Termux** desde [F-Droid](https://f-droid.org/packages/com.termux/) o
+   [GitHub](https://github.com/termux/termux-app/releases) (la de Google Play es experimental).
+2. Copiá el **comando de preparación** que muestra la app, pegalo en Termux y esperá a que diga
+   «Listo». Instala Node.js y Claude Code (con
+   [claude-code-termux](https://github.com/gtbuchanan/claude-code-termux), unos 250 MB) y activa
+   `allow-external-apps` para que OpenAnimator le pueda mandar comandos.
+3. Tocá **Permitir** (Android lo llama «ejecutar comandos en Termux»).
+4. **Iniciar sesión en Claude**: se abre Termux con `claude auth login`; entrá con tu cuenta.
+5. **Probar**: la app instala su puente en `~/.openanimator/` de Termux y lo conecta.
+
+Para que Android no cierre Termux mientras Claude trabaja: en *Ajustes › Batería* dejá Termux y
+OpenAnimator sin restricciones y, en *Opciones de desarrollador*, activá «Desactivar restricciones de
+procesos secundarios». Como es un instalador de la comunidad, una actualización de Claude Code puede
+romperlo por un tiempo (el instalador se actualiza con `claude-code-termux-update`).
+
+### Con una clave de la API
 
 1. Entrá a [platform.claude.com](https://platform.claude.com/settings/keys), cargá crédito y creá una clave (`sk-ant-…`).
-2. En la app: **Ajustes › Claude (IA)**, pegá la clave y tocá *Guardar* (y *Probar*).
+2. En **Ajustes › Claude (IA)** elegí *Con clave de API*, pegá la clave y tocá *Guardar* (y *Probar*).
 
 La API se cobra por uso y es aparte de la suscripción de claude.ai. El chat muestra el costo aproximado
 de cada respuesta; el **modo ahorro** (activado por defecto) y *Compactar* ayudan a gastar menos. La
@@ -53,7 +76,7 @@ Modelos: Opus 5.5 (por defecto), Sonnet 5.5, Haiku 4.5 y Fable 5.1.
 
 ### Diferencias con la PC
 
-No están (dependen de programas de la PC): Claude Code y su terminal, la exportación NVENC con sus
+No están (dependen de programas de la PC): la terminal de Claude Code, la exportación NVENC con sus
 ajustes avanzados, *Plantilla desde un video*, *Importar de CoAnimator*, ChatGPT vía Codex, Whisper
 local y yt-dlp. Los plugins por API (OpenAI, Gemini, OpenRouter, ElevenLabs, Fish Audio) funcionan igual.
 
@@ -66,6 +89,7 @@ La interfaz es la misma de la PC (`src/`); lo propio de Android está en:
 | App nativa (WebView, puente, servidor de archivos, codificador MediaCodec, claves) | `android/app/java/…` |
 | "Proceso principal" en el WebView: los mismos canales que `electron/main.ts` | `src/android/backend/` |
 | Chat con la API de Claude (SDK oficial, herramientas, permisos, historial) | `src/android/backend/agent.ts`, `tools.ts` |
+| Chat con Claude Code en Termux (puente, MCP, permiso RUN_COMMAND) | `src/android/backend/code.ts`, `termux.ts`, `android/termux/`, `TermuxLink.java` |
 | Exportación (Web Audio + compositor + `enc.*`) | `src/android/backend/exporter.ts` |
 | Capa táctil y pantallas propias (Claude, exportar, ajustes) | `src/android/tablet.css`, `src/android/ui/` |
 
@@ -105,6 +129,11 @@ node android/dev/server.mjs --port 5190 --mock-claude   # http://localhost:5190
 Con `--mock-claude` los pedidos a la API los responde un Claude simulado con un guion fijo (crea una
 escena, la pone en el timeline y mira fotogramas), para probar el chat sin gastar. Un mensaje con
 `[rechazo]` simula que Claude declina el pedido y uno con `[error400]`, que la API lo rechaza.
+
+Termux también se imita: `RUN_COMMAND` corre con el bash de la PC y un `HOME` propio, así el puente
+de verdad (`android/termux/bridge.mjs`) arranca y lanza `android/dev/fake-claude.mjs`, un Claude Code
+simulado que usa las herramientas de la app por MCP y pide permisos (con `--termux-claude real` usa el
+Claude Code instalado en la PC).
 
 El servidor escucha sólo en `127.0.0.1` (su puente no tiene token). El audio que en la tablet
 decodifica Java (`AudioDecoder.java`: formas de onda, mezcla de la exportación, transcripción) acá

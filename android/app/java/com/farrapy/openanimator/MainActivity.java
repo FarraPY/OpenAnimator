@@ -328,6 +328,12 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
     }
 
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if (bridge != null && bridge.onPermissionResult(requestCode, grantResults)) return;
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    }
+
     // ── WebView ──────────────────────────────────────────────────────────────────
 
     private boolean ours(Uri u) {

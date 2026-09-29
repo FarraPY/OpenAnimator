@@ -6,11 +6,12 @@ import { fs } from './fsx'
 const FILE = 'settings.json'
 
 /**
- * Los de la PC (electron/settings-defaults.ts) con lo propio de la tablet: Claude por API (sin
- * Claude Code), sin Codex ni Whisper local, y las preferencias de pantalla y exportación.
+ * Los de la PC (electron/settings-defaults.ts) con lo propio de la tablet: Claude con el plan del
+ * usuario (Claude Code en Termux) o por la API, sin Codex ni Whisper local, y las preferencias de
+ * pantalla y exportación.
  */
 export const DEFAULTS: Settings = mergeSettings(structuredClone(PC_DEFAULTS) as Settings, {
-  claude: { model: 'claude-opus-5-5' },
+  claude: { model: 'claude-opus-5-5', backend: 'termux' },
   plugins: { codex: { enabled: false }, whisper: { enabled: false, model: '' } },
   android: { immersive: true, uiScale: 1, debug: false, saveToGallery: true, keepAwake: true },
   androidExport: { codec: 'avc', quality: 'high', bitrate: 0, height: 0, fps: 0, audio: true, audioBitrate: 192 },

@@ -8,6 +8,11 @@
  *   http://127.0.0.1:PORT      → los proyectos (como https://oaproject.androidplatform.net)
  *
  *   node android/dev/server.mjs [--port 5190] [--data carpeta] [--mock-claude] [--host 127.0.0.1]
+ *                               [--termux-claude fake|real] [--termux-permission]
+ *
+ * Termux (Claude Code con el plan) también se imita: RUN_COMMAND corre con el bash de la PC y un HOME
+ * propio (data/.dev-termux/home), así el puente de verdad (android/termux/bridge.mjs) arranca y lanza
+ * fake-claude.mjs (guion fijo, sin gastar) o, con --termux-claude real, el Claude Code instalado.
  *
  * El puente no tiene token: por defecto sólo escucha en 127.0.0.1 (con --host 0.0.0.0 cualquiera en
  * la red podría leer y escribir la carpeta de datos).
@@ -17,6 +22,8 @@
  * api.anthropic.com los responde un Claude de mentira con un guion fijo (prueba del chat sin costo).
  */
 import http from 'node:http'
+import net from 'node:net'
+import readline from 'node:readline'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -123,6 +130,44 @@ function encFinish() {
   })
 }
 function encCancel() { if (enc) { fs.rmSync(enc.tmp, { recursive: true, force: true }); enc = null } }
+
+// ── Termux (RUN_COMMAND y la conexión con el puente) ─────────────────────────────
+const TERMUX_CLAUDE = arg('termux-claude', 'fake')
+const TERMUX_HOME = path.join(DATA, '.dev-termux', 'home')
+let termuxPerm = process.argv.includes('--termux-permission')
+const termuxLinks = new Map()
+function termuxEnv() {
+  const env = { ...process.env, HOME: TERMUX_HOME, PREFIX: path.join(DATA, '.dev-termux', 'usr') }
+  if (TERMUX_CLAUDE === 'fake') env.OA_CLAUDE_BIN = path.join(ROOT, 'android', 'dev', 'fake-claude.mjs')
+  return env
+}
+function termuxRun(a) {
+  if (!termuxPerm) throw new Error('OpenAnimator todavía no tiene permiso para usar Termux')
+  fs.mkdirSync(TERMUX_HOME, { recursive: true })
+  const args = (a.args || []).map(String)
+  if (a.background === false) { console.log('[termux] sesión visible:', args.join(' ')); return true }
+  const p = spawn('bash', args, { env: termuxEnv(), cwd: TERMUX_HOME, stdio: ['pipe', a.result ? 'pipe' : 'ignore', a.result ? 'pipe' : 'inherit'] })
+  p.stdin.end(a.stdin || '')
+  if (!a.result) return true
+  return new Promise((resolve) => {
+    let stdout = '', stderr = ''
+    p.stdout.on('data', (d) => { stdout += d })
+    p.stderr.on('data', (d) => { stderr += d })
+    p.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 1, err: -1, errmsg: '' }))
+  })
+}
+function termuxLink(a, id, emit) {
+  return new Promise((resolve, reject) => {
+    const s = net.connect(+a.port, '127.0.0.1')
+    s.on('connect', () => {
+      termuxLinks.set(id, s)
+      s.write(a.hello + '\n')
+      readline.createInterface({ input: s, crlfDelay: Infinity }).on('line', (line) => emit({ event: 'line', line }))
+    })
+    s.on('error', () => { if (!termuxLinks.has(id)) reject(new Error('sin puente')) })
+    s.on('close', () => { termuxLinks.delete(id); resolve(true) })
+  })
+}
 
 // ── audio (MediaExtractor + MediaCodec en la tablet; ffprobe/ffmpeg acá) ──────
 const run = (cmd, args, opts = {}) => new Promise((res, rej) => execFile(cmd, args, { maxBuffer: 1 << 30, encoding: 'buffer', ...opts }, (e, out, err) => (e ? rej(new Error(`${cmd}: ${String(err || e.message).trim().split('\n').pop()}`)) : res(out))))
@@ -378,6 +423,12 @@ function sync(method, a) {
     case 'app.keepScreenOn': case 'app.immersive': case 'app.debug': return true
     case 'app.openUrl': console.log('[abrir]', a.url); return true
     case 'app.exit': return true
+    case 'app.openSettings': console.log('[ajustes de la app]'); return true
+    case 'termux.status': return { installed: true, version: '0.118.3 (dev)', store: '', permission: termuxPerm }
+    case 'termux.send': { const s = termuxLinks.get(a.link); if (!s) throw new Error('El puente con Termux no está conectado'); s.write(String(a.line) + '\n'); return true }
+    case 'termux.close': termuxLinks.get(a.link)?.destroy(); return true
+    case 'termux.open': console.log('[abrir Termux]'); return true
+    case 'clipboard.text': console.log('[copiado]', String(a.text).slice(0, 80)); return true
     case 'codec.caps': return { avc: true, hevc: true, aac: true, encoders: [{ name: 'c2.qti.avc.encoder (dev)', type: 'video/avc', hardware: true }, { name: 'c2.qti.hevc.encoder (dev)', type: 'video/hevc', hardware: true }] }
     case 'enc.start': return encStart(a)
     case 'enc.audio': encAudio(a.data); return true
@@ -398,6 +449,9 @@ async function async(method, a, id, emit) {
     case 'file.open': console.log('[abrir archivo]', a.path); return true
     case 'gallery.save': { const src = resolve(a.path); const dir = path.join(DATA, '.dev-gallery'); fs.mkdirSync(dir, { recursive: true }); fs.copyFileSync(src, path.join(dir, a.name || path.basename(src))); return { uri: 'content://dev/gallery/' + (a.name || path.basename(src)), folder: 'Movies/OpenAnimator' } }
     case 'clipboard.image': return true
+    case 'termux.permission': termuxPerm = true; return true
+    case 'termux.run': return await termuxRun(a)
+    case 'termux.link': return await termuxLink(a, id, emit)
     case 'audio.decode': return await audioDecode(a)
     case 'audio.peaks': return await audioPeaks(a)
     case 'enc.frame': return encFrame(a.data)
@@ -456,10 +510,10 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(out)); return
       }
       if (req.method === 'POST' && p === '/__bridge/async') {
-        const { method, args } = JSON.parse((await readBody(req)).toString('utf8'))
+        const { method, args, id: askedId } = JSON.parse((await readBody(req)).toString('utf8'))
         res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache' })
-        const id = crypto.randomUUID()
-        req.on('close', () => { if (!res.writableEnded) requests.get(id)?.abort() })
+        const id = typeof askedId === 'string' && askedId ? askedId : crypto.randomUUID()
+        req.on('close', () => { if (!res.writableEnded) { requests.get(id)?.abort(); termuxLinks.get(id)?.destroy() } })
         const emit = (e) => { if (!res.writableEnded) res.write(JSON.stringify(e) + '\n') }
         try { emit({ ok: true, value: (await async(method, args || {}, id, emit)) ?? null }) } catch (e) { emit({ ok: false, error: String(e?.message || e) }) }
         res.end(); return

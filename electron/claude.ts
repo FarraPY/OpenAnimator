@@ -5,8 +5,8 @@
  *          --include-partial-messages --permission-prompt-tool stdio
  *          --permission-mode <modo> --mcp-config <openanimator MCP>
  *
- * Un proceso por conversación (stdin abierto = misma sesión). Los permisos llegan
- * como `control_request` (can_use_tool) y se responden desde la interfaz.
+ * El protocolo (mensajes, permisos, opciones en caliente) está en claude-session.ts, compartido con
+ * la tablet; acá se lanza `claude` como proceso hijo.
  */
 import { spawn, ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -16,16 +16,9 @@ import readline from 'node:readline'
 import { app } from 'electron'
 import { APP_DIR, CACHE_DIR, DATA_DIR, claudePath, ffmpegPaths } from './paths'
 import { projectDir } from './projects'
+import { ClaudeStreamSession, nid, type ChatItem } from './claude-session'
 
-export type ChatItem = {
-  id: string; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'permission' | 'result' | 'notice'
-  text?: string; name?: string; input?: any; status?: string; result?: string; isError?: boolean
-  requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: 'info' | 'warn' | 'error'
-}
-/** Consumo de la conversación: contexto ocupado (tokens del último pedido al modelo) y ventana del modelo. */
-export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
-export type ChatEvent = { session: string; type: 'item' | 'patch' | 'state'; item?: Partial<ChatItem> & { id: string }; state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats } }
-export type ChatOptions = { projectId: string; permissionMode: string; model?: string; effort?: string; extraInstructions?: string; claudePath?: string; resume?: string; saver?: boolean }
+export type { ChatEvent, ChatItem, ChatOptions, ChatStats } from './claude-session'
 
 const READONLY_TOOLS = ['oa_proyecto', 'oa_ver_fotogramas', 'oa_hoja_contactos', 'oa_auditar_layout', 'oa_medios', 'oa_info_medio', 'oa_resolver_nota', 'oa_plugins', 'oa_voces']
 const SYSTEM_APPEND = [
@@ -75,35 +68,9 @@ export function writeMcpConfig(projectId: string) {
   return mcpFile
 }
 
-let seq = 0
-const nid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`
-
-export class ChatSession {
-  id = nid('chat')
-  items: ChatItem[] = []
+export class ChatSession extends ClaudeStreamSession {
   proc: ChildProcess | null = null
-  busy = false
-  sessionId?: string
-  model?: string
-  private blocks = new Map<number, string>()       // índice de bloque → id de item (mensaje en curso)
-  private toolItems = new Map<string, string>()     // tool_use_id → id de item
-  private streamedText = false
-  private pendingPerms = new Map<string, any>()
-  private thinkStart = new Map<string, number>()
-  private usage: ChatStats = { context: 0, window: 200000, cost: 0, turns: 0, compactions: 0, output: 0 }
-  private compacting = false
-
-  constructor(public opts: ChatOptions, private emit: (e: ChatEvent) => void) {}
-
-  private push(it: ChatItem) { this.items.push(it); if (this.items.length > 3000) this.items.shift(); this.emit({ session: this.id, type: 'item', item: it }) }
-  private patch(id: string, p: Partial<ChatItem>) {
-    const it = this.items.find((x) => x.id === id)
-    if (it) Object.assign(it, p)
-    this.emit({ session: this.id, type: 'patch', item: { id, ...p } })
-  }
-  stats(): ChatStats { return { ...this.usage } }
-  private state() { this.emit({ session: this.id, type: 'state', state: { busy: this.busy, alive: !!this.proc, sessionId: this.sessionId, model: this.model, effort: this.opts.effort || '', permissionMode: this.opts.permissionMode, stats: this.stats() } }) }
-  notice(text: string, level: ChatItem['level'] = 'info') { this.push({ id: nid('n'), kind: 'notice', text, level }) }
+  protected get alive() { return !!this.proc }
 
   start() {
     const bin = this.opts.claudePath || claudePath()
@@ -128,221 +95,15 @@ export class ChatSession {
     p.on('close', (code) => {
       if (this.proc !== p) return // un proceso viejo que se cerró después de relanzar
       this.proc = null
-      if (this.busy) this.busy = false
-      if (code && code !== 0) this.notice(`Claude terminó (código ${code}). ${errTail.trim().split('\n').slice(-3).join(' ')}`, 'error')
-      this.state()
+      this.closed(code, errTail)
     })
     p.on('error', (e) => { this.notice('No se pudo iniciar Claude: ' + e.message, 'error'); this.proc = null; this.state() })
     this.state()
     return true
   }
 
-  private write(obj: unknown) { try { this.proc?.stdin?.write(JSON.stringify(obj) + '\n') } catch { /* ignore */ } }
-
-  send(text: string, images: Array<{ mediaType: string; data: string }> = [], files: string[] = []) {
-    if (!this.proc && !this.start()) return
-    const content: any[] = []
-    for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
-    content.push({ type: 'text', text })
-    this.push({ id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined })
-    this.streamedText = false
-    this.busy = true
-    this.state()
-    this.write({ type: 'user', message: { role: 'user', content } })
-  }
-
-  /** Resume la conversación para liberar contexto (el /compact de Claude Code). */
-  compact(instructions?: string) {
-    if (this.busy) return
-    if (!this.proc && !this.start()) return
-    this.compacting = true
-    this.busy = true
-    this.notice('Compactando la conversación: Claude la resume para liberar contexto…')
-    this.state()
-    this.write({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/compact' + (instructions?.trim() ? ' ' + instructions.trim() : '') }] } })
-  }
-
-  interrupt() {
-    if (!this.proc) return
-    this.write({ type: 'control_request', request_id: nid('int'), request: { subtype: 'interrupt' } })
-  }
-
-  /** Herramientas que el usuario aprobó "para toda la sesión" en este chat. */
-  private alwaysAllow = new Set<string>()
-
-  respondPermission(itemId: string, allow: boolean, always = false) {
-    const it = this.items.find((x) => x.id === itemId)
-    if (!it || !it.requestId) return
-    if (allow && always && it.name) this.alwaysAllow.add(it.name)
-    const req = this.pendingPerms.get(it.requestId)
-    this.pendingPerms.delete(it.requestId)
-    const response = allow ? { behavior: 'allow', updatedInput: req?.input ?? it.input ?? {} } : { behavior: 'deny', message: 'El usuario rechazó esta acción.' }
-    this.write({ type: 'control_response', response: { subtype: 'success', request_id: it.requestId, response } })
-    this.patch(itemId, { status: allow ? (always ? 'permitido (toda la sesión)' : 'permitido') : 'rechazado' })
-  }
-
-  /**
-   * Cambia opciones SIN cortar lo que Claude está haciendo:
-   *  - permisos y modelo se aplican en caliente con control_request (set_permission_mode / set_model);
-   *  - esfuerzo y modo ahorro necesitan relanzar el proceso: se hace cuando termina el turno
-   *    (o ya, si está libre), retomando la misma conversación con --resume.
-   */
-  setOptions(patch: Partial<ChatOptions>, label: string) {
-    const prev = { ...this.opts }
-    Object.assign(this.opts, patch)
-    if (this.proc) {
-      const changed = (k: keyof ChatOptions) => k in patch && (patch as any)[k] !== (prev as any)[k]
-      if (changed('permissionMode')) this.control({ subtype: 'set_permission_mode', mode: this.opts.permissionMode || 'default' })
-      if (changed('model')) this.control(this.opts.model ? { subtype: 'set_model', model: this.opts.model } : { subtype: 'set_model' })
-      if (changed('effort') || changed('saver') || changed('extraInstructions')) this.restartWhenIdle()
-    }
-    this.notice(label)
-    this.state()
-  }
-
-  private ctlSeq = 0
-  private pendingCtl = new Map<string, () => void>()
-  /** Pedido de control a Claude Code; si no lo soporta, se cae al reinicio diferido. */
-  private control(request: any) {
-    const id = `oa-ctl-${++this.ctlSeq}`
-    this.pendingCtl.set(id, () => this.restartWhenIdle())
-    this.write({ type: 'control_request', request_id: id, request })
-  }
-  private restartPending = false
-  private restartWhenIdle() {
-    if (!this.proc) return
-    if (this.busy) { this.restartPending = true; return }
-    this.restartPending = false
-    const resume = this.sessionId
-    this.kill()
-    this.opts.resume = resume
-  }
-
-  kill() { try { this.proc?.kill() } catch { /* ignore */ } this.proc = null; this.busy = false; this.state() }
-
-  private onLine(line: string) {
-    let m: any
-    try { m = JSON.parse(line) } catch { return }
-    switch (m.type) {
-      case 'system':
-        if (m.subtype === 'init') {
-          this.sessionId = m.session_id; this.model = m.model
-          const oa = (m.mcp_servers || []).find((s: any) => s.name === 'openanimator')
-          if (oa && oa.status !== 'connected') this.notice(`Herramientas de OpenAnimator: ${oa.status}`, 'warn')
-          this.state()
-        } else if (m.subtype === 'compact_boundary') {
-          const pre = m.compact_metadata?.pre_tokens
-          this.usage.compactions++
-          this.usage.context = 0
-          this.notice(`Conversación compactada${pre ? ` (tenía ${Math.round(pre / 1000)} mil tokens)` : ''}. Claude sigue con un resumen de lo hecho.`)
-          this.state()
-        }
-        break
-      case 'stream_event': this.onStream(m.event); break
-      case 'assistant': this.onAssistant(m.message); break
-      case 'user': this.onUser(m.message); break
-      case 'result':
-        this.busy = false
-        this.blocks.clear()
-        for (const u of Object.values<any>(m.modelUsage || {})) if (u?.contextWindow) this.usage.window = u.contextWindow
-        if (typeof m.total_cost_usd === 'number') this.usage.cost = m.total_cost_usd
-        if (this.compacting) {
-          this.compacting = false
-          if (m.is_error) this.notice('No se pudo compactar: ' + String(m.result || m.subtype || 'error'), 'error')
-        } else {
-          this.usage.turns++
-          this.push({ id: nid('r'), kind: 'result', isError: !!m.is_error, cost: m.total_cost_usd, durationMs: m.duration_ms, text: m.is_error ? String(m.result || m.subtype || 'error') : '' })
-        }
-        this.state()
-        if (this.restartPending) setTimeout(() => this.restartWhenIdle(), 50)
-        break
-      case 'control_response': {
-        const r = m.response || {}
-        const fb = this.pendingCtl.get(r.request_id)
-        this.pendingCtl.delete(r.request_id)
-        if (fb && r.subtype === 'error') fb()
-        break
-      }
-      case 'control_request':
-        if (m.request?.subtype === 'can_use_tool') {
-          if (this.alwaysAllow.has(m.request.tool_name)) {
-            this.write({ type: 'control_response', response: { subtype: 'success', request_id: m.request_id, response: { behavior: 'allow', updatedInput: m.request.input ?? {} } } })
-            break
-          }
-          this.pendingPerms.set(m.request_id, m.request)
-          this.push({ id: nid('perm'), kind: 'permission', requestId: m.request_id, name: m.request.tool_name, input: m.request.input, status: 'pendiente' })
-        } else {
-          this.write({ type: 'control_response', response: { subtype: 'error', request_id: m.request_id, error: 'no soportado' } })
-        }
-        break
-    }
-  }
-
-  private onStream(ev: any) {
-    if (!ev) return
-    if (ev.type === 'message_start') {
-      this.blocks.clear()
-      // Contexto ocupado = todo lo que se le mandó al modelo en este pedido.
-      const u = ev.message?.usage
-      if (u) { this.usage.context = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0); this.state() }
-    } else if (ev.type === 'message_delta') {
-      if (ev.usage?.output_tokens) this.usage.output += ev.usage.output_tokens
-    } else if (ev.type === 'content_block_start') {
-      const b = ev.content_block || {}
-      if (b.type === 'text' || b.type === 'thinking' || b.type === 'redacted_thinking') {
-        const think = b.type !== 'text'
-        const it: ChatItem = { id: nid(think ? 'th' : 'a'), kind: think ? 'thinking' : 'assistant', text: b.text || b.thinking || '', status: 'streaming' }
-        if (think) this.thinkStart.set(it.id, Date.now())
-        this.blocks.set(ev.index, it.id)
-        this.push(it)
-      } else if (b.type === 'tool_use') {
-        const it: ChatItem = { id: nid('tool'), kind: 'tool', name: b.name, input: {}, status: 'ejecutando' }
-        this.toolItems.set(b.id, it.id)
-        this.blocks.set(ev.index, it.id)
-        this.push(it)
-      }
-    } else if (ev.type === 'content_block_delta') {
-      const id = this.blocks.get(ev.index)
-      if (!id) return
-      const it = this.items.find((x) => x.id === id)
-      if (!it) return
-      const d = ev.delta || {}
-      if (d.type === 'text_delta') { this.streamedText = true; this.patch(id, { text: (it.text || '') + d.text }) }
-      else if (d.type === 'thinking_delta') this.patch(id, { text: (it.text || '') + d.thinking })
-    } else if (ev.type === 'content_block_stop') {
-      const id = this.blocks.get(ev.index)
-      const it = id && this.items.find((x) => x.id === id)
-      if (it && it.kind !== 'tool') {
-        const t0 = this.thinkStart.get(it.id)
-        this.thinkStart.delete(it.id)
-        this.patch(it.id, { status: 'ok', ...(t0 ? { durationMs: Date.now() - t0 } : {}) })
-      }
-    }
-  }
-
-  private onAssistant(msg: any) {
-    for (const b of msg?.content || []) {
-      if (b.type === 'tool_use') {
-        let id = this.toolItems.get(b.id)
-        if (!id) { id = nid('tool'); this.toolItems.set(b.id, id); this.push({ id, kind: 'tool', name: b.name, input: b.input, status: 'ejecutando' }) }
-        else this.patch(id, { input: b.input, name: b.name })
-      } else if (b.type === 'text' && !this.streamedText && b.text) {
-        this.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
-      }
-    }
-  }
-
-  private onUser(msg: any) {
-    for (const b of msg?.content || []) {
-      if (b.type !== 'tool_result') continue
-      const id = this.toolItems.get(b.tool_use_id)
-      if (!id) continue
-      let text = ''
-      if (typeof b.content === 'string') text = b.content
-      else if (Array.isArray(b.content)) text = b.content.map((c: any) => (c.type === 'text' ? c.text : c.type === 'image' ? '[imagen]' : '')).join('\n')
-      this.patch(id, { status: b.is_error ? 'error' : 'ok', isError: !!b.is_error, result: text.slice(0, 4000) })
-    }
-  }
+  protected writeLine(obj: unknown) { try { this.proc?.stdin?.write(JSON.stringify(obj) + '\n') } catch { /* ignore */ } }
+  protected terminate() { try { this.proc?.kill() } catch { /* ignore */ } this.proc = null }
 }
 
 // ── historial: las conversaciones que Claude Code guarda para la carpeta del proyecto ──────────

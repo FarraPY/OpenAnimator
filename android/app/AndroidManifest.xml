@@ -8,6 +8,13 @@
     <!-- Sólo para guardar videos en la galería en Android 8/9 (desde Android 10 no hace falta). -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
+    <!-- Claude Code con el plan del usuario corre en Termux: la app le manda comandos (RUN_COMMAND). -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <queries>
+        <package android:name="com.termux" />
+    </queries>
+
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 

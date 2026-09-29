@@ -70,6 +70,7 @@ public final class Bridge {
     private final Map<Integer, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicInteger reqCodes = new AtomicInteger(2000);
     private final Encoder encoder;
+    private final TermuxLink termux;
     private volatile String token;
 
     private static final class Pending {
@@ -88,6 +89,7 @@ public final class Bridge {
         this.fs = fs;
         this.secrets = secrets;
         this.encoder = new Encoder(fs);
+        this.termux = new TermuxLink(act, this);
         newPageToken();
     }
 
@@ -107,6 +109,7 @@ public final class Bridge {
     void destroy() {
         for (Http.Handle h : requests.values()) h.cancel();
         encoder.cancel();
+        termux.closeAll();
         pool.shutdownNow();
     }
 
@@ -283,6 +286,24 @@ public final class Bridge {
                     }
                 });
                 return true;
+            case "clipboard.text": {
+                ClipboardManager cm = (ClipboardManager) act.getSystemService(Context.CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(ClipData.newPlainText(a.optString("label", "OpenAnimator"), a.getString("text")));
+                return true;
+            }
+            case "termux.status":
+                return termux.status();
+            case "termux.send":
+                termux.send(a.getString("link"), a.getString("line"));
+                return true;
+            case "termux.close":
+                termux.close(a.getString("link"));
+                return true;
+            case "termux.open":
+                return termux.openTermux();
+            case "app.openSettings":
+                termux.openAppSettings();
+                return true;
             case "codec.caps":
                 return codecCaps();
             case "enc.start":
@@ -391,6 +412,15 @@ public final class Bridge {
                 resolve(id, ok(AudioDecoder.segment(existingFile(a.getString("path")), Math.max(0, a.optDouble("start", 0)), dur, fs.resolve(a.getString("out")))));
                 return;
             }
+            case "termux.permission":
+                termux.requestPermission(id);
+                return;
+            case "termux.run":
+                termux.run(id, a);
+                return;
+            case "termux.link":
+                termux.link(id, a);
+                return;
             case "enc.frame":
                 encoder.frame(Base64.decode(a.getString("data"), Base64.DEFAULT));
                 resolve(id, ok(true));
@@ -555,6 +585,10 @@ public final class Bridge {
     }
 
     /** Called by MainActivity.onActivityResult. Returns false when the code is not ours. */
+    boolean onPermissionResult(int code, int[] results) {
+        return termux.onPermissionResult(code, results);
+    }
+
     boolean onActivityResult(int code, final int resultCode, final Intent data) {
         final Pending p = pending.remove(code);
         if (p == null) return false;

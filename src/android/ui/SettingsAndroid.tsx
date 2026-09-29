@@ -1,5 +1,6 @@
 /**
- * Secciones de Ajustes propias de la tablet: la clave de Claude (API), la pantalla, la exportación
+ * Secciones de Ajustes propias de la tablet: cómo se conecta Claude (tu plan con Termux o una clave
+ * de la API), la pantalla, la exportación
  * con el codificador de hardware, el almacenamiento (papelera, exportaciones) y los datos del equipo.
  */
 import { ReactNode, useEffect, useState } from 'react'
@@ -8,6 +9,7 @@ import { useApp } from '../../App'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon, IconName, Logo } from '../../ui/icons'
 import { Badge, Button, Segmented, Select, Spinner, Switch, TextArea, TextInput } from '../../ui/kit'
+import { TermuxSetup } from './TermuxSetup'
 
 export function Row({ label, desc, children, stack }: { label: ReactNode; desc?: ReactNode; children?: ReactNode; stack?: boolean }) {
   return (
@@ -40,7 +42,7 @@ export const ANDROID_SECTIONS: Array<{ id: string; label: string; icon: IconName
   { id: 'acerca', label: 'Acerca de', icon: 'info' },
 ]
 
-// ── Claude (API) ──────────────────────────────────────────────────────────────
+// ── Claude ────────────────────────────────────────────────────────────────────
 export function ClaudeSection() {
   const { settings: s, updateSettings: up, toast, refreshInfo } = useApp()
   const dlg = useDialogs()
@@ -65,33 +67,38 @@ export function ClaudeSection() {
   }
   const remove = async () => { setSt(await call('claude:setKey', '')); setTest(null); refreshInfo(); toast('Clave borrada') }
 
+  const mode = s.claude.backend === 'api' ? 'api' : 'termux'
+  const setMode = (v: 'termux' | 'api') => { up({ claude: { backend: v } }); setTest(null); setTimeout(refreshInfo, 50) }
+
   return <>
-    <section className="set-group">
-      <h3 className="set-group-title"><Icon name="key" size={16} style={{ color: 'var(--t3)' }} />Conexión</h3>
-      <div className="set-card key-box">
-        <div className="key-status">
-          <span className="key-mark"><Icon name="sparkles" size={22} /></span>
-          <div className="grow">
-            <div style={{ font: '600 16px var(--font-display)' }}>API de Claude</div>
-            <div className="t3" style={{ marginTop: 2 }}>{st?.ready ? <>Clave guardada: <span className="mono t2">{st.masked}</span></> : 'Todavía no cargaste una clave.'}</div>
+    <Group title="Conexión" icon="key" desc="Claude puede trabajar con tu plan de Claude (Pro o Max), a través de Claude Code en Termux, o con una clave de la API, que se paga por uso.">
+      <div className="key-box">
+        <Segmented full value={mode} onChange={setMode} options={[{ value: 'termux', label: 'Con tu plan de Claude', icon: 'sparkles' }, { value: 'api', label: 'Con clave de API', icon: 'key' }]} />
+        {mode === 'termux' ? <TermuxSetup /> : <>
+          <div className="key-status">
+            <span className="key-mark"><Icon name="sparkles" size={22} /></span>
+            <div className="grow">
+              <div style={{ font: '600 16px var(--font-display)' }}>API de Claude</div>
+              <div className="t3" style={{ marginTop: 2 }}>{st?.ready ? <>Clave guardada: <span className="mono t2">{st.masked}</span></> : 'Todavía no cargaste una clave.'}</div>
+            </div>
+            {st?.ready ? <Badge tone="ok" icon="check">Conectado</Badge> : <Badge tone="warn">Sin clave</Badge>}
           </div>
-          {st?.ready ? <Badge tone="ok" icon="check">Conectado</Badge> : <Badge tone="warn">Sin clave</Badge>}
-        </div>
-        <div className="key-row">
-          <TextInput type="password" mono value={key} onChange={setKey} placeholder={st?.ready ? 'Pegá una clave nueva para reemplazarla' : 'sk-ant-api03-…'} onEnter={save} />
-          <Button variant="primary" icon="check" onClick={save} disabled={!key.trim()}>Guardar</Button>
-          {st?.ready && <Button icon="refresh" onClick={runTest} loading={testing}>Probar</Button>}
-          {st?.ready && <Button variant="ghost" icon="trash" tip="Borrar la clave" onClick={remove} />}
-        </div>
-        {test && <div className={`plug-test-msg ${test.ok ? 'ok' : 'err'}`} style={{ fontSize: 14 }}><Icon name={test.ok ? 'check-circle' : 'x-circle'} size={16} />{test.msg}</div>}
-        <div className="key-note"><Icon name="info" size={16} /><div>
-          El chat usa tu clave de la <b>API de Claude</b> (cuenta de desarrollador en platform.claude.com), que se cobra por uso y es aparte de la suscripción de claude.ai. La clave se guarda <b>cifrada con el almacén de claves de Android</b> y sólo viaja a api.anthropic.com.
-          <div style={{ marginTop: 8 }}><Button size="sm" icon="external" onClick={() => call('shell:openExternal', 'https://platform.claude.com/settings/keys')}>Conseguir una clave</Button></div>
-        </div></div>
+          <div className="key-row">
+            <TextInput type="password" mono value={key} onChange={setKey} placeholder={st?.ready ? 'Pegá una clave nueva para reemplazarla' : 'sk-ant-api03-…'} onEnter={save} />
+            <Button variant="primary" icon="check" onClick={save} disabled={!key.trim()}>Guardar</Button>
+            {st?.ready && <Button icon="refresh" onClick={runTest} loading={testing}>Probar</Button>}
+            {st?.ready && <Button variant="ghost" icon="trash" tip="Borrar la clave" onClick={remove} />}
+          </div>
+          {test && <div className={`plug-test-msg ${test.ok ? 'ok' : 'err'}`} style={{ fontSize: 14 }}><Icon name={test.ok ? 'check-circle' : 'x-circle'} size={16} />{test.msg}</div>}
+          <div className="key-note"><Icon name="info" size={16} /><div>
+            El chat usa tu clave de la <b>API de Claude</b> (cuenta de desarrollador en platform.claude.com), que se cobra por uso y es aparte de la suscripción de claude.ai. La clave se guarda <b>cifrada con el almacén de claves de Android</b> y sólo viaja a api.anthropic.com.
+            <div style={{ marginTop: 8 }}><Button size="sm" icon="external" onClick={() => call('shell:openExternal', 'https://platform.claude.com/settings/keys')}>Conseguir una clave</Button></div>
+          </div></div>
+        </>}
       </div>
-    </section>
+    </Group>
     <Group title="Modelo y razonamiento" icon="gauge" desc="Valores por defecto para chats nuevos. También se cambian desde el propio chat.">
-      <Row label="Modelo" desc="Precios en US$ por millón de tokens (entrada / salida).">
+      <Row label="Modelo" desc={mode === 'api' ? 'Precios en US$ por millón de tokens (entrada / salida).' : 'Con tu plan, el uso cuenta para los límites de tu cuenta de Claude.'}>
         <Select value={s.claude.model} width={260} menuWidth={340} onChange={(v) => up({ claude: { model: v } })}
           options={MODELS.map((m) => ({ value: m.id, label: m.name, desc: m.desc, hint: m.note }))} />
       </Row>

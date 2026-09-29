@@ -37,7 +37,8 @@ function toolMeta(it: ChatItem): { icon: IconName; name: string; arg: string } {
     Glob: ['search', 'Buscar archivos'], Grep: ['search', 'Buscar texto'], WebFetch: ['external', 'Leer web'], WebSearch: ['search', 'Buscar en la web'],
     TodoWrite: ['list', 'Tareas'], Task: ['bot', 'Subagente'], Agent: ['bot', 'Subagente'], ToolSearch: ['search', 'Cargar herramientas'], Skill: ['wand', 'Skill'],
   }
-  const m = OA[oa] || STD[raw] || ['wand', raw.replace(/^mcp__/, '').replace(/__/g, ' · ')]
+  // En la tablet con Termux, los archivos del proyecto también llegan por el MCP de OpenAnimator.
+  const m = OA[oa] || STD[raw] || STD[oa] || ['wand', raw.replace(/^mcp__/, '').replace(/__/g, ' · ')]
   const arg = i.file_path || i.path || i.command || i.pattern || i.skill || i.description || i.query || i.prompt || i.texto || i.descripcion || i.consulta || (i.times ? `t = ${i.times.join(', ')} s` : '') || (i.count ? `${i.count} cuadros` : '') || ''
   return { icon: m[0], name: m[1], arg: String(arg).replace(/\\/g, '/').split('/').slice(-3).join('/').slice(0, 120) }
 }
@@ -349,9 +350,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   if (info && !info.claude && android) {
     return (
       <div className="pane-body" style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', justifyContent: 'center' }}>
-        <Empty icon="sparkles" title="Conectá Claude" desc="En la tablet, Claude trabaja con tu clave de la API de Claude (se cobra por uso en tu cuenta de desarrollador, aparte de la suscripción). Cargala una vez en Ajustes y listo: queda guardada cifrada en este equipo.">
-          <Button variant="primary" icon="key" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'editor', id: projectId } })}>Cargar la clave</Button>
-          <Button icon="external" onClick={() => call('shell:openExternal', 'https://platform.claude.com/settings/keys')}>Conseguir una clave</Button>
+        <Empty icon="sparkles" title="Conectá Claude" desc="En la tablet, Claude puede trabajar con tu plan de Claude (Claude Code corre en la app Termux; se configura una vez) o con una clave de la API, que se paga por uso.">
+          <Button variant="primary" icon="settings" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'editor', id: projectId } })}>Configurar Claude</Button>
         </Empty>
       </div>
     )

@@ -11,7 +11,7 @@ import * as M from './media'
 import * as F from './frames'
 import * as PL from './plugins'
 import { basename, dirname, fs, join, normalizeRel, uniqueName } from './fsx'
-import { on as onEvent, projectChanged, send } from './events'
+import { copy, on as onEvent, projectChanged, send } from './events'
 
 type Handler = (...args: any[]) => any
 const handlers: Record<string, Handler> = {}
@@ -25,7 +25,13 @@ export function codecCaps() {
   if (!caps) { try { caps = host().call('codec.caps') } catch { caps = { avc: true, hevc: false, aac: true, encoders: [] } } }
   return caps!
 }
-function claudeReady() { try { return !!host().call<string>('secrets.masked', { name: 'claude' }) } catch { return false } }
+function keyReady() { try { return !!host().call<string>('secrets.masked', { name: 'claude' }) } catch { return false } }
+/** Cómo llega el chat a Claude: con el plan del usuario (Claude Code en Termux) o con una clave de la API. */
+const claudeMode = () => (S.getSettings().claude.backend === 'api' ? 'api' : 'termux')
+function claudeReady() {
+  if (claudeMode() === 'api') return keyReady()
+  try { const t = host().call<{ installed: boolean; permission: boolean }>('termux.status'); return t.installed && t.permission } catch { return false }
+}
 
 function appInfo(): AppInfo & Record<string, any> {
   const d = host().info
@@ -33,7 +39,7 @@ function appInfo(): AppInfo & Record<string, any> {
   const hw = (type: string) => c.encoders.some((e: any) => e.type === type && e.hardware !== false)
   return {
     version: d.versionName, dataDir: 'Almacenamiento interno de la app', projectsDir: 'Proyectos', portable: true,
-    claude: claudeReady() ? 'api' : null, ffmpeg: '', gpu: [d.manufacturer, d.model].filter(Boolean).join(' '),
+    claude: claudeReady() ? claudeMode() : null, ffmpeg: '', gpu: [d.manufacturer, d.model].filter(Boolean).join(' '),
     encoders: { h264_nvenc: false, hevc_nvenc: false, av1_nvenc: false, libx264: false, libx265: false },
     platform: 'android', device: d, soc: d.soc, codecs: { avc: c.avc, hevc: c.hevc, aac: c.aac, avcHw: hw('video/avc'), hevcHw: hw('video/hevc') },
   }
@@ -229,9 +235,18 @@ h('plugins:sfx', async (projectId, req) => { const r = await PL.sfx(projectId, r
 h('plugins:ask', (req) => PL.ask(req))
 
 // ── Claude (clave de API) ─────────────────────────────────────────────────────
-h('claude:status', () => ({ ready: claudeReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) }))
-h('claude:setKey', (key: string) => { host().call('secrets.set', { name: 'claude', value: key || '' }); return { ready: claudeReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) } })
-h('claude:test', async () => (await import('./agent')).testClaude())
+h('claude:status', () => ({ ready: keyReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) }))
+h('claude:setKey', (key: string) => { host().call('secrets.set', { name: 'claude', value: key || '' }); return { ready: keyReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) } })
+h('claude:test', async () => (claudeMode() === 'api' ? (await import('./agent')).testClaude() : (await import('./code')).testClaude()))
+// Claude Code en Termux (el plan del usuario)
+const termux = () => import('./termux')
+h('termux:status', async () => { const T = await termux(); return { ...T.termuxStatus(), command: T.SETUP_COMMAND } })
+h('termux:permission', async () => (await termux()).requestPermission())
+h('termux:open', async () => (await termux()).openTermux())
+h('termux:login', async () => (await termux()).login())
+h('termux:check', async () => (await termux()).bridgeStatus())
+h('app:openSettings', () => host().call('app.openSettings'))
+h('clipboard:text', (text: string) => host().call('clipboard.text', { text: String(text || '') }))
 
 // ── plantillas del usuario ────────────────────────────────────────────────────
 h('templates:saveProject', async (projectId, o) => {
@@ -247,29 +262,37 @@ h('templates:openFolder', () => true)
 h('analyze:phases', () => [])
 for (const ch of ['analyze:pickFile', 'analyze:start', 'analyze:cancel', 'analyze:discard', 'analyze:save']) h(ch, notAvailable('Crear plantillas analizando un video'))
 
-// ── chat con Claude (agent.ts) ────────────────────────────────────────────────
+// ── chat con Claude: por la API (agent.ts) o con Claude Code en Termux (code.ts) ─
 const agent = () => import('./agent')
+const code = () => import('./code')
+const chatMode = new Map<string, 'api' | 'termux'>() // cada chat sigue con el camino con el que se abrió
+const engine = async (id?: string) => (((id && chatMode.get(id)) || claudeMode()) === 'api' ? agent() : code())
 h('chat:pickFiles', async () => host().callAsync('pick.files', { accept: [], multiple: true }))
 h('chat:attach', async (projectId, files) => (await agent()).attachFiles(projectId, files))
 h('chat:attachData', async (projectId, name, b64) => (await agent()).attachData(projectId, name, b64))
-h('chat:create', async (projectId, opts) => (await agent()).createChat(projectId, opts))
-h('chat:get', async (id) => (await agent()).getChat(id))
-h('chat:sessions', async (projectId) => (await agent()).listSessions(projectId))
-h('chat:compact', async (id, instr) => (await agent()).compactChat(id, instr))
+h('chat:create', async (projectId, opts) => {
+  const mode = claudeMode()
+  const snap = await (await engine()).createChat(projectId, opts)
+  chatMode.set(snap.id, mode)
+  return snap
+})
+h('chat:get', async (id) => (await engine(id)).getChat(id))
+h('chat:sessions', async (projectId) => (await engine()).listSessions(projectId))
+h('chat:compact', async (id, instr) => (await engine(id)).compactChat(id, instr))
 const editorCtx = new Map<string, { timeline: string; t: number }>()
 h('chat:setCtx', (projectId, ctx) => { editorCtx.set(projectId, ctx) })
 h('chat:getCtx', (projectId) => editorCtx.get(projectId) || null)
 h('chat:popout', () => true)
 h('chat:popin', () => true)
 h('chat:isPopped', () => false)
-h('chat:send', async (id, text, images, files) => (await agent()).sendChat(id, text, images || [], files || []))
-h('chat:interrupt', async (id) => (await agent()).interruptChat(id))
-h('chat:permission', async (id, itemId, allow, always) => (await agent()).respondPermission(id, itemId, allow, !!always))
-h('chat:kill', async (id) => (await agent()).killChat(id))
+h('chat:send', async (id, text, images, files) => (await engine(id)).sendChat(id, text, images || [], files || []))
+h('chat:interrupt', async (id) => (await engine(id)).interruptChat(id))
+h('chat:permission', async (id, itemId, allow, always) => (await engine(id)).respondPermission(id, itemId, allow, !!always))
+h('chat:kill', async (id) => { (await engine(id)).killChat(id); chatMode.delete(id) })
 h('chat:setOptions', async (id, patch, label) => {
   const cur = S.getSettings().claude
   S.setSettings({ claude: { ...cur, ...patch } })
-  return (await agent()).setChatOptions(id, patch, label)
+  return (await engine(id)).setChatOptions(id, patch, label)
 })
 
 // ── instalación: window.oa ────────────────────────────────────────────────────
@@ -282,7 +305,8 @@ export function installBackend() {
     async call(ch: string, ...args: unknown[]) {
       const fn = handlers[ch]
       if (!fn) throw new Error(`No disponible en Android: ${ch}`)
-      return await fn(...args)
+      // Copias en los dos sentidos, como el IPC de la PC (ver events.ts).
+      return copy(await fn(...args.map(copy)))
     },
     on: onEvent,
     pathForFile: () => '',

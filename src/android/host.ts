@@ -111,8 +111,8 @@ function devHost(): Host {
     info,
     call: (method, args = {}) => post(method, args),
     async callAsync(method, args = {}, opts) {
-      const { onEvent, signal } = asOpts(opts)
-      const r = await fetch('/__bridge/async', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, args }), signal })
+      const { onEvent, signal, id } = asOpts(opts)
+      const r = await fetch('/__bridge/async', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, args, id }), signal })
       const reader = r.body!.getReader()
       const dec = new TextDecoder()
       let buf = ''
