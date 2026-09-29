@@ -1,0 +1,16 @@
+{
+  "name": "Cinético (tipografía en movimiento)",
+  "description": "Títulos que respiran, palabras que entran con desenfoque, listas, contadores y un cierre con impacto. Para intros, promos, reels y anuncios cortos.",
+  "order": 2,
+  "width": 1920, "height": 1080, "fps": 30, "background": "#ffffff",
+  "substitute": ["scenes/guion.js", "brief.md"],
+  "timeline": {
+    "format": "oa-timeline/1", "duration": 24, "notes": [],
+    "tracks": [
+      { "id": "escenas", "name": "Escenas", "type": "scene", "clips": [ { "id": "c-kine", "src": "scenes/cinetico.html", "start": 0, "duration": 24, "in": 0, "name": "Cinético" } ] },
+      { "id": "voz", "name": "Voz", "type": "audio", "clips": [] },
+      { "id": "musica", "name": "Música", "type": "audio", "clips": [], "volume": 0.4 },
+      { "id": "sfx", "name": "SFX", "type": "audio", "clips": [] }
+    ]
+  }
+}

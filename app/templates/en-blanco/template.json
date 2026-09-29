@@ -1,0 +1,16 @@
+{
+  "name": "En blanco (escena propia)",
+  "description": "Una escena HTML mínima con el contrato de OpenAnimator bien comentado. Para que la IA diseñe desde cero cualquier estilo: 3D con three.js, canvas, SVG, CSS…",
+  "order": 3,
+  "width": 1920, "height": 1080, "fps": 30, "background": "#101218",
+  "substitute": ["scenes/escena.html", "brief.md"],
+  "timeline": {
+    "format": "oa-timeline/1", "duration": 8, "notes": [],
+    "tracks": [
+      { "id": "escenas", "name": "Escenas", "type": "scene", "clips": [ { "id": "c-esc", "src": "scenes/escena.html", "start": 0, "duration": 8, "in": 0, "name": "Escena" } ] },
+      { "id": "voz", "name": "Voz", "type": "audio", "clips": [] },
+      { "id": "musica", "name": "Música", "type": "audio", "clips": [], "volume": 0.35 },
+      { "id": "sfx", "name": "SFX", "type": "audio", "clips": [] }
+    ]
+  }
+}

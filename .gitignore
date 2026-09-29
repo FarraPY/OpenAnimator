@@ -1,0 +1,33 @@
+# dependencias y herramientas locales
+node_modules/
+.tools/
+
+# builds
+dist/
+dist-electron/
+release/
+
+# datos del usuario: proyectos de video, ajustes, cachés de render y claves cifradas
+data/
+data-dev/
+.oa-cache/
+renders/
+secrets.json
+api.json
+
+# secretos
+.env
+.env.*
+!.env.example
+
+# medios pesados
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.mp3
+*.wav
+*.m4a
+*.aac
+
+*.log

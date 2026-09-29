@@ -1,0 +1,351 @@
+/*
+ * OpenAnimator compositor — arma un timeline completo en una sola página.
+ *
+ * La MISMA página se usa para la vista previa del editor y para exportar:
+ * "un solo renderizador", así lo que se ve es exactamente lo que sale en el MP4.
+ *
+ *   oa://app/runtime/compositor.html?p=<proyecto>&tl=<timeline>&mode=preview|export
+ *
+ * Capas visuales: pistas "scene" (HTML), "video" (mp4/webm/imagen). La primera pista
+ * visual del array se dibuja ADELANTE. Las pistas "audio" sólo suenan en la vista previa
+ * (en la exportación el audio lo mezcla FFmpeg).
+ */
+(function () {
+  'use strict';
+  var qs = new URLSearchParams(location.search);
+  var projectId = qs.get('p');
+  var timelineId = qs.get('tl');
+  var mode = qs.get('mode') || 'preview';
+  var base = 'oa://p/' + encodeURIComponent(projectId) + '/';
+  var stage = document.getElementById('stage');
+  var msgEl = document.getElementById('msg');
+
+  var project = null, timeline = null;
+  var layers = new Map();      // clipId -> { el, kind, clip, track, ready: Promise }
+  var audios = new Map();      // clipId -> { el, clip, track }
+  var playing = false, playRate = 1, lastT = 0;
+  var MAX_SCENE_IFRAMES = mode === 'export' ? 3 : 6;
+  var lastUse = new Map();
+
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function url(src) {
+    if (/^(https?:|oa:|data:|blob:)/.test(src)) return src;
+    return base + src.split('/').map(encodeURIComponent).join('/');
+  }
+  function isImage(src) { return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(src); }
+  function post(msg) { if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'oa-compositor' }, msg), '*'); }
+
+  async function loadJSON(path) {
+    var r = await fetch(url(path) + '?_=' + Date.now());
+    if (!r.ok) throw new Error('No se pudo leer ' + path + ' (' + r.status + ')');
+    return r.json();
+  }
+
+  async function load() {
+    project = await loadJSON('project.json');
+    var tls = project.timelines || [];
+    var ref = tls.find(function (x) { return x.id === timelineId; }) || tls[0];
+    if (!ref) throw new Error('El proyecto no tiene timelines');
+    timelineId = ref.id;
+    timeline = await loadJSON(ref.file);
+    var W = project.width || 1920, H = project.height || 1080;
+    stage.style.width = W + 'px';
+    stage.style.height = H + 'px';
+    stage.style.background = project.background || '#000';
+    document.body.style.width = W + 'px';
+    document.body.style.height = H + 'px';
+  }
+
+  function visualTracks() {
+    return (timeline.tracks || []).filter(function (tr) { return (tr.type === 'scene' || tr.type === 'video') && !tr.hidden; });
+  }
+
+  function activeClip(track, t) {
+    var clips = track.clips || [];
+    for (var i = 0; i < clips.length; i++) {
+      var c = clips[i];
+      if (t >= c.start - 1e-6 && t < c.start + c.duration - 1e-6) return c;
+    }
+    return null;
+  }
+
+  function clipOpacity(c, t) {
+    var o = 1, lt = t - c.start;
+    if (c.fadeIn > 0 && lt < c.fadeIn) o = Math.min(o, lt / c.fadeIn);
+    if (c.fadeOut > 0 && c.duration - lt < c.fadeOut) o = Math.min(o, (c.duration - lt) / c.fadeOut);
+    return Math.max(0, Math.min(1, o));
+  }
+
+  function ensureLayer(track, clip, z) {
+    var L = layers.get(clip.id);
+    if (L && L.src === clip.src) { L.el.style.zIndex = z; L.clip = clip; L.track = track; return L; }
+    if (L) destroyLayer(clip.id);
+    var el, ready;
+    if (track.type === 'scene') {
+      el = document.createElement('iframe');
+      el.className = 'layer';
+      el.setAttribute('scrolling', 'no');
+      ready = new Promise(function (res) {
+        el.addEventListener('load', function () {
+          var w = el.contentWindow;
+          // Esperar a que el runtime exista (se inyecta en <head>) y a las fuentes.
+          var tries = 0;
+          (function wait() {
+            if (w.__oaRuntime || tries++ > 200) {
+              var f = w.document && w.document.fonts ? w.document.fonts.ready : Promise.resolve();
+              f.then(function () { setTimeout(res, 50); });
+            } else setTimeout(wait, 25);
+          })();
+        }, { once: true });
+      });
+      el.src = url(clip.src);
+    } else if (isImage(clip.src)) {
+      el = document.createElement('img');
+      el.className = 'layer';
+      ready = new Promise(function (res) { el.onload = res; el.onerror = res; });
+      el.src = url(clip.src);
+    } else {
+      el = document.createElement('video');
+      el.className = 'layer';
+      el.muted = true; el.preload = 'auto'; el.playsInline = true;
+      ready = new Promise(function (res) { el.addEventListener('loadeddata', res, { once: true }); el.addEventListener('error', res, { once: true }); setTimeout(res, 8000); });
+      el.src = url(clip.src);
+    }
+    if (clip.fit) el.style.objectFit = clip.fit;
+    el.style.zIndex = z;
+    stage.appendChild(el);
+    L = { el: el, kind: track.type === 'scene' ? 'scene' : (isImage(clip.src) ? 'image' : 'video'), clip: clip, track: track, src: clip.src, ready: ready };
+    layers.set(clip.id, L);
+    return L;
+  }
+
+  function destroyLayer(id) {
+    var L = layers.get(id);
+    if (!L) return;
+    try { L.el.remove(); } catch (e) {}
+    layers.delete(id); lastUse.delete(id);
+  }
+
+  function gc(keep) {
+    var scenes = [];
+    layers.forEach(function (L, id) { if (!keep.has(id)) scenes.push(id); });
+    // Mantener algunas capas precargadas; eliminar las menos usadas.
+    scenes.sort(function (a, b) { return (lastUse.get(a) || 0) - (lastUse.get(b) || 0); });
+    while (layers.size > MAX_SCENE_IFRAMES && scenes.length) destroyLayer(scenes.shift());
+  }
+
+  function seekVideo(v, target) {
+    return new Promise(function (res) {
+      if (v.duration && isFinite(v.duration)) target = Math.min(Math.max(0, target), v.duration - 0.001);
+      if (Math.abs(v.currentTime - target) < 0.004 && v.readyState >= 2) return res();
+      var done = false;
+      function fin() { if (!done) { done = true; v.removeEventListener('seeked', fin); res(); } }
+      v.addEventListener('seeked', fin);
+      setTimeout(fin, 3000);
+      v.currentTime = target;
+    });
+  }
+
+  var renderSeq = 0;
+  /** Deja el compositor exactamente en t. Devuelve cuando todas las capas están listas. */
+  async function renderAt(t, opts) {
+    opts = opts || {};
+    var seq = ++renderSeq;
+    lastT = t;
+    var tracks = visualTracks();
+    var keep = new Set();
+    var jobs = [];
+    var now = Date.now();
+    tracks.forEach(function (track, idx) {
+      var z = 1000 - idx;
+      var c = activeClip(track, t);
+      if (c) {
+        keep.add(c.id);
+        var L = ensureLayer(track, c, z);
+        lastUse.set(c.id, now);
+        var local = (c.in || 0) + (t - c.start);
+        jobs.push(L.ready.then(async function () {
+          if (seq !== renderSeq && !opts.force) return;
+          if (L.kind === 'scene') {
+            var rt = L.el.contentWindow && L.el.contentWindow.__oaRuntime;
+            if (rt) await rt.renderAt(local, { fps: project.fps || 30, skipPaint: true });
+          } else if (L.kind === 'video') {
+            if (playing && mode === 'preview') {
+              if (L.el.paused || Math.abs(L.el.currentTime - local) > 0.25) { L.el.currentTime = local; }
+              L.el.playbackRate = playRate;
+              if (L.el.paused) L.el.play().catch(function () {});
+            } else {
+              L.el.pause();
+              await seekVideo(L.el, local);
+            }
+          }
+          L.el.style.opacity = clipOpacity(c, t);
+          L.el.style.display = 'block';
+          L.el.style.visibility = 'visible';
+        }));
+      }
+      // Precarga de la próxima escena de esta pista.
+      var next = (track.clips || []).filter(function (x) { return x.start > t && x.start - t < 6; }).sort(function (a, b) { return a.start - b.start; })[0];
+      if (next) {
+        keep.add(next.id);
+        var N = ensureLayer(track, next, z); lastUse.set(next.id, now - 1);
+        // En la vista previa, la próxima escena queda maquetada y pintada (invisible): con display:none
+        // Chromium la tiene que pintar de cero al activarla y se ve un cuadro vacío en el corte.
+        if (mode === 'preview' && N.el.style.display !== 'block') { N.el.style.visibility = 'hidden'; N.el.style.display = 'block'; }
+      }
+    });
+    await Promise.all(jobs);
+    if (seq !== renderSeq && !opts.force) return { t: t, stale: true };
+    layers.forEach(function (L, id) {
+      var visible = false;
+      tracks.forEach(function (track) { var c = activeClip(track, t); if (c && c.id === id) visible = true; });
+      if (visible) return;
+      if (L.kind === 'video') try { L.el.pause(); } catch (e) {}
+      if (mode === 'preview' && L.el.style.display === 'block') {
+        // Ocultar la capa saliente recién cuando la entrante ya se pintó (evita el parpadeo en los cortes).
+        requestAnimationFrame(function () { requestAnimationFrame(function () {
+          var still = false;
+          visualTracks().forEach(function (track) { var c = activeClip(track, lastT); if (c && c.id === id) still = true; });
+          if (!still && layers.get(id) === L) L.el.style.visibility = 'hidden';
+        }); });
+      } else L.el.style.display = 'none';
+    });
+    gc(keep);
+    if (mode === 'preview') syncAudio(t);
+    if (!opts.skipPaint) await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });
+    return { t: t };
+  }
+
+  // ── audio de la vista previa ──────────────────────────────────────────────
+  function soloActive() { return (timeline.tracks || []).some(function (tr) { return tr.type === 'audio' && tr.solo; }); }
+  function syncAudio(t) {
+    var solo = soloActive();
+    var want = new Set();
+    (timeline.tracks || []).forEach(function (tr) {
+      if (tr.type !== 'audio' && tr.type !== 'video') return;
+      var audible = !tr.muted && (!solo || tr.solo);
+      (tr.clips || []).forEach(function (c) {
+        if (tr.type === 'video' && isImage(c.src)) return;
+        if (!audible || c.muted) return;
+        var inWin = t >= c.start && t < c.start + c.duration;
+        var soon = c.start > t && c.start - t < 3;
+        if (!inWin && !soon) return;
+        want.add(c.id);
+        var A = audios.get(c.id);
+        if (!A || A.src !== c.src) {
+          if (A) { A.el.pause(); A.el.removeAttribute('src'); }
+          var el = new Audio(); el.preload = 'auto'; el.src = url(c.src);
+          A = { el: el, src: c.src }; audios.set(c.id, A);
+        }
+        A.clip = c; A.track = tr;
+        var local = (c.in || 0) + (t - c.start);
+        var vol = (c.volume == null ? 1 : c.volume) * (tr.volume == null ? 1 : tr.volume);
+        var lt = t - c.start;
+        if (c.fadeIn > 0 && lt < c.fadeIn) vol *= Math.max(0, lt / c.fadeIn);
+        if (c.fadeOut > 0 && c.duration - lt < c.fadeOut) vol *= Math.max(0, (c.duration - lt) / c.fadeOut);
+        A.el.volume = Math.max(0, Math.min(1, vol));
+        if (playing && inWin) {
+          A.el.playbackRate = playRate;
+          if (A.el.paused) { A.el.currentTime = local; A.el.play().catch(function () {}); }
+          else if (Math.abs(A.el.currentTime - local) > 0.2) A.el.currentTime = local;
+        } else {
+          if (!A.el.paused) A.el.pause();
+          if (inWin && Math.abs(A.el.currentTime - local) > 0.05) A.el.currentTime = local;
+        }
+      });
+    });
+    audios.forEach(function (A, id) { if (!want.has(id)) { A.el.pause(); A.el.removeAttribute('src'); audios.delete(id); } });
+  }
+
+  // ── herramientas para la IA y el editor ───────────────────────────────────
+  async function audit(t) {
+    await renderAt(t, { force: true, skipPaint: true });
+    var out = [];
+    var tracks = visualTracks();
+    for (var i = 0; i < tracks.length; i++) {
+      var c = activeClip(tracks[i], t);
+      if (!c) continue;
+      var L = layers.get(c.id);
+      if (!L || L.kind !== 'scene') continue;
+      var rt = L.el.contentWindow && L.el.contentWindow.__oaRuntime;
+      if (!rt) continue;
+      var local = (c.in || 0) + (t - c.start);
+      var r = await rt.audit(local);
+      r.issues.forEach(function (is) { is.clip = c.src; is.t = +t.toFixed(2); });
+      out = out.concat(r.issues);
+    }
+    return out;
+  }
+
+  async function probeScene(src) {
+    var el = document.createElement('iframe');
+    el.className = 'layer';
+    el.style.display = 'block'; el.style.visibility = 'hidden';
+    stage.appendChild(el);
+    var dur = 0, modeName = 'clock';
+    try {
+      await new Promise(function (res) { el.addEventListener('load', res, { once: true }); el.src = url(src); setTimeout(res, 15000); });
+      for (var i = 0; i < 80; i++) {
+        var rt = el.contentWindow && el.contentWindow.__oaRuntime;
+        if (rt) { dur = rt.getDuration(); modeName = rt.mode(); if (dur) break; }
+        await sleep(50);
+      }
+    } finally { el.remove(); }
+    return { duration: dur, mode: modeName };
+  }
+
+  function setMsg(s) { msgEl.textContent = s || ''; }
+
+  async function reload() {
+    layers.forEach(function (L, id) { destroyLayer(id); });
+    audios.forEach(function (A) { A.el.pause(); });
+    audios.clear();
+    await load();
+    await renderAt(lastT, { force: true });
+  }
+
+  window.__oaCompositor = {
+    ready: null,
+    renderAt: renderAt,
+    audit: audit,
+    probeScene: probeScene,
+    reload: reload,
+    getTimeline: function () { return timeline; },
+    getProject: function () { return project; },
+    duration: function () { return timeline ? timeline.duration : 0; }
+  };
+
+  window.addEventListener('message', async function (e) {
+    var m = e.data || {};
+    if (m.target !== 'oa-compositor') return;
+    try {
+      if (m.type === 'seek') {
+        playing = !!m.playing; playRate = m.rate || 1;
+        var r = await renderAt(m.t, { skipPaint: true });
+        if (!r.stale) post({ type: 'rendered', t: m.t });
+      } else if (m.type === 'pause') {
+        playing = false;
+        layers.forEach(function (L) { if (L.kind === 'video') L.el.pause(); });
+        syncAudio(m.t == null ? lastT : m.t);
+      } else if (m.type === 'reload') {
+        await reload(); post({ type: 'reloaded' });
+      } else if (m.type === 'audit') {
+        post({ type: 'audit', id: m.id, issues: await audit(m.t) });
+      } else if (m.type === 'probe') {
+        post({ type: 'probe', id: m.id, result: await probeScene(m.src) });
+      }
+    } catch (err) {
+      post({ type: 'error', message: String(err && err.message || err) });
+    }
+  });
+
+  window.__oaCompositor.ready = load().then(async function () {
+    await renderAt(0, { force: true, skipPaint: true });
+    post({ type: 'ready', duration: timeline.duration, width: project.width, height: project.height });
+    return true;
+  }).catch(function (err) {
+    setMsg(String(err.message || err));
+    post({ type: 'error', message: String(err.message || err) });
+    throw err;
+  });
+})();

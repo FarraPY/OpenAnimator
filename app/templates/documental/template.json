@@ -1,0 +1,16 @@
+{
+  "name": "Documental ilustrado",
+  "description": "Papel y tinta, cámara que viaja por un mundo, elementos que aparecen cuando el narrador los nombra. Ideal para videos educativos y explicativos largos. La IA edita los datos (scenes/guion.js), el motor hace lo visual.",
+  "order": 1,
+  "width": 1920, "height": 1080, "fps": 30, "background": "#f3ecdc",
+  "substitute": ["scenes/guion.js", "brief.md"],
+  "timeline": {
+    "format": "oa-timeline/1", "duration": 30, "notes": [],
+    "tracks": [
+      { "id": "escenas", "name": "Escenas", "type": "scene", "clips": [ { "id": "c-doc", "src": "scenes/documental.html", "start": 0, "duration": 30, "in": 0, "name": "Documental" } ] },
+      { "id": "voz", "name": "Voz", "type": "audio", "clips": [] },
+      { "id": "musica", "name": "Música", "type": "audio", "clips": [], "volume": 0.3 },
+      { "id": "sfx", "name": "SFX", "type": "audio", "clips": [] }
+    ]
+  }
+}
