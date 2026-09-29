@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Asset, call, Clip, fmtTime, Timeline as TL, Track, TrackType } from '../api'
+import { isTouch, projectUrl } from '../platform'
 import { Icon, IconName } from '../ui/icons'
 import { Button, Slider } from '../ui/kit'
 
@@ -15,12 +16,16 @@ type Props = {
   onTrackMenu: (track: Track, x: number, y: number) => void
   onRenameTrack: (track: Track) => void
   onNote: (id: string) => void
+  /** Doble toque en un clip (tablet): abre sus propiedades. */
+  onClipOpen?: (clip: Clip, track: Track) => void
   height: number; setHeight: (h: number) => void
   snapOn: boolean; snapFrames: boolean; followPlayhead: boolean; waveforms: boolean
   fitRef?: React.MutableRefObject<(() => void) | null>
 }
 
-const ROW = 58, RULER = 30
+// En la tablet las pistas son más altas (dedo) y la regla también.
+const TOUCH = isTouch()
+const ROW = TOUCH ? 64 : 58, RULER = TOUCH ? 36 : 30
 export const TYPE_COLOR: Record<string, string> = { scene: 'var(--scene)', video: 'var(--video)', image: 'var(--image)', audio: 'var(--audio)', voice: 'var(--voice)', music: 'var(--music)', sfx: 'var(--sfx)' }
 export const TYPE_ICON: Record<string, IconName> = { scene: 'code', video: 'video', image: 'image', audio: 'music', voice: 'mic', music: 'music', sfx: 'wave' }
 const WAVE: Record<string, string> = { voice: 'rgba(170, 245, 200, .8)', music: 'rgba(150, 232, 244, .78)', sfx: 'rgba(255, 224, 150, .8)', audio: 'rgba(150, 232, 244, .78)', video: 'rgba(255, 214, 170, .55)' }
@@ -95,6 +100,11 @@ export default function Timeline(p: Props) {
   const [snapX, setSnapX] = useState<number | null>(null)
   const [dropRow, setDropRow] = useState<number | null>(null)
   const drag = useRef<any>(null)
+  /** Toque pendiente (tablet): si el dedo no se movió, al soltar selecciona / mueve el cursor. */
+  const tap = useRef<{ kind: 'clip' | 'bg'; clip?: Clip; track?: Track; x: number; y: number } | null>(null)
+  const lastTap = useRef<{ id: string; at: number } | null>(null)
+  const ppsRef = useRef(pps); ppsRef.current = pps
+  const pRef = useRef(p); pRef.current = p
   const total = Math.max(tl.duration * 1.15 + 10, 30)
   const width = total * pps
 
@@ -105,6 +115,37 @@ export default function Timeline(p: Props) {
     el.addEventListener('scroll', upd)
     const ro = new ResizeObserver(upd); ro.observe(el)
     return () => { el.removeEventListener('scroll', upd); ro.disconnect() }
+  }, [])
+
+  // Pellizcar con dos dedos: zoom del timeline alrededor del punto medio.
+  useEffect(() => {
+    const el = scroll.current!
+    let pinch: { d0: number; pps0: number; tAt: number } | null = null
+    const dist = (e: TouchEvent) => Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY)
+    const mid = (e: TouchEvent) => (e.touches[0].clientX + e.touches[1].clientX) / 2
+    const start = (e: TouchEvent) => {
+      if (e.touches.length !== 2) return
+      const r = el.getBoundingClientRect()
+      pinch = { d0: Math.max(10, dist(e)), pps0: ppsRef.current, tAt: (mid(e) - r.left + el.scrollLeft) / ppsRef.current }
+      tap.current = null
+      if (drag.current?.moved) pRef.current.onChange(structuredClone(drag.current.orig), true)
+      drag.current = null
+    }
+    const move = (e: TouchEvent) => {
+      if (!pinch || e.touches.length !== 2) return
+      e.preventDefault()
+      const np = Math.max(2, Math.min(600, pinch.pps0 * (dist(e) / pinch.d0)))
+      const x = mid(e) - el.getBoundingClientRect().left
+      pRef.current.setPps(np)
+      const tAt = pinch.tAt
+      requestAnimationFrame(() => { el.scrollLeft = tAt * np - x })
+    }
+    const end = (e: TouchEvent) => { if (e.touches.length < 2) pinch = null }
+    el.addEventListener('touchstart', start, { passive: true })
+    el.addEventListener('touchmove', move, { passive: false })
+    el.addEventListener('touchend', end)
+    el.addEventListener('touchcancel', end)
+    return () => { el.removeEventListener('touchstart', start); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', end); el.removeEventListener('touchcancel', end) }
   }, [])
 
   // Ajustar a la ventana.
@@ -160,18 +201,25 @@ export default function Timeline(p: Props) {
   const onClipDown = (e: React.PointerEvent, clip: Clip, track: Track, mode: 'move' | 'l' | 'r') => {
     if (e.button !== 0) return
     e.stopPropagation()
+    // Con el dedo, un clip sin seleccionar no se arrastra: tocarlo lo selecciona y deslizar desplaza el timeline.
+    if (e.pointerType === 'touch' && mode === 'move' && !p.selected.includes(clip.id)) {
+      tap.current = { kind: 'clip', clip, track, x: e.clientX, y: e.clientY }
+      return
+    }
     const sel = e.ctrlKey || e.shiftKey ? (p.selected.includes(clip.id) ? p.selected.filter((x) => x !== clip.id) : [...p.selected, clip.id]) : p.selected.includes(clip.id) ? p.selected : [clip.id]
     p.setSelected(sel)
     if (track.locked) return
-    drag.current = { mode, clipId: clip.id, trackId: track.id, x0: e.clientX, orig: structuredClone(tl), clip: { ...clip }, pts: snapPoints(clip.id), moved: false }
+    drag.current = { mode, clipId: clip.id, trackId: track.id, x0: e.clientX, y0: e.clientY, orig: structuredClone(tl), clip: { ...clip }, pts: snapPoints(clip.id), moved: false, touch: e.pointerType === 'touch' }
+    if (e.pointerType === 'touch' && mode === 'move') tap.current = { kind: 'clip', clip, track, x: e.clientX, y: e.clientY }
     ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
   }
   const onMove = (e: React.PointerEvent) => {
+    if (tap.current && Math.hypot(e.clientX - tap.current.x, e.clientY - tap.current.y) > 10) tap.current = null
     const d = drag.current
     if (!d) return
     if (d.mode === 'scrub') { p.onSeek(q(timeAt(e.clientX))); return }
     const dt = (e.clientX - d.x0) / pps
-    if (!d.moved && Math.abs(e.clientX - d.x0) < 3) return
+    if (!d.moved && Math.abs(e.clientX - d.x0) < (d.touch ? 10 : 3) && (!d.touch || Math.abs(e.clientY - d.y0) < 10)) return
     d.moved = true
     const next: TL = structuredClone(d.orig)
     let track = next.tracks.find((x) => x.id === d.trackId)!
@@ -207,7 +255,26 @@ export default function Timeline(p: Props) {
     setSnapX(sx == null ? null : sx * pps)
     p.onChange(next, false)
   }
-  const onUp = () => {
+  const onUp = (e?: React.PointerEvent) => {
+    const d = drag.current
+    drag.current = null
+    setSnapX(null)
+    if (d && d.mode !== 'scrub' && d.moved) { tap.current = null; p.onChange(structuredClone(tl), true); return }
+    const tp = tap.current
+    tap.current = null
+    if (!tp || !e) return
+    if (tp.kind === 'bg') { p.setSelected([]); p.onSeek(q(timeAt(tp.x))); return }
+    if (tp.kind === 'clip' && tp.clip) {
+      const now = Date.now()
+      const dbl = lastTap.current && lastTap.current.id === tp.clip.id && now - lastTap.current.at < 350
+      lastTap.current = { id: tp.clip.id, at: now }
+      p.setSelected([tp.clip.id])
+      if (dbl && tp.track) p.onClipOpen?.(tp.clip, tp.track)
+    }
+  }
+  const onCancel = () => {
+    // El navegador tomó el gesto (desplazamiento): no es un toque.
+    tap.current = null
     const d = drag.current
     drag.current = null
     setSnapX(null)
@@ -242,7 +309,8 @@ export default function Timeline(p: Props) {
           <div className="tl-head-ruler"><span className="caps">Pistas</span><div className="grow" /><span className="t3 tabnum" style={{ fontSize: 11 }}>{tl.tracks.length}</span></div>
           <div ref={heads}>
             {tl.tracks.map((tr) => { const role = trackRole(tr); return (
-              <div key={tr.id} className="tl-head" style={{ ['--tc' as any]: TYPE_COLOR[role] }} onContextMenu={(e) => { e.preventDefault(); p.onTrackMenu(tr, e.clientX, e.clientY) }}>
+              <div key={tr.id} className="tl-head" style={{ ['--tc' as any]: TYPE_COLOR[role] }} onContextMenu={(e) => { e.preventDefault(); p.onTrackMenu(tr, e.clientX, e.clientY) }}
+                onDoubleClick={TOUCH ? () => p.onRenameTrack(tr) : undefined}>
                 <div className="tl-head-stripe" style={{ background: TYPE_COLOR[role] }} />
                 <div className="tl-head-in">
                   <div className="name" onDoubleClick={() => p.onRenameTrack(tr)} data-tip="Doble clic para renombrar">
@@ -274,7 +342,7 @@ export default function Timeline(p: Props) {
             p.setPps(np)
             requestAnimationFrame(() => { el.scrollLeft = tAt * np - (e.clientX - el.getBoundingClientRect().left) })
           }}
-          onPointerMove={onMove} onPointerUp={onUp}
+          onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onCancel}
           onDragOver={onDragOver} onDragLeave={() => setDropRow(null)} onDrop={onDrop}>
           <div style={{ width, position: 'relative', minHeight: '100%' }}>
             <div className="tl-ruler" style={{ width }}
@@ -286,7 +354,11 @@ export default function Timeline(p: Props) {
             <div className="tl-end" style={{ left: tl.duration * pps }} />
             {tl.tracks.map((tr, ri) => (
               <div key={tr.id} className={`tl-track ${dropRow === ri ? 'drop' : ''} ${tr.locked ? 'locked' : ''}`} style={{ ['--tc' as any]: TYPE_COLOR[trackRole(tr)] }}
-                onPointerDown={(e) => { if (e.target === e.currentTarget) { p.setSelected([]); p.onSeek(q(timeAt(e.clientX))) } }}>
+                onPointerDown={(e) => {
+                  if (e.target !== e.currentTarget) return
+                  if (e.pointerType === 'touch') { tap.current = { kind: 'bg', x: e.clientX, y: e.clientY }; return }
+                  p.setSelected([]); p.onSeek(q(timeAt(e.clientX)))
+                }}>
                 {tr.clips.map((c) => {
                   const left = c.start * pps, w = Math.max(3, c.duration * pps)
                   if (left + w < view.left - 200 || left > view.left + view.width + 200) return null
@@ -296,14 +368,21 @@ export default function Timeline(p: Props) {
                   const vx0 = Math.max(0, view.left - left - 50), vx1 = Math.min(w, view.left + view.width - left + 50)
                   return (
                     <div key={c.id} className={`clip ${kind} ${role} ${p.selected.includes(c.id) ? 'sel' : ''} ${c.muted || tr.muted || tr.hidden ? 'muted' : ''}`} style={{ left, width: w }}
-                      data-tip={`${c.src} · ${fmtTime(c.start, true, p.fps)} → ${fmtTime(c.start + c.duration, true, p.fps)} (${c.duration.toFixed(2)} s)`}
+                      data-tip={TOUCH ? undefined : `${c.src} · ${fmtTime(c.start, true, p.fps)} → ${fmtTime(c.start + c.duration, true, p.fps)} (${c.duration.toFixed(2)} s)`}
                       onPointerDown={(e) => onClipDown(e, c, tr, 'move')}
                       onDoubleClick={() => p.onSeek(c.start)}
-                      onContextMenu={(e) => { e.preventDefault(); if (!p.selected.includes(c.id)) p.setSelected([c.id]); p.onClipMenu(c, tr, e.clientX, e.clientY) }}>
-                      {kind === 'image' && <div className="clip-thumb" style={{ backgroundImage: `url("oa://p/${encodeURIComponent(p.projectId)}/${c.src.split('/').map(encodeURIComponent).join('/')}")` }} />}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        // Mantener apretado (tablet) abre el menú, salvo que el clip ya se esté arrastrando.
+                        if (drag.current?.moved) return
+                        drag.current = null; tap.current = null
+                        if (!p.selected.includes(c.id)) p.setSelected([c.id])
+                        p.onClipMenu(c, tr, e.clientX, e.clientY)
+                      }}>
+                      {kind === 'image' && <div className="clip-thumb" style={{ backgroundImage: `url("${projectUrl(p.projectId, c.src)}")` }} />}
                       {(kind === 'scene' || kind === 'video') && <div className="clip-pattern" />}
                       {(kind === 'audio' || kind === 'video') && p.waveforms && vx1 > vx0 && (
-                        <div className="clip-wave"><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={vx0} x1={vx1} height={ROW - 10 - 17} color={WAVE[role] || WAVE.audio} /></div>
+                        <div className="clip-wave"><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={vx0} x1={vx1} height={ROW - 10 - (TOUCH ? 20 : 17)} color={WAVE[role] || WAVE.audio} /></div>
                       )}
                       {c.fadeIn ? <FadeRamp w={c.fadeIn * pps} /> : null}
                       {c.fadeOut ? <FadeRamp w={c.fadeOut * pps} out /> : null}
@@ -316,7 +395,7 @@ export default function Timeline(p: Props) {
                 })}
               </div>
             ))}
-            <div className={`tl-empty-row ${dropRow === tl.tracks.length ? 'tl-track drop' : ''}`} onPointerDown={() => { p.setSelected([]) }} />
+            <div className={`tl-empty-row ${dropRow === tl.tracks.length ? 'tl-track drop' : ''}`} onPointerDown={(e) => { if (e.pointerType === 'touch') tap.current = { kind: 'bg', x: e.clientX, y: e.clientY }; else p.setSelected([]) }} />
             <div className="playhead" style={{ left: t * pps }} />
             {snapX != null && <div className="snapline" style={{ left: snapX }} />}
           </div>

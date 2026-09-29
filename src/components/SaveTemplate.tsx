@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { call } from '../api'
+import { projectUrl } from '../platform'
 import { useApp } from '../App'
 import Modal from './Modal'
 import { Icon } from '../ui/icons'
@@ -26,7 +27,7 @@ export default function SaveTemplate({ projectId, projectName, onClose, onSaved 
     <Modal icon="bookmark" title="Guardar como plantilla" subtitle="Reutilizá lo que te gustó de este proyecto en otros nuevos." onClose={onClose}
       footer={<><div className="grow" /><Button onClick={onClose}>Cancelar</Button><Button variant="primary" icon="bookmark" onClick={save} loading={busy} disabled={!name.trim()}>Guardar plantilla</Button></>}>
       <div className="save-tpl">
-        <div className="save-tpl-img"><Icon name="template" size={26} stroke={1.3} /><img src={`oa://p/${encodeURIComponent(projectId)}/thumbnail.jpg?${stamp}`} alt="" onError={(e) => { e.currentTarget.style.display = 'none' }} /></div>
+        <div className="save-tpl-img"><Icon name="template" size={26} stroke={1.3} /><img src={`${projectUrl(projectId, 'thumbnail.jpg')}?${stamp}`} alt="" onError={(e) => { e.currentTarget.style.display = 'none' }} /></div>
         <div className="fields" style={{ gridTemplateColumns: '1fr', gap: 12, flex: 1 }}>
           <div className="field"><label className="field-label">Nombre</label><TextInput autoFocus value={name} onChange={setName} onEnter={save} /></div>
           <div className="field"><label className="field-label">Descripción</label><TextArea rows={3} value={desc} onChange={setDesc} placeholder="Qué estilo tiene y para qué sirve (la ve Claude cuando la usás)." /></div>

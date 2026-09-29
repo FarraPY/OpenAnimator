@@ -5,6 +5,9 @@ import { useDialogs } from '../components/Dialogs'
 import PluginsSettings from '../components/PluginsSettings'
 import { Icon, IconName, Logo } from '../ui/icons'
 import { Badge, Button, NumberInput, Segmented, Select, Slider, Switch, TextArea, TextInput } from '../ui/kit'
+import { isAndroid } from '../platform'
+import { useBack } from '../android/ui/back'
+import { ANDROID_SECTIONS, AboutSection, ClaudeSection, ExportSection, StorageSection, TabletSection } from '../android/ui/SettingsAndroid'
 
 const SECTIONS: Array<{ id: string; label: string; icon: IconName }> = [
   { id: 'general', label: 'General', icon: 'sliders' },
@@ -51,6 +54,9 @@ function Group({ title, desc, icon, children }: { title: string; desc?: string; 
 export default function SettingsPage({ section: initial, onBack }: { section?: string; onBack: () => void }) {
   const { settings: s, updateSettings: up, info, toast } = useApp()
   const [sec, setSec] = useState(initial || 'general')
+  const android = isAndroid()
+  const sections = android ? ANDROID_SECTIONS : SECTIONS
+  useBack(() => { onBack(); return true }, android)
   const [cache, setCache] = useState<{ export: number; peaks: number; thumbs: number } | null>(null)
   const [ver, setVer] = useState<any>(null)
   const dlg = useDialogs()
@@ -75,7 +81,7 @@ export default function SettingsPage({ section: initial, onBack }: { section?: s
       </div>
       <div className="settings">
         <aside className="side">
-          {SECTIONS.map((x) => <button key={x.id} className={`side-item ${sec === x.id ? 'on' : ''}`} onClick={() => setSec(x.id)}><Icon name={x.icon} />{x.label}</button>)}
+          {sections.map((x) => <button key={x.id} className={`side-item ${sec === x.id ? 'on' : ''}`} onClick={() => setSec(x.id)}><Icon name={x.icon} />{x.label}</button>)}
           <div className="side-foot">
             <Button variant="ghost" size="sm" icon="refresh" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={async () => {
               if (await dlg.confirm({ title: '¿Restablecer todos los ajustes?', message: 'Tus proyectos no se tocan; sólo vuelven los valores por defecto.', ok: 'Restablecer', danger: true })) { await call('settings:reset'); location.reload() }
@@ -83,18 +89,22 @@ export default function SettingsPage({ section: initial, onBack }: { section?: s
           </div>
         </aside>
         <main className="main">
+          {android && <div className="portrait-nav">{sections.map((x) => <button key={x.id} className={`side-item ${sec === x.id ? 'on' : ''}`} onClick={() => setSec(x.id)}><Icon name={x.icon} />{x.label}</button>)}</div>}
           <div className="set-page">
-            <h1 className="page-title" style={{ marginBottom: 22 }}>{SECTIONS.find((x) => x.id === sec)?.label}</h1>
+            <h1 className="page-title" style={{ marginBottom: 22 }}>{sections.find((x) => x.id === sec)?.label}</h1>
 
             {sec === 'general' && <>
               <Group title="Inicio" icon="home">
                 <Row label="Abrir el último proyecto al iniciar" desc="Vuelve directo al editor donde lo dejaste."><Switch checked={s.ui.openLastProject} onChange={(v) => up({ ui: { openLastProject: v } })} /></Row>
-                <Row label="Confirmar antes de borrar proyectos" desc="Los proyectos borrados van a la papelera de Windows."><Switch checked={s.ui.confirmDelete} onChange={(v) => up({ ui: { confirmDelete: v } })} /></Row>
+                <Row label="Confirmar antes de borrar proyectos" desc={android ? 'Los proyectos borrados van a la papelera (Ajustes › Almacenamiento).' : 'Los proyectos borrados van a la papelera de Windows.'}><Switch checked={s.ui.confirmDelete} onChange={(v) => up({ ui: { confirmDelete: v } })} /></Row>
               </Group>
-              <Group title="Datos" icon="drive" desc="OpenAnimator es portable: todo se guarda junto al programa.">
+              {!android && <Group title="Datos" icon="drive" desc="OpenAnimator es portable: todo se guarda junto al programa.">
                 <Row label="Carpeta de datos" desc="Proyectos, ajustes, guías para la IA y cachés."><span className="path" data-tip={info?.dataDir}>{info?.dataDir}</span><Button size="sm" icon="folder-open" onClick={() => call('shell:openPath', info?.dataDir)}>Abrir</Button></Row>
                 <Row label="Carpeta de proyectos"><span className="path" data-tip={info?.projectsDir}>{info?.projectsDir}</span><Button size="sm" icon="folder-open" onClick={() => call('projects:openFolder')}>Abrir</Button></Row>
-              </Group>
+              </Group>}
+              {android && <Group title="Datos" icon="drive" desc="Tus proyectos se guardan dentro de la app. Para pasarlos a la PC (o de la PC a la tablet), compartilos como .zip desde el menú de cada proyecto.">
+                <Row label="Almacenamiento" desc="Espacio usado, papelera y videos exportados."><Button size="sm" icon="drive" onClick={() => setSec('almacenamiento')}>Ver</Button></Row>
+              </Group>}
             </>}
 
             {sec === 'apariencia' && <>
@@ -124,11 +134,14 @@ export default function SettingsPage({ section: initial, onBack }: { section?: s
                 </Row>
                 <Row label="Zonas seguras" desc="Márgenes de acción (93 %) y de títulos (80 %)."><Switch checked={s.editor.safeAreas} onChange={(v) => up({ editor: { safeAreas: v } })} /></Row>
                 <Row label="Guía de tercios"><Switch checked={s.editor.thirds} onChange={(v) => up({ editor: { thirds: v } })} /></Row>
-                <Row label="Mostrar el chat de IA al abrir"><Switch checked={s.editor.showChat} onChange={(v) => up({ editor: { showChat: v } })} /></Row>
+                {!android && <Row label="Mostrar el chat de IA al abrir"><Switch checked={s.editor.showChat} onChange={(v) => up({ editor: { showChat: v } })} /></Row>}
               </Group>
             </>}
 
-            {sec === 'ia' && <>
+            {sec === 'ia' && android && <ClaudeSection />}
+            {sec === 'tablet' && android && <TabletSection />}
+            {sec === 'almacenamiento' && android && <StorageSection />}
+            {sec === 'ia' && !android && <>
               <Group title="Conexión" icon="sparkles" desc="OpenAnimator usa tu Claude Code instalado, con tu propia cuenta.">
                 <Row label="Claude Code" desc={info?.claude ? 'Detectado y listo.' : 'No se encontró. Instalalo desde claude.com/code.'}>
                   {info?.claude ? <Badge tone="ok" icon="check">Conectado</Badge> : <Button size="sm" icon="external" onClick={() => call('shell:openExternal', 'https://claude.com/code')}>Descargar</Button>}
@@ -174,7 +187,8 @@ export default function SettingsPage({ section: initial, onBack }: { section?: s
 
             {sec === 'plugins' && <PluginsSettings />}
 
-            {sec === 'export' && <>
+            {sec === 'export' && android && <ExportSection />}
+            {sec === 'export' && !android && <>
               <Group title="Destino" icon="folder">
                 <Row label="Carpeta por defecto" desc={s.exportPrefs.defaultDir ? undefined : 'Si está vacía, se usa la última carpeta usada.'}>
                   {s.exportPrefs.defaultDir && <span className="path" data-tip={s.exportPrefs.defaultDir}>{s.exportPrefs.defaultDir}</span>}
@@ -220,7 +234,8 @@ export default function SettingsPage({ section: initial, onBack }: { section?: s
               </div>
             )}
 
-            {sec === 'acerca' && <>
+            {sec === 'acerca' && android && <AboutSection />}
+            {sec === 'acerca' && !android && <>
               <div className="set-card" style={{ padding: 22, display: 'flex', gap: 18, alignItems: 'center', marginBottom: 26 }}>
                 <Logo size={56} />
                 <div>

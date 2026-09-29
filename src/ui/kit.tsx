@@ -38,26 +38,48 @@ export function Badge({ tone = 'neutral', icon, children, style, tip }: { tone?:
 export function TooltipLayer() {
   const [tip, setTip] = useState<{ text: string; kbd?: string; x: number; y: number; below: boolean } | null>(null)
   useEffect(() => {
-    let timer = 0, cur: HTMLElement | null = null
+    let timer = 0, cur: HTMLElement | null = null, touchAt = 0, press = 0, pressXY = { x: 0, y: 0 }
     const hide = () => { window.clearTimeout(timer); cur = null; setTip(null) }
+    const show = (el: HTMLElement) => {
+      if (!document.body.contains(el)) return
+      const r = el.getBoundingClientRect()
+      const below = r.top < 60
+      setTip({ text: el.dataset.tip!, kbd: el.dataset.kbd, x: r.left + r.width / 2, y: below ? r.bottom + 8 : r.top - 8, below })
+    }
     const over = (e: MouseEvent) => {
+      // Con el dedo no hay "pasar por encima": el navegador simula el mouse después de cada toque.
+      if (Date.now() - touchAt < 1200) return
       const el = (e.target as HTMLElement)?.closest?.('[data-tip]') as HTMLElement | null
       if (el === cur) return
       hide()
       if (!el || !el.dataset.tip) return
       cur = el
-      timer = window.setTimeout(() => {
-        if (!cur || !document.body.contains(cur)) return
-        const r = cur.getBoundingClientRect()
-        const below = r.top < 60
-        setTip({ text: cur.dataset.tip!, kbd: cur.dataset.kbd, x: r.left + r.width / 2, y: below ? r.bottom + 8 : r.top - 8, below })
-      }, 420)
+      timer = window.setTimeout(() => { if (cur) show(cur) }, 420)
     }
+    // Pantalla táctil: mantener apretado un botón muestra su ayuda (como en Android).
+    const down = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') { if (!(e.target as HTMLElement)?.closest?.('.tooltip')) hide(); return }
+      touchAt = Date.now()
+      hide()
+      window.clearTimeout(press)
+      const el = (e.target as HTMLElement)?.closest?.('button[data-tip], .b[data-tip], .seg-btn[data-tip]') as HTMLElement | null
+      if (!el?.dataset.tip) return
+      pressXY = { x: e.clientX, y: e.clientY }
+      press = window.setTimeout(() => { show(el); window.setTimeout(hide, 1800) }, 480)
+    }
+    const move = (e: PointerEvent) => { if (press && Math.hypot(e.clientX - pressXY.x, e.clientY - pressXY.y) > 10) { window.clearTimeout(press); press = 0 } }
+    const up = () => { window.clearTimeout(press); press = 0 }
     window.addEventListener('mouseover', over)
-    window.addEventListener('mousedown', hide, true)
+    window.addEventListener('pointerdown', down, true)
+    window.addEventListener('pointermove', move, true)
+    window.addEventListener('pointerup', up, true)
+    window.addEventListener('pointercancel', up, true)
     window.addEventListener('wheel', hide, true)
     window.addEventListener('keydown', hide, true)
-    return () => { window.removeEventListener('mouseover', over); window.removeEventListener('mousedown', hide, true); window.removeEventListener('wheel', hide, true); window.removeEventListener('keydown', hide, true) }
+    return () => {
+      window.removeEventListener('mouseover', over); window.removeEventListener('pointerdown', down, true); window.removeEventListener('pointermove', move, true)
+      window.removeEventListener('pointerup', up, true); window.removeEventListener('pointercancel', up, true); window.removeEventListener('wheel', hide, true); window.removeEventListener('keydown', hide, true)
+    }
   }, [])
   const ref = useRef<HTMLDivElement>(null)
   const [dx, setDx] = useState(0)

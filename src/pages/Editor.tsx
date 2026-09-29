@@ -4,8 +4,12 @@ import { useApp } from '../App'
 import Stage, { StageHandle } from '../components/Stage'
 import Timeline, { TYPE_COLOR, TYPE_ICON } from '../components/Timeline'
 import MediaPanel from '../components/MediaPanel'
-import ChatPanel from '../components/ChatPanel'
+import ChatPanel, { ChatStatus } from '../components/ChatPanel'
 import ExportDialog from '../components/ExportDialog'
+import ExportAndroid from '../android/ui/ExportAndroid'
+import ClaudeSide from '../android/ui/ClaudeSide'
+import { useBack } from '../android/ui/back'
+import { isAndroid, isTouch } from '../platform'
 import SaveTemplate from '../components/SaveTemplate'
 import Modal from '../components/Modal'
 import { useDialogs } from '../components/Dialogs'
@@ -51,6 +55,24 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const tlRef = useRef<TL | null>(null); tlRef.current = tl
   const addMenu = useMenu()
   const tlMenuM = useMenu()
+  // ── tablet: pestañas Editor / Claude y paneles que se deslizan ────────────
+  const touch = isTouch(), android = isAndroid()
+  const [tab, setTab] = useState<'edit' | 'claude'>('edit')
+  const [drawer, setDrawer] = useState<'media' | 'props' | null>(null)
+  const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0 })
+  const [seen, setSeen] = useState(0)
+  const [inject, setInject] = useState<{ text: string; n: number } | null>(null)
+  const projMenu = useMenu()
+  const moreMenu = useMenu()
+  useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
+  const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
+  const askClaude = (text: string) => { setTab('claude'); setInject({ text, n: Date.now() }) }
+  useBack(() => {
+    if (full) { setFull(false); return true }
+    if (drawer) { setDrawer(null); return true }
+    if (tab === 'claude') { setTab('edit'); return true }
+    onClose(); return true
+  }, touch)
 
   // ── carga ─────────────────────────────────────────────────────────────────
   const loadTimeline = useCallback(async (id: string) => {
@@ -174,6 +196,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
 
   // ── pantalla completa ─────────────────────────────────────────────────────
   const toggleFull = () => {
+    if (touch) { setFull((f) => !f); return }
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
     else viewerRef.current?.requestFullscreen().catch((e) => toast('No se pudo pasar a pantalla completa: ' + e.message, true))
   }
@@ -192,6 +215,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   // ── teclado ───────────────────────────────────────────────────────────────
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
+      if (touch && tab === 'claude' && !(e.ctrlKey && (e.key === 'j' || e.key === 'J'))) return
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || showExport || noteEdit || menu || saveTpl || document.querySelector('.modal, .menu')) return
       if (full) wake()
@@ -205,7 +229,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
       else if (e.ctrlKey && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); redo() }
       else if (e.ctrlKey && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); dupSel() }
       else if (e.ctrlKey && (e.key === 'e' || e.key === 'E')) { e.preventDefault(); setShowExport(true) }
-      else if (e.ctrlKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); toggleRight('ia') }
+      else if (e.ctrlKey && (e.key === 'j' || e.key === 'J')) { e.preventDefault(); if (touch) setTab((x) => (x === 'claude' ? 'edit' : 'claude')); else toggleRight('ia') }
       else if (e.ctrlKey && e.key === ',') { e.preventDefault(); go({ page: 'settings', from: { page: 'editor', id: projectId } }) }
       else if (e.ctrlKey || e.altKey) return
       else if (e.key === 's' || e.key === 'S') splitAt(tRef.current)
@@ -254,9 +278,9 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const clipMenu = (c: Clip, tr: Track, x: number, y: number) => setMenu({ x, y, items: [
     { label: 'Cortar en el cursor', icon: 'scissors', kbd: 'S', onSelect: () => splitAt(tRef.current) },
     { label: 'Duplicar', icon: 'copy', kbd: 'Ctrl+D', onSelect: dupSel },
-    { label: 'Propiedades', icon: 'sliders', onSelect: () => setRight('inspector') },
+    { label: 'Propiedades', icon: 'sliders', onSelect: () => (touch ? setDrawer('props') : setRight('inspector')) },
     { label: 'Ir al inicio del clip', icon: 'skip-back', onSelect: () => seek(c.start) },
-    { label: 'Mostrar archivo', icon: 'folder-open', onSelect: () => call('project:reveal', projectId, c.src) },
+    android ? { label: 'Compartir archivo', icon: 'share', onSelect: () => call('assets:share', projectId, c.src) } : { label: 'Mostrar archivo', icon: 'folder-open', onSelect: () => call('project:reveal', projectId, c.src) },
     { sep: true },
     { label: 'Borrar', icon: 'trash', kbd: 'Supr', danger: true, onSelect: () => delSel(false) },
     { label: 'Borrar y cerrar hueco', icon: 'trash', kbd: 'Shift+Supr', danger: true, onSelect: () => delSel(true) },
@@ -289,8 +313,55 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
 
   const selClip = sel.length === 1 ? findClip(tl, sel[0]) : null
   const cols = `272px minmax(0,1fr) ${right ? '392px' : '0px'}`
-  return (
-    <>
+  const inspector = selClip
+    ? <Inspector clip={selClip.c} track={selClip.tr} fps={fps} projectId={projectId} onSeek={seek} onChange={(patch) => mutate((d) => Object.assign(findClip(d, selClip.c.id)!.c, patch))} />
+    : <div className="pane-body" style={{ display: 'grid', placeItems: 'center' }}><Empty compact icon="cursor" title={sel.length > 1 ? `${sel.length} clips seleccionados` : 'Nada seleccionado'} desc={touch ? 'Tocá un clip del timeline para ver y editar sus propiedades.' : 'Seleccioná un clip del timeline para ver y editar sus propiedades.'} /></div>
+
+  // ── tablet: barra superior con pestañas Editor / Claude ───────────────────
+  const shareFrame = () => call('frames:share', projectId, tlId, t).catch((e) => toast(e.message, true))
+  const shareProject = () => { toast('Preparando el proyecto…', 'info'); call('projects:exportZip', projectId, { action: 'share' }).catch((e) => toast(e.message, true)) }
+  const projItems: MenuItem[] = [
+    { header: `Timelines · ${project.timelines.length}` },
+    ...project.timelines.map((x) => ({ label: x.name, icon: 'layers', checked: x.id === tlId, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
+    ...tlItems,
+    { sep: true },
+    { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
+  ]
+  const moreItems: MenuItem[] = [
+    { label: 'Auditar layout', icon: 'scan', desc: 'Textos superpuestos o fuera de cuadro', onSelect: runAudit },
+    { label: 'Nota para la IA en el cursor', icon: 'note', onSelect: () => setNoteEdit({ t, text: '' }) },
+    { sep: true },
+    { label: 'Compartir fotograma', icon: 'share', onSelect: shareFrame },
+    { label: 'Copiar fotograma', icon: 'copy', onSelect: copyFrame },
+    { label: 'Recargar vista previa', icon: 'refresh', onSelect: () => setReloadKey((k) => k + 1) },
+    { sep: true },
+    { label: 'Compartir proyecto (.zip)', icon: 'upload', desc: 'Para abrirlo en la PC o en otra tablet', onSelect: shareProject },
+    { label: 'Guardar como plantilla…', icon: 'bookmark', onSelect: () => setSaveTpl(true) },
+    { sep: true },
+    { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
+  ]
+  const claudeBadge = tab === 'claude' ? null : chat.waiting ? <span className="tb-tab-dot wait" /> : unread ? <span className="tb-tab-count">{unread}</span> : chat.busy ? <span className="tb-tab-dot busy" /> : null
+  const titlebar = touch ? (
+    <div className="titlebar tb-touch">
+      <Button variant="ghost" icon="arrow-left" tip="Proyectos" onClick={onClose} />
+      <button className="tb-project" onClick={projMenu.open}>
+        <Logo size={28} />
+        <span className="tb-project-txt"><span className="tb-project-name ellipsis">{project.name}</span><span className="tb-project-sub">{curName} · {project.width}×{project.height} · {project.fps} fps</span></span>
+        <Icon name="chevron-down" size={16} className="t3" />
+      </button>
+      {projMenu.render(projItems, { width: 320 })}
+      <div className="tb-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === 'edit'} className={`tb-tab ${tab === 'edit' ? 'on' : ''}`} onClick={() => setTab('edit')}><Icon name="film" size={18} /><span className="tb-tab-label">Editor</span></button>
+        <button type="button" role="tab" aria-selected={tab === 'claude'} className={`tb-tab claude ${tab === 'claude' ? 'on' : ''}`} onClick={() => setTab('claude')}><Icon name="sparkles" size={18} /><span className="tb-tab-label">Claude</span>{claudeBadge}</button>
+      </div>
+      <div className="grow" />
+      <Button variant="ghost" icon="undo" tip="Deshacer" onClick={undo} disabled={!hist.current.past.length} />
+      <Button variant="ghost" icon="redo" tip="Rehacer" onClick={redo} disabled={!hist.current.future.length} />
+      <Button variant="ghost" icon="more" tip="Más opciones" active={moreMenu.isOpen} onClick={moreMenu.open} />
+      {moreMenu.render(moreItems, { align: 'end', width: 330 })}
+      <Button variant="primary" icon="export" onClick={() => setShowExport(true)}>Exportar</Button>
+    </div>
+  ) : (
       <div className="titlebar">
         <Button variant="ghost" size="sm" icon="arrow-left" tip="Proyectos" onClick={onClose} />
         <Logo size={20} />
@@ -316,13 +387,26 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
         <Button size="sm" variant="ghost" icon="sparkles" active={right === 'ia'} tip="Claude" kbd="Ctrl+J" onClick={() => toggleRight('ia')}>IA</Button>
         <Button size="sm" variant="primary" icon="export" kbd="Ctrl+E" tip="Exportar video" onClick={() => setShowExport(true)}>Exportar</Button>
       </div>
+  )
 
+  const body = (
       <div className="editor" onClick={() => menu && setMenu(null)}>
-        <div className="ed-work" style={{ gridTemplateColumns: cols }}>
-          <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={(a) => addAsset(a, null, tRef.current)} />
+        <div className={`ed-work ${touch ? 'touch' : ''}`} style={touch ? undefined : { gridTemplateColumns: cols }}>
+          {!touch && <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={(a) => addAsset(a, null, tRef.current)} />}
 
-          <div className={`viewer ${full ? 'is-full' : ''} ${full && fsIdle && playing ? 'idle' : ''}`} ref={viewerRef} onMouseMove={full ? wake : undefined}>
+          <div className={`viewer ${full ? 'is-full' : ''} ${full && fsIdle && playing ? 'idle' : ''}`} ref={viewerRef} onMouseMove={full ? wake : undefined} onPointerDown={full ? wake : undefined}>
             <div className="viewer-bar">
+              {touch ? <>
+                <Button size="sm" variant="ghost" icon="folder" active={drawer === 'media'} tip="Medios del proyecto" onClick={() => setDrawer(drawer === 'media' ? null : 'media')}><span className="vb-btn-label">Medios</span></Button>
+                <Button size="sm" variant="ghost" icon="sliders" active={drawer === 'props'} disabled={!sel.length && drawer !== 'props'} tip="Propiedades del clip" onClick={() => setDrawer(drawer === 'props' ? null : 'props')}><span className="vb-btn-label">Propiedades</span></Button>
+                <div className="grow" />
+                <span className="t3 tabnum" style={{ fontSize: 13, padding: '0 6px' }}>{Math.round(scale * 100)} %</span>
+                <Divider vertical />
+                <Button size="sm" variant="ghost" icon="safe-area" active={ed!.safeAreas} tip="Zonas seguras" onClick={() => updateSettings({ editor: { safeAreas: !ed!.safeAreas } })} />
+                <Button size="sm" variant="ghost" icon="thirds" active={ed!.thirds} tip="Guía de tercios" onClick={() => updateSettings({ editor: { thirds: !ed!.thirds } })} />
+                <Button size="sm" variant="ghost" icon="note" tip="Nota para la IA en este instante" onClick={() => setNoteEdit({ t, text: '' })} />
+                <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" onClick={toggleFull} />
+              </> : <>
               <span className="caps" style={{ padding: '0 6px' }}>Visor</span>
               <span className="t3 tabnum" style={{ fontSize: 11.5 }}>{Math.round(scale * 100)} %</span>
               <div className="grow" />
@@ -335,6 +419,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
               <Button size="sm" variant="ghost" icon="copy" tip="Copiar fotograma" onClick={copyFrame} />
               <Button size="sm" variant="ghost" icon="refresh" tip="Recargar vista previa" onClick={() => setReloadKey((k) => k + 1)} />
               <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" kbd="F" onClick={toggleFull} />
+              </>}
             </div>
             <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
               onError={(m) => toast(m, true)} bg={full ? 'black' : ed!.stageBg} safeAreas={!full && ed!.safeAreas} thirds={!full && ed!.thirds} onScale={setScale} pad={full ? 0 : 20} />
@@ -374,6 +459,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
             </div>
           </div>
 
+          {!touch && (
           <div className="pane pane-right" style={{ display: right ? 'flex' : 'none' }}>
             <div className="pane-head" style={{ padding: '0 6px 0 4px', height: 40 }}>
               <Tabs size="sm" value={right || 'ia'} onChange={(v) => setRight(v)} tabs={[{ value: 'ia', label: 'Claude', icon: 'sparkles' }, { value: 'inspector', label: 'Propiedades', icon: 'sliders', count: sel.length || undefined }]} />
@@ -385,6 +471,17 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
               ? <Inspector clip={selClip.c} track={selClip.tr} fps={fps} projectId={projectId} onSeek={seek} onChange={(patch) => mutate((d) => Object.assign(findClip(d, selClip.c.id)!.c, patch))} />
               : <div className="pane-body" style={{ display: 'grid', placeItems: 'center' }}><Empty compact icon="cursor" title={sel.length > 1 ? `${sel.length} clips seleccionados` : 'Nada seleccionado'} desc="Seleccioná un clip del timeline para ver y editar sus propiedades." /></div>)}
           </div>
+          )}
+          {touch && <>
+            <div className={`drawer left ${drawer === 'media' ? 'open' : ''}`}>
+              <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onClose={() => setDrawer(null)}
+                onAdd={(a) => { addAsset(a, null, tRef.current); toast(`«${a.name}» agregado en ${fmtTime(tRef.current, true, fps)}`, 'info') }} />
+            </div>
+            <div className={`drawer right ${drawer === 'props' ? 'open' : ''}`}>
+              <div className="drawer-head"><div className="drawer-title"><Icon name="sliders" size={18} />Propiedades</div><div className="grow" /><Button variant="ghost" icon="x" tip="Cerrar" onClick={() => setDrawer(null)} /></div>
+              {inspector}
+            </div>
+          </>}
         </div>
 
         <div className="tl-wrap">
@@ -415,15 +512,35 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
           <Timeline projectId={projectId} tl={tl} t={t} fps={fps} playing={playing} pps={pps} setPps={setPps} selected={sel} setSelected={setSel}
             onSeek={(x) => { setPlaying(false); seek(x) }} onChange={change} onDropAsset={addAsset}
             onClipMenu={clipMenu} onTrackMenu={trackMenu} onRenameTrack={renameTrack}
+            onClipOpen={touch ? () => setDrawer('props') : undefined}
             onNote={(id) => { const n = tl.notes?.find((z) => z.id === id); if (n) { seek(n.t); setNoteEdit({ ...n }) } }}
             height={tlH} setHeight={setTlH} fitRef={fitRef}
             snapOn={ed!.snap} snapFrames={ed!.snapFrames} followPlayhead={ed!.followPlayhead} waveforms={ed!.waveforms} />
         </div>
       </div>
+  )
+
+  return (
+    <>
+      {titlebar}
+      {touch ? (
+        <div className="editor-shell">
+          {body}
+          <div className="claude-view" style={{ display: tab === 'claude' ? 'flex' : 'none' }}>
+            <div className="claude-main">
+              <ChatPanel projectId={projectId} visible={tab === 'claude'} context={() => ({ timeline: tlId, t: tRef.current })} onStatus={setChat} inject={inject} />
+            </div>
+            <ClaudeSide projectId={projectId} tlId={tlId} tl={tl} t={t} fps={fps} visible={tab === 'claude'} busy={chat.busy} onGoEditor={() => setTab('edit')} onAsk={askClaude} />
+          </div>
+          {tab === 'edit' && chat.waiting && <div className="wait-banner"><Icon name="shield" size={18} /><span>Claude necesita tu permiso para seguir</span><Button size="sm" variant="primary" onClick={() => setTab('claude')}>Ver</Button></div>}
+        </div>
+      ) : body}
 
       {menu && <Menu anchor={{ x: menu.x, y: menu.y }} items={menu.items} onClose={() => setMenu(null)} />}
       {saveTpl && <SaveTemplate projectId={projectId} projectName={project.name} onClose={() => setSaveTpl(false)} />}
-      {showExport && <ExportDialog project={project} currentTl={tlId} range={null} onClose={() => setShowExport(false)} />}
+      {showExport && (android
+        ? <ExportAndroid project={project} currentTl={tlId} onClose={() => setShowExport(false)} />
+        : <ExportDialog project={project} currentTl={tlId} range={null} onClose={() => setShowExport(false)} />)}
       {noteEdit && <Modal icon="note" title="Nota para la IA" subtitle={`En ${fmtTime(noteEdit.t, true, fps)} · Claude la ve con oa_proyecto`} onClose={() => setNoteEdit(null)}
         footer={<>
           {noteEdit.id && <Button variant="danger" icon="trash" onClick={() => { mutate((d) => { d.notes = (d.notes || []).filter((z) => z.id !== noteEdit.id) }); setNoteEdit(null) }}>Borrar</Button>}
@@ -434,7 +551,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
         <div className="t3" style={{ fontSize: 12, marginTop: 8 }}>Después pedile en el chat «resolvé mis notas».</div>
       </Modal>}
       {audit?.res && <Modal icon="scan" title="Auditoría de layout" subtitle={`${audit.res.issues.length} incidencia(s) · revisado cada ${audit.res.step} s`} onClose={() => setAudit(null)}
-        footer={<><div className="grow" />{audit.res.issues.length > 0 && <Button icon="sparkles" onClick={() => { setAudit(null); setRight('ia'); toast('Pedile a Claude: «Hacé una auditoría de layout y corregí todo»', 'info') }}>Arreglar con Claude</Button>}<Button variant="primary" onClick={() => setAudit(null)}>Listo</Button></>}>
+        footer={<><div className="grow" />{audit.res.issues.length > 0 && <Button icon="sparkles" onClick={() => { setAudit(null); if (touch) askClaude('Hacé una auditoría de layout y corregí todo lo que se superponga o salga de cuadro.'); else { setRight('ia'); toast('Pedile a Claude: «Hacé una auditoría de layout y corregí todo»', 'info') } }}>Arreglar con Claude</Button>}<Button variant="primary" onClick={() => setAudit(null)}>Listo</Button></>}>
         {!audit.res.issues.length
           ? <Empty compact icon="check-circle" title="Todo en orden" desc="No hay textos superpuestos ni fuera de cuadro." />
           : <div className="col" style={{ gap: 2 }}>{audit.res.issues.map((i: any, k: number) => (
@@ -459,7 +576,9 @@ function Inspector({ clip, track, fps, projectId, onChange, onSeek }: { clip: Cl
           <div className="ellipsis" style={{ fontWeight: 600 }}>{clip.name || clip.src.split('/').pop()}</div>
           <div className="t3 ellipsis mono" style={{ fontSize: 11 }}>{clip.src}</div>
         </div>
-        <Button size="sm" variant="ghost" icon="folder-open" tip="Mostrar archivo" onClick={() => call('project:reveal', projectId, clip.src)} />
+        {isAndroid()
+          ? <Button size="sm" variant="ghost" icon="share" tip="Compartir archivo" onClick={() => call('assets:share', projectId, clip.src)} />
+          : <Button size="sm" variant="ghost" icon="folder-open" tip="Mostrar archivo" onClick={() => call('project:reveal', projectId, clip.src)} />}
       </div>
       <div className="insp-sec">
         <div className="insp-sec-title caps">Tiempo</div>

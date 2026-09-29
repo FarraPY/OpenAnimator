@@ -31,3 +31,6 @@ api.json
 *.aac
 
 *.log
+
+# app de Android: compilación local (APK, interfaz armada)
+android/build/

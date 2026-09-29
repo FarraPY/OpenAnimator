@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { call, on, fmtTime, ProjectSummary, Template } from '../api'
+import { isAndroid, isTouch, userTemplateUrl } from '../platform'
 import { useApp } from '../App'
 import Modal from '../components/Modal'
 import { useDialogs } from '../components/Dialogs'
@@ -30,6 +31,7 @@ function ago(iso?: string) {
 
 export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const { toast, info, settings, updateSettings, go } = useApp()
+  const android = isAndroid(), touch = isTouch()
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null)
   const [templates, setTemplates] = useState<Template[]>([])
   const [section, setSection] = useState<'projects' | 'templates'>('projects')
@@ -46,7 +48,7 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const refresh = () => call<ProjectSummary[]>('projects:list').then(setProjects).catch((e) => toast(e.message, true))
   const loadTemplates = () => call<Template[]>('projects:templates').then(setTemplates).catch(() => {})
   const delTpl = async (t: Template) => {
-    if (!(await dlg.confirm({ title: `¿Borrar la plantilla «${t.name}»?`, message: 'Va a la papelera de Windows. Los proyectos creados con ella no se tocan.', ok: 'Borrar', danger: true }))) return
+    if (!(await dlg.confirm({ title: `¿Borrar la plantilla «${t.name}»?`, message: android ? 'Se borra de la tablet. Los proyectos creados con ella no se tocan.' : 'Va a la papelera de Windows. Los proyectos creados con ella no se tocan.', ok: 'Borrar', danger: true }))) return
     try { await call('templates:delete', t.id); loadTemplates(); toast('Plantilla borrada') } catch (e: any) { toast(e.message, true) }
   }
   const renTpl = async (t: Template) => {
@@ -69,8 +71,19 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
       if (p) { toast(`Importado «${p.name}» · ${p.timelines.length} timeline(s)`); refresh() }
     } catch (e: any) { toast(e.message, true) } finally { setImporting(false) }
   }
+  const importZip = async () => {
+    setImporting(true)
+    try {
+      const p = await call('projects:importZip')
+      if (p) { toast(`Importado «${p.name}»`); refresh(); onOpen(p.id) }
+    } catch (e: any) { toast(e.message, true) } finally { setImporting(false) }
+  }
+  const shareZip = async (p: ProjectSummary, action: 'share' | 'save') => {
+    toast('Preparando el proyecto…', 'info')
+    try { const r = await call('projects:exportZip', p.id, { action }); if (action === 'save' && r?.saved) toast('Proyecto guardado') } catch (e: any) { toast(e.message, true) }
+  }
   const del = async (p: ProjectSummary) => {
-    if (settings?.ui.confirmDelete !== false && !(await dlg.confirm({ title: `¿Mover «${p.name}» a la papelera?`, message: 'Podés recuperarlo desde la papelera de Windows.', ok: 'Mover a la papelera', danger: true }))) return
+    if (settings?.ui.confirmDelete !== false && !(await dlg.confirm({ title: `¿Mover «${p.name}» a la papelera?`, message: android ? 'Podés recuperarlo durante 30 días desde Ajustes › Almacenamiento.' : 'Podés recuperarlo desde la papelera de Windows.', ok: 'Mover a la papelera', danger: true }))) return
     try { await call('projects:delete', p.id); refresh(); toast('Proyecto movido a la papelera') } catch (e: any) { toast(e.message, true) }
   }
   const dup = async (p: ProjectSummary) => { try { await call('projects:duplicate', p.id); refresh(); toast('Proyecto duplicado') } catch (e: any) { toast(e.message, true) } }
@@ -93,7 +106,7 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
     <>
       <div className="titlebar">
         <div className="brand"><Logo size={22} />OpenAnimator</div>
-        {info && <Badge tone="neutral">{info.portable ? 'Portable' : 'Desarrollo'} · v{info.version}</Badge>}
+        {info && <Badge tone="neutral">{android ? 'Android' : info.portable ? 'Portable' : 'Desarrollo'} · v{info.version}</Badge>}
         <div className="grow" />
         <Button variant="ghost" size="sm" icon="settings" tip="Ajustes" kbd="Ctrl+," onClick={() => go({ page: 'settings', from: { page: 'home' } })} />
       </div>
@@ -103,27 +116,47 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
           <button className={`side-item ${section === 'projects' ? 'on' : ''}`} onClick={() => setSection('projects')}><Icon name="grid" />Proyectos<span className="count">{projects?.length ?? ''}</span></button>
           <button className={`side-item ${section === 'templates' ? 'on' : ''}`} onClick={() => setSection('templates')}><Icon name="template" />Plantillas<span className="count">{templates.length || ''}</span></button>
           <div className="side-label caps">Acciones</div>
-          <button className="side-item" onClick={() => setAnalyzer(true)}><Icon name="wand" />Plantilla desde un video</button>
-          <button className="side-item" onClick={importCoa} disabled={importing}><Icon name="import" />{importing ? 'Importando…' : 'Importar de CoAnimator'}</button>
-          <button className="side-item" onClick={() => call('projects:openFolder')}><Icon name="folder-open" />Carpeta de proyectos</button>
+          {android ? <>
+            <button className="side-item" onClick={importZip} disabled={importing}><Icon name="import" />{importing ? 'Importando…' : 'Importar proyecto (.zip)'}</button>
+            <button className="side-item" onClick={() => go({ page: 'settings', section: 'almacenamiento', from: { page: 'home' } })}><Icon name="trash" />Papelera</button>
+          </> : <>
+            <button className="side-item" onClick={() => setAnalyzer(true)}><Icon name="wand" />Plantilla desde un video</button>
+            <button className="side-item" onClick={importCoa} disabled={importing}><Icon name="import" />{importing ? 'Importando…' : 'Importar de CoAnimator'}</button>
+            <button className="side-item" onClick={() => call('projects:openFolder')}><Icon name="folder-open" />Carpeta de proyectos</button>
+          </>}
           <button className="side-item" onClick={() => go({ page: 'settings', from: { page: 'home' } })}><Icon name="settings" />Ajustes</button>
           <div className="side-foot">
             <div className="sys">
               <div className="caps" style={{ marginBottom: 2 }}>Sistema</div>
+              {android ? <>
+                <SysRow icon="tablet" label={info?.gpu || 'Tablet'} state={info ? 'ok' : undefined} tip={(info as any)?.soc || 'Equipo'} />
+                <SysRow icon="zap" label={info ? `${(info as any).codecs?.hevc ? 'H.264 · HEVC' : 'H.264'} por hardware` : 'Codificadores…'} state={info ? ((info as any).codecs?.avc !== false ? 'ok' : 'warn') : undefined} tip="Codificación de video" />
+                <button className="sys-row sys-btn" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'home' } })}>
+                  <Icon name="sparkles" size={14} /><span className="ellipsis">{info ? (info.claude ? 'Claude conectado (API)' : 'Falta la clave de Claude') : 'Claude…'}</span>{info && <span className={`sys-dot ${info.claude ? 'ok' : 'err'}`} />}
+                </button>
+              </> : <>
               <SysRow icon="gpu" label={info?.gpu || 'Detectando GPU…'} state={info ? (info.gpu ? 'ok' : 'warn') : undefined} tip="Tarjeta gráfica" />
               <SysRow icon="zap" label={info ? (nvencList.length ? `NVENC ${nvencList.join(' · ')}` : 'Sin NVENC (se usa CPU)') : 'Codificadores…'} state={info ? (nvencList.length ? 'ok' : 'warn') : undefined} tip="Codificación por hardware" />
               <SysRow icon="sparkles" label={info ? (info.claude ? 'Claude Code conectado' : 'Claude Code no instalado') : 'Claude Code…'} state={info ? (info.claude ? 'ok' : 'err') : undefined} tip={info?.claude || 'Instalalo desde claude.com/code'} />
+              </>}
             </div>
           </div>
         </aside>
 
         <main className="main">
+          {touch && <div className="portrait-nav">
+            <Button variant="primary" icon="plus" onClick={() => setNewTpl('')}>Nuevo proyecto</Button>
+            <button className={`side-item ${section === 'projects' ? 'on' : ''}`} onClick={() => setSection('projects')}><Icon name="grid" />Proyectos</button>
+            <button className={`side-item ${section === 'templates' ? 'on' : ''}`} onClick={() => setSection('templates')}><Icon name="template" />Plantillas</button>
+            {android && <button className="side-item" onClick={importZip}><Icon name="import" />Importar .zip</button>}
+            <button className="side-item" onClick={() => go({ page: 'settings', from: { page: 'home' } })}><Icon name="settings" />Ajustes</button>
+          </div>}
           {section === 'projects' ? (
             <div className="page">
               {projects && projects.length > 0 && (
                 <div className="hero">
                   <h2>Hacé videos animados con Claude</h2>
-                  <p>Escenas HTML/SVG deterministas, dirigidas por IA, verificadas fotograma a fotograma y exportadas con la GPU{info?.gpu ? ` (${info.gpu.replace(/^NVIDIA /, '')})` : ''}.</p>
+                  <p>{android ? 'Escenas HTML/SVG deterministas, dirigidas por IA, verificadas fotograma a fotograma y exportadas con el codificador de hardware de tu tablet.' : <>Escenas HTML/SVG deterministas, dirigidas por IA, verificadas fotograma a fotograma y exportadas con la GPU{info?.gpu ? ` (${info.gpu.replace(/^NVIDIA /, '')})` : ''}.</>}</p>
                   <div className="hero-actions">
                     <Button variant="primary" icon="plus" onClick={() => setNewTpl('')}>Nuevo proyecto</Button>
                     <Button icon="template" onClick={() => setSection('templates')}>Ver plantillas</Button>
@@ -138,8 +171,8 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
               <div className="section-h">
                 <h3>Proyectos</h3>
                 <div className="grow" />
-                <TextInput icon="search" size="sm" width={230} placeholder="Buscar proyectos…" value={q} onChange={setQ} clearable />
-                <Select size="sm" value={sort} icon="sort" width={150} onChange={(v) => updateSettings({ ui: { homeSort: v } })}
+                <TextInput icon="search" size="sm" width={touch ? 260 : 230} placeholder="Buscar proyectos…" value={q} onChange={setQ} clearable />
+                <Select size="sm" value={sort} icon="sort" width={touch ? 190 : 150} onChange={(v) => updateSettings({ ui: { homeSort: v } })}
                   options={[{ value: 'recent', label: 'Más recientes' }, { value: 'name', label: 'Nombre' }, { value: 'duration', label: 'Duración' }]} />
                 <Segmented size="sm" value={view} onChange={(v) => updateSettings({ ui: { homeView: v } })}
                   options={[{ value: 'grid', icon: 'grid', tip: 'Cuadrícula' }, { value: 'list', icon: 'list', tip: 'Lista' }]} />
@@ -147,19 +180,24 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
 
               {projects && !list.length && (q
                 ? <Empty icon="search" title="Sin resultados" desc={`Ningún proyecto coincide con «${q}».`} />
-                : <Empty icon="film" title="Todavía no hay proyectos" desc="Empezá desde una plantilla o traé tus proyectos de CoAnimator. Claude puede armar el video a partir de un guion.">
+                : android
+                  ? <Empty icon="film" title="Todavía no hay proyectos" desc="Empezá desde una plantilla o importá un proyecto (.zip) que hayas exportado desde OpenAnimator en la PC. Claude puede armar el video a partir de un guion.">
+                    <Button variant="primary" icon="plus" onClick={() => setNewTpl('')}>Crear proyecto</Button>
+                    <Button icon="import" onClick={importZip} loading={importing}>Importar proyecto (.zip)</Button>
+                  </Empty>
+                  : <Empty icon="film" title="Todavía no hay proyectos" desc="Empezá desde una plantilla o traé tus proyectos de CoAnimator. Claude puede armar el video a partir de un guion.">
                   <Button variant="primary" icon="plus" onClick={() => setNewTpl('')}>Crear proyecto</Button>
                   <Button icon="import" onClick={importCoa} loading={importing}>Importar de CoAnimator</Button>
                 </Empty>)}
 
               {view === 'grid' ? (
                 <div className="pgrid">
-                  {list.map((p) => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} />)}
+                  {list.map((p) => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} />)}
                 </div>
               ) : list.length > 0 && (
                 <div className="ptable">
                   <div className="prow head caps"><span /><span>Nombre</span><span>Formato</span><span>Timelines</span><span>Duración</span><span>Modificado</span><span /></div>
-                  {list.map((p) => <ProjectRow key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} />)}
+                  {list.map((p) => <ProjectRow key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} />)}
                 </div>
               )}
             </div>
@@ -168,19 +206,19 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
               <div className="page-head">
                 <div className="grow">
                   <h1 className="page-title">Plantillas</h1>
-                  <div className="page-desc">Empezá un proyecto con un estilo ya resuelto: las incluidas, las que guardaste de tus proyectos o las que creaste analizando un video.</div>
+                  <div className="page-desc">{android ? 'Empezá un proyecto con un estilo ya resuelto: las incluidas o las que guardaste de tus proyectos.' : 'Empezá un proyecto con un estilo ya resuelto: las incluidas, las que guardaste de tus proyectos o las que creaste analizando un video.'}</div>
                 </div>
-                <Button icon="folder-open" onClick={() => call('templates:openFolder')}>Carpeta</Button>
-                <Button variant="primary" icon="wand" onClick={() => setAnalyzer(true)}>Crear desde un video</Button>
+                {!android && <Button icon="folder-open" onClick={() => call('templates:openFolder')}>Carpeta</Button>}
+                {!android && <Button variant="primary" icon="wand" onClick={() => setAnalyzer(true)}>Crear desde un video</Button>}
               </div>
-              <div className="tpl-banner">
+              {!android && <div className="tpl-banner">
                 <div className="tpl-banner-ico"><Icon name="youtube" size={26} /></div>
                 <div className="grow">
                   <h3>Copiá el estilo de cualquier video</h3>
                   <p>Pegá un enlace de YouTube o elegí un archivo: Claude analiza colores, tipografía, animaciones, transiciones, formas, objetos, ritmo y narración, arma una escena de muestra y lo guarda como plantilla para tus próximos videos.</p>
                 </div>
                 <Button variant="primary" icon="sparkles" onClick={() => setAnalyzer(true)}>Analizar un video</Button>
-              </div>
+              </div>}
               {templates.some((t) => t.user) && <>
                 <div className="section-h"><h3>Mis plantillas</h3><span className="count-pill">{templates.filter((t) => t.user).length}</span></div>
                 <div className="tgrid" style={{ marginBottom: 30 }}>
@@ -216,15 +254,19 @@ function SysRow({ icon, label, state, tip }: { icon: IconName; label: string; st
   return <div className="sys-row" data-tip={tip}><Icon name={icon} size={14} /><span className="ellipsis">{label}</span>{state && <span className={`sys-dot ${state}`} />}</div>
 }
 
-type CardProps = { p: ProjectSummary; onOpen: () => void; onRename: () => void; onDup: () => void; onDel: () => void; onTemplate: () => void }
-function useProjectMenu({ p, onOpen, onRename, onDup, onDel, onTemplate }: CardProps) {
+type CardProps = { p: ProjectSummary; onOpen: () => void; onRename: () => void; onDup: () => void; onDel: () => void; onTemplate: () => void; onShare: (action: 'share' | 'save') => void }
+function useProjectMenu({ p, onOpen, onRename, onDup, onDel, onTemplate, onShare }: CardProps) {
   const m = useMenu()
   const items = [
     { label: 'Abrir', icon: 'arrow-right' as IconName, onSelect: onOpen },
     { label: 'Renombrar…', icon: 'edit' as IconName, onSelect: onRename },
     { label: 'Duplicar', icon: 'copy' as IconName, onSelect: onDup },
     { label: 'Guardar como plantilla…', icon: 'bookmark' as IconName, onSelect: onTemplate },
-    { label: 'Mostrar en carpeta', icon: 'folder-open' as IconName, onSelect: () => call('projects:openFolder', p.id) },
+    ...(isAndroid() ? [
+      { sep: true as const },
+      { label: 'Compartir (.zip)', icon: 'share' as IconName, desc: 'Para abrirlo en la PC o en otra tablet', onSelect: () => onShare('share') },
+      { label: 'Guardar en Archivos (.zip)', icon: 'download' as IconName, onSelect: () => onShare('save') },
+    ] : [{ label: 'Mostrar en carpeta', icon: 'folder-open' as IconName, onSelect: () => call('projects:openFolder', p.id) }]),
     { sep: true as const },
     { label: 'Mover a la papelera', icon: 'trash' as IconName, danger: true, onSelect: onDel },
   ]
@@ -364,7 +406,7 @@ function TemplateDetail({ t, onClose, onUse }: { t: Template; onClose: () => voi
           <div className="an-left">
             {t.preview && <img className="an-sheet" src={t.preview} alt="" />}
             <div className="caps" style={{ margin: '14px 0 6px' }}>Fotogramas del video analizado</div>
-            <img className="an-sheet" src={`oa://ut/${encodeURIComponent(t.id)}/referencia.jpg`} alt="" onError={(e) => { e.currentTarget.style.display = 'none' }} />
+            <img className="an-sheet" src={userTemplateUrl(t.id, 'referencia.jpg')} alt="" onError={(e) => { e.currentTarget.style.display = 'none' }} />
             {pal.length > 0 && <><div className="caps" style={{ margin: '14px 0 6px' }}>Paleta medida</div><div className="an-palbar">{pal.map((p) => <div key={p.hex} style={{ background: p.hex, flex: p.share }} data-tip={`${p.hex} · ${Math.round(p.share * 100)} %`} />)}</div></>}
           </div>
           <div className="an-right"><AnalysisReport a={a} /></div>

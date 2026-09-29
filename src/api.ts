@@ -1,4 +1,6 @@
 // Tipos compartidos y acceso al proceso principal.
+import { isAndroid, projectUrl } from './platform'
+
 export type Clip = { id: string; src: string; start: number; duration: number; in?: number; volume?: number; muted?: boolean; fadeIn?: number; fadeOut?: number; fit?: string; name?: string }
 export type TrackType = 'scene' | 'video' | 'audio'
 export type Track = { id: string; name: string; type: TrackType; clips: Clip[]; muted?: boolean; solo?: boolean; hidden?: boolean; volume?: number; locked?: boolean }
@@ -37,7 +39,12 @@ export type Settings = {
   plugins: PluginSettings
   lastExportDir?: string
   lastProject?: string
+  /** Sólo en Android. */
+  android?: AndroidPrefs
+  androidExport?: AndroidExport
 }
+export type AndroidPrefs = { immersive: boolean; uiScale: number; debug: boolean; saveToGallery: boolean; keepAwake: boolean }
+export type AndroidExport = { codec: 'avc' | 'hevc'; quality: 'low' | 'medium' | 'high' | 'max'; bitrate: number; height: number; fps: number; audio: boolean; audioBitrate: number }
 export type PluginSettings = {
   image: 'auto' | 'codex' | 'openai' | 'gemini'; voice: 'auto' | 'elevenlabs' | 'fish'; ask: 'auto' | 'codex' | 'openai' | 'gemini' | 'openrouter'; transcribe: 'auto' | 'whisper' | 'elevenlabs' | 'openai' | 'fish'
   codex: { enabled: boolean; path: string; model: string }
@@ -55,7 +62,8 @@ export type Voice = { id: string; name: string; desc?: string; preview?: string;
 export type Attachment = { rel: string; name: string; size: number; image?: string }
 
 /** Parche anidado de ajustes (cada sección parcial). */
-export type SettingsPatch = { [K in keyof Settings]?: Settings[K] extends object ? { [J in keyof Settings[K]]?: Settings[K][J] extends object ? Partial<Settings[K][J]> : Settings[K][J] } : Settings[K] }
+type NN<T> = NonNullable<T>
+export type SettingsPatch = { [K in keyof Settings]?: NN<Settings[K]> extends object ? { [J in keyof NN<Settings[K]>]?: NN<Settings[K]>[J] extends object ? Partial<NN<Settings[K]>[J]> : NN<Settings[K]>[J] } : Settings[K] }
 
 export type ChatItem = { id: string; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'permission' | 'result' | 'notice'; text?: string; name?: string; input?: any; status?: string; result?: string; isError?: boolean; requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: string }
 export type ChatEvent = { session: string; type: 'item' | 'patch' | 'state'; item?: Partial<ChatItem> & { id: string }; state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats } }
@@ -68,7 +76,7 @@ declare global {
 export const call = <T = any>(ch: string, ...a: unknown[]): Promise<T> => window.oa.call(ch, ...a)
 export const on = (ch: string, cb: (p: any) => void) => window.oa.on(ch, cb)
 
-export const fileUrl = (projectId: string, rel: string) => `oa://p/${encodeURIComponent(projectId)}/` + rel.split('/').map(encodeURIComponent).join('/')
+export const fileUrl = (projectId: string, rel: string) => projectUrl(projectId, rel)
 
 export function fmtTime(sec: number, withFrames = false, fps = 30) {
   if (!isFinite(sec)) sec = 0
@@ -82,15 +90,23 @@ export const fmtSize = (b: number) => (b > 1e9 ? `${(b / 1e9).toFixed(1)} GB` : 
 export const uid = (p = 'c') => `${p}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
 
 /** Modelos de Claude que se pueden elegir desde el chat (IDs verificados con Claude Code). */
-export const MODELS: Array<{ id: string; name: string; desc: string; note?: string }> = [
+const PC_MODELS: Array<{ id: string; name: string; desc: string; note?: string }> = [
   { id: '', name: 'Predeterminado', desc: 'El modelo configurado en tu cuenta de Claude Code' },
   { id: 'claude-opus-5-5', name: 'Opus 5.5', desc: 'El más capaz: dirección artística y escenas complejas' },
   { id: 'claude-sonnet-5', name: 'Sonnet 5', desc: 'Rápido y muy capaz para el trabajo diario' },
   { id: 'claude-haiku-4-5', name: 'Haiku 4.5', desc: 'El más rápido, para cambios chicos' },
   { id: 'claude-fable-5-1', name: 'Fable 5.1', desc: 'Frontera de capacidad', note: 'requiere créditos de uso' },
 ]
+/** En Android el chat usa la API de Claude (clave propia, se cobra por uso). Precios en US$ por millón de tokens. */
+const ANDROID_MODELS: Array<{ id: string; name: string; desc: string; note?: string }> = [
+  { id: 'claude-opus-5-5', name: 'Opus 5.5', desc: 'El más capaz: dirección artística y escenas complejas', note: '4 / 20' },
+  { id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', desc: 'Rápido y muy capaz, a mitad de precio', note: '2 / 10' },
+  { id: 'claude-haiku-4-5', name: 'Haiku 4.5', desc: 'El más rápido y económico, para cambios chicos', note: '1 / 5' },
+  { id: 'claude-fable-5-1', name: 'Fable 5.1', desc: 'Frontera de capacidad, el más caro', note: '10 / 50' },
+]
+export const MODELS = isAndroid() ? ANDROID_MODELS : PC_MODELS
 export const EFFORTS: Array<{ id: Effort | ''; name: string; desc: string; bars: number }> = [
-  { id: '', name: 'Automático', desc: 'Lo decide Claude Code', bars: 0 },
+  { id: '', name: 'Automático', desc: isAndroid() ? 'El nivel recomendado para el modelo' : 'Lo decide Claude Code', bars: 0 },
   { id: 'low', name: 'Bajo', desc: 'Respuestas rápidas, poco razonamiento', bars: 1 },
   { id: 'medium', name: 'Medio', desc: 'Equilibrio entre velocidad y calidad', bars: 2 },
   { id: 'high', name: 'Alto', desc: 'Piensa más antes de actuar', bars: 3 },

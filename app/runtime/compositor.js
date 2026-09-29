@@ -16,7 +16,9 @@
   var projectId = qs.get('p');
   var timelineId = qs.get('tl');
   var mode = qs.get('mode') || 'preview';
-  var base = 'oa://p/' + encodeURIComponent(projectId) + '/';
+  // El compositor se sirve desde <origen>/p/<proyecto>/__oa/ (oa:// en la PC, https en Android):
+  // la carpeta del proyecto es lo que está antes de __oa/.
+  var base = location.href.split('?')[0].replace(/__oa\/[^/]*$/, '');
   var stage = document.getElementById('stage');
   var msgEl = document.getElementById('msg');
 
@@ -294,6 +296,83 @@
     return { duration: dur, mode: modeName };
   }
 
+  // ── fotogramas como imagen (Android: sin capturePage, se rasteriza el DOM) ──
+  // Cada capa visible se dibuja en un canvas en orden: las escenas HTML con modern-screenshot
+  // (DOM → SVG → imagen, el mismo motor de Chromium), las imágenes y videos directo.
+  var vendor = null;
+  function loadVendor() {
+    if (!vendor) vendor = new Promise(function (res, rej) {
+      var s = document.createElement('script');
+      s.src = 'vendor/modern-screenshot.js';
+      s.onload = function () { res(window.modernScreenshot); };
+      s.onerror = function () { rej(new Error('No se pudo cargar el rasterizador')); };
+      document.head.appendChild(s);
+    });
+    return vendor;
+  }
+  var shotCtx = new Map(); // iframe → contexto reutilizable (fuentes e imágenes ya embebidas)
+
+  function fitRect(fit, sw, sh, W, H) {
+    if (!sw || !sh || fit === 'fill') return [0, 0, W, H];
+    var s = fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
+    var w = sw * s, h = sh * s;
+    return [(W - w) / 2, (H - h) / 2, w, h];
+  }
+
+  /** Renderiza t y devuelve un canvas de width×height con todas las capas visibles. */
+  async function rasterAt(t, width, height) {
+    await renderAt(t, { force: true, skipPaint: true });
+    var ms = await loadVendor();
+    var PW = project.width || 1920, PH = project.height || 1080;
+    var W = Math.round(width || PW), H = Math.round(height || Math.round(W * PH / PW));
+    var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+    var g = cv.getContext('2d');
+    g.fillStyle = project.background || '#000'; g.fillRect(0, 0, W, H);
+    var list = [];
+    layers.forEach(function (L) { if (L.el.style.display === 'block' && L.el.style.visibility !== 'hidden') list.push(L); });
+    list.sort(function (a, b) { return (+a.el.style.zIndex || 0) - (+b.el.style.zIndex || 0); });
+    for (var i = 0; i < list.length; i++) {
+      var L = list[i];
+      var alpha = parseFloat(L.el.style.opacity); if (!isFinite(alpha)) alpha = 1;
+      if (alpha <= 0.001) continue;
+      g.globalAlpha = alpha;
+      if (L.kind === 'scene') {
+        var doc = L.el.contentDocument;
+        if (!doc || !doc.documentElement) continue;
+        var ctx = shotCtx.get(L.el);
+        if (!ctx || ctx.__w !== W) {
+          if (ctx) try { ms.destroyContext(ctx); } catch (e) {}
+          ctx = await ms.createContext(doc.documentElement, { width: PW, height: PH, scale: W / PW, backgroundColor: null, timeout: 15000,
+            // Chromium no necesita los arreglos de Safari/Firefox (redibujar con demoras).
+            features: { fixSvgXmlDecode: false, copyScrollbar: false, restoreScrollPosition: false } });
+          ctx.__w = W; shotCtx.set(L.el, ctx);
+        }
+        var img = await ms.domToCanvas(ctx);
+        g.drawImage(img, 0, 0, W, H);
+      } else {
+        var el = L.el, sw = L.kind === 'video' ? el.videoWidth : el.naturalWidth, sh = L.kind === 'video' ? el.videoHeight : el.naturalHeight;
+        var r = fitRect(el.style.objectFit || 'contain', sw, sh, W, H);
+        try { g.drawImage(el, r[0], r[1], r[2], r[3]); } catch (e) { /* aún sin datos */ }
+      }
+      g.globalAlpha = 1;
+    }
+    // Contextos de escenas que ya no existen.
+    shotCtx.forEach(function (c, el) { if (!el.isConnected) { try { ms.destroyContext(c); } catch (e) {} shotCtx.delete(el); } });
+    return cv;
+  }
+
+  function canvasData(cv, mime, quality) {
+    return new Promise(function (res, rej) {
+      cv.toBlob(function (b) {
+        if (!b) return rej(new Error('No se pudo codificar el fotograma'));
+        var fr = new FileReader();
+        fr.onload = function () { var s = String(fr.result); res(s.slice(s.indexOf(',') + 1)); };
+        fr.onerror = function () { rej(fr.error); };
+        fr.readAsDataURL(b);
+      }, mime, quality);
+    });
+  }
+
   function setMsg(s) { msgEl.textContent = s || ''; }
 
   async function reload() {
@@ -333,9 +412,19 @@
         post({ type: 'audit', id: m.id, issues: await audit(m.t) });
       } else if (m.type === 'probe') {
         post({ type: 'probe', id: m.id, result: await probeScene(m.src) });
+      } else if (m.type === 'frame') {
+        // Un fotograma como imagen (base64). format: jpeg | png | bitmap (ImageBitmap transferible).
+        var cv = await rasterAt(m.t, m.width, m.height);
+        if (m.format === 'bitmap') {
+          var bmp = await createImageBitmap(cv);
+          window.parent.postMessage({ source: 'oa-compositor', type: 'frame', id: m.id, t: m.t, bitmap: bmp, width: cv.width, height: cv.height }, '*', [bmp]);
+        } else {
+          var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
+          post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: await canvasData(cv, mime, m.quality || 0.92), width: cv.width, height: cv.height });
+        }
       }
     } catch (err) {
-      post({ type: 'error', message: String(err && err.message || err) });
+      post({ type: 'error', id: m.id, message: String(err && err.message || err) });
     }
   });
 

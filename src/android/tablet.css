@@ -1,0 +1,391 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   OpenAnimator · capa táctil para tablets Android
+   Misma identidad visual que la PC, pensada para el dedo y el S Pen:
+   objetivos de 44 px, estados al tocar (no al pasar), paneles que se deslizan
+   y el chat de Claude en su propia pantalla.
+   ═══════════════════════════════════════════════════════════════════════════ */
+html.touch {
+  --h-xs: 30px; --h-sm: 36px; --h-md: 42px; --h-lg: 48px;
+  --r-sm: 7px; --r: 10px; --r-lg: 14px; --r-xl: 20px;
+  --titlebar: 60px;
+  --font: 'Google Sans Text', 'Google Sans', Roboto, 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Google Sans Display', 'Google Sans', Roboto, system-ui, sans-serif;
+  --mono: 'Roboto Mono', 'Droid Sans Mono', ui-monospace, monospace;
+  --drawer: min(380px, 86vw);
+  --tap: rgba(255, 255, 255, .1);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+html.touch[data-density="compact"] { --h-xs: 28px; --h-sm: 32px; --h-md: 38px; --h-lg: 44px; }
+html.touch, html.touch body, html.touch #root { font-size: 14.5px; overscroll-behavior: none; }
+html.touch body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+html.touch ::-webkit-scrollbar { width: 0; height: 0; }
+html.touch button, html.touch .b, html.touch .select, html.touch .seg-btn, html.touch .side-item, html.touch .menu-item, html.touch .tab { touch-action: manipulation; }
+html.touch img { -webkit-user-drag: none; }
+
+/* ── botones: tamaño de dedo y respuesta al tocar ─────────────────────── */
+html.touch .b { gap: 8px; padding: 0 16px; font-weight: 550; }
+html.touch .b-sm { padding: 0 12px; font-size: 14px; gap: 7px; border-radius: 9px; }
+html.touch .b-xs { padding: 0 10px; font-size: 13px; border-radius: 8px; }
+html.touch .b-lg { padding: 0 20px; font-size: 15.5px; }
+html.touch .b-icon { padding: 0; }
+html.touch .b-icon.b-sm { width: var(--h-sm); } html.touch .b-icon.b-xs { width: var(--h-xs); } html.touch .b-icon.b-md { width: var(--h-md); }
+html.touch .b-ghost:hover:not(:disabled) { background: none; color: var(--t2); }
+html.touch .b-ghost.is-active:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-t); }
+html.touch .b-secondary:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-2); }
+html.touch .b-primary:hover:not(:disabled) { background: var(--accent); }
+html.touch .b-subtle:hover:not(:disabled) { background: rgba(255, 255, 255, .045); }
+html.touch .b:active:not(:disabled) { transform: scale(.96); transition: transform .06s; }
+html.touch .b-ghost:active:not(:disabled) { background: var(--tap); color: var(--t1); }
+html.touch .b-secondary:active:not(:disabled) { background: var(--bg-5); }
+html.touch .b-primary:active:not(:disabled) { background: var(--accent-press); }
+html.touch .kbd { display: none; }
+html.touch .badge { height: 26px; padding: 0 10px; font-size: 12.5px; }
+
+/* ── formularios ──────────────────────────────────────────────────────── */
+html.touch .input { padding: 0 14px; gap: 10px; }
+html.touch .input-sm { padding: 0 12px; font-size: 14px; border-radius: 10px; }
+html.touch .input input { font-size: 15px; }
+html.touch .input.mono input { font-size: 14px; }
+html.touch .input-clear { width: 22px; height: 22px; }
+html.touch .num-steps { opacity: 1; }
+html.touch .num-steps button { width: 28px; }
+html.touch .textarea { padding: 12px 14px; font-size: 15px; }
+html.touch .select { padding: 0 12px 0 14px; gap: 9px; }
+html.touch .select-sm { padding: 0 10px 0 12px; font-size: 14px; border-radius: 10px; }
+html.touch .select:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-2); }
+html.touch .select-ghost:hover:not(:disabled) { background: none; color: var(--t2); }
+html.touch .select:active:not(:disabled) { background: var(--bg-5); }
+html.touch .switch { width: 48px; height: 28px; }
+html.touch .switch span { top: 4px; left: 4px; width: 20px; height: 20px; }
+html.touch .switch.on span { transform: translateX(20px); }
+html.touch .check-box { width: 22px; height: 22px; border-radius: 6px; }
+html.touch .seg { padding: 3px; gap: 3px; border-radius: 12px; }
+html.touch .seg-btn { padding: 0 14px; border-radius: 9px; font-size: 14px; }
+html.touch .seg-sm .seg-btn { font-size: 13.5px; padding: 0 12px; }
+html.touch .slider { height: 32px; }
+html.touch .slider::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; }
+html.touch .slider::-webkit-slider-thumb { width: 24px; height: 24px; margin-top: -9px; }
+html.touch .field-label { font-size: 13.5px; }
+html.touch .field-hint { font-size: 13px; }
+html.touch .tab { height: 48px; padding: 0 14px; font-size: 14.5px; }
+html.touch .tabs-sm .tab { height: 44px; font-size: 14px; }
+html.touch .caps { font-size: 11.5px; }
+
+/* ── menús, diálogos, avisos ─────────────────────────────────────────── */
+html.touch .menu { padding: 8px; border-radius: 16px; min-width: 260px; max-height: 78vh; }
+html.touch .menu-item { min-height: 48px; padding: 6px 14px 6px 12px; gap: 14px; border-radius: 10px; font-size: 15px; }
+html.touch .menu-item.hi { background: none; }
+html.touch .menu-item:active { background: var(--tap); }
+html.touch .menu-item.danger:active { background: var(--err-soft); }
+html.touch .menu-check { width: 20px; }
+html.touch .menu-desc { font-size: 13px; }
+html.touch .menu-hint { font-size: 13px; }
+html.touch .menu-header { padding: 10px 12px 6px; font-size: 11.5px; }
+html.touch .modal-backdrop { background: rgba(4, 5, 7, .7); }
+html.touch .modal { width: min(680px, 94vw); border-radius: 22px; }
+html.touch .modal.narrow { width: min(520px, 92vw); }
+html.touch .modal.wide { width: min(1040px, 96vw); }
+html.touch .modal.xl { width: min(1240px, 97vw); height: min(900px, 94vh); max-height: 94vh; }
+html.touch .modal-head { padding: 20px 20px 16px 24px; gap: 14px; }
+html.touch .modal-icon { width: 42px; height: 42px; border-radius: 12px; }
+html.touch .modal-title { font-size: 18px; }
+html.touch .modal-sub { font-size: 13.5px; margin-top: 3px; }
+html.touch .modal-body { padding: 22px 24px; }
+html.touch .modal-foot { padding: 14px 20px 16px 24px; gap: 10px; }
+html.touch .toasts { left: 50%; right: auto; bottom: 22px; transform: translateX(-50%); align-items: center; }
+html.touch .toast { min-width: 320px; max-width: min(560px, 92vw); padding: 14px 16px; border-radius: 16px; font-size: 14.5px; gap: 12px; }
+html.touch .tooltip { font-size: 13px; padding: 8px 12px; border-radius: 10px; }
+html.touch .empty-title { font-size: 16px; }
+html.touch .empty-desc { font-size: 14px; max-width: 440px; }
+html.touch .empty-icon { width: 60px; height: 60px; border-radius: 18px; }
+
+/* ── barra superior ───────────────────────────────────────────────────── */
+html.touch .titlebar { padding: 0 14px; gap: 10px; }
+html.touch .brand { font-size: 16px; gap: 11px; }
+html.touch .tb-touch { gap: 6px; padding: 0 10px 0 8px; }
+.tb-project { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 34vw; height: 48px; padding: 0 12px 0 10px; border-radius: 12px; border: 0; background: none; text-align: left; }
+.tb-project:active { background: var(--tap); }
+.tb-project-txt { display: flex; flex-direction: column; min-width: 0; }
+.tb-project-name { font: 600 16px/1.2 var(--font-display); color: var(--t1); }
+.tb-project-sub { font-size: 12.5px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tb-tabs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: 4px; padding: 4px; border-radius: 16px; background: var(--bg-2); border: 1px solid var(--line-2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03); }
+.tb-tab { position: relative; display: flex; align-items: center; gap: 9px; height: 42px; padding: 0 20px 0 16px; border: 0; border-radius: 12px; background: none; color: var(--t2); font: 600 14.5px var(--font); transition: background .18s var(--ease), color .18s; }
+.tb-tab:active { transform: scale(.97); }
+.tb-tab.on { color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #fff), var(--accent)); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 0 rgba(255, 255, 255, .2); }
+.tb-tab.claude.on { background: linear-gradient(135deg, #e0845f, #c05f3f); box-shadow: 0 4px 14px rgba(217, 119, 87, .35), inset 0 1px 0 rgba(255, 255, 255, .2); }
+.tb-tab-dot { position: absolute; top: 7px; right: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--bg-2); }
+.tb-tab-dot.busy { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.tb-tab-dot.wait { background: var(--warn); animation: pulse .9s ease-in-out infinite; }
+.tb-tab-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: var(--err); color: #fff; font-size: 11.5px; display: inline-grid; place-items: center; }
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+@media (max-width: 1100px) { .tb-tab .tb-tab-label { display: none; } .tb-tab { padding: 0 16px; } .tb-project { max-width: 30vw; } }
+@media (max-width: 760px) { .tb-project-sub { display: none; } }
+
+/* ── Inicio ───────────────────────────────────────────────────────────── */
+html.touch .home, html.touch .settings { grid-template-columns: 272px minmax(0, 1fr); }
+html.touch .side { padding: 14px 12px; gap: 4px; }
+html.touch .side-item { height: 48px; padding: 0 14px; gap: 14px; font-size: 15px; border-radius: 12px; }
+html.touch .side-item:hover { background: none; color: var(--t2); }
+html.touch .side-item.on, html.touch .side-item.on:hover { background: rgba(255, 255, 255, .075); color: var(--t1); }
+html.touch .side-item:active { background: var(--tap); }
+html.touch .side-item .count { font-size: 13px; }
+html.touch .side-label { padding: 18px 14px 8px; }
+html.touch .side-cta .b { height: 50px; font-size: 15.5px; border-radius: 14px; }
+html.touch .sys { padding: 14px; gap: 10px; border-radius: 16px; }
+html.touch .sys-row { font-size: 13.5px; gap: 10px; }
+html.touch .page { padding: 28px 32px 56px; }
+html.touch .page-title { font-size: 28px; }
+html.touch .page-desc { font-size: 14.5px; }
+html.touch .hero { padding: 30px 32px; border-radius: 22px; }
+html.touch .hero h2 { font-size: 24px; }
+html.touch .hero p { font-size: 15px; }
+html.touch .section-h h3 { font-size: 17px; }
+html.touch .pgrid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px; }
+html.touch .pcard-thumb { border-radius: 16px; }
+html.touch .pcard:hover .pcard-thumb { transform: none; box-shadow: var(--shadow-1); border-color: var(--line-2); }
+html.touch .pcard:active .pcard-thumb { transform: scale(.985); }
+html.touch .pcard-play { display: none; }
+html.touch .pcard-more { opacity: 1; top: 10px; right: 10px; }
+html.touch .pcard-more .b { width: 40px; height: 40px; border-radius: 12px; }
+html.touch .pcard-name { font-size: 15.5px; }
+html.touch .pcard-meta { font-size: 13px; }
+html.touch .pcard-res, html.touch .pcard-dur { font-size: 12.5px; padding: 3px 8px; border-radius: 7px; }
+html.touch .prow { grid-template-columns: 96px minmax(0, 2.2fr) 1fr .7fr .8fr 1fr 52px; padding: 10px 14px; font-size: 14px; }
+html.touch .prow-thumb { width: 96px; border-radius: 8px; }
+html.touch .tgrid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
+html.touch .tcard { border-radius: 18px; }
+html.touch .tcard:hover { transform: none; box-shadow: none; border-color: var(--line-2); }
+html.touch .tcard:active { transform: scale(.99); }
+html.touch .tcard.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+html.touch .tcard-more { opacity: 1; }
+html.touch .tcard-name { font-size: 15px; }
+html.touch .tcard-desc { font-size: 13.5px; }
+html.touch .fmt { padding: 16px 8px 14px; border-radius: 14px; }
+html.touch .fmt-name { font-size: 13.5px; } html.touch .fmt-sub { font-size: 12.5px; }
+.home-drop-hint { display: flex; align-items: center; gap: 12px; margin-top: 18px; padding: 14px 16px; border-radius: 16px; border: 1px dashed var(--line-2); color: var(--t3); font-size: 14px; }
+
+/* ── Ajustes ──────────────────────────────────────────────────────────── */
+html.touch .set-page { max-width: 900px; padding: 28px 32px 72px; }
+html.touch .set-group-title { font-size: 15.5px; margin-bottom: 6px; }
+html.touch .set-group-desc { font-size: 13.5px; margin-bottom: 12px; }
+html.touch .set-card { border-radius: 18px; }
+html.touch .set-row { min-height: 72px; padding: 14px 20px; gap: 24px; }
+html.touch .set-label { font-size: 15px; }
+html.touch .set-desc { font-size: 13.5px; margin-top: 3px; }
+html.touch .path { font-size: 13px; padding: 8px 10px; border-radius: 9px; }
+.key-box { display: flex; flex-direction: column; gap: 14px; padding: 20px; }
+.key-status { display: flex; align-items: center; gap: 14px; }
+.key-status .key-mark { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; background: linear-gradient(135deg, #e0845f, #b95c3e); color: #fff; flex: none; box-shadow: 0 6px 18px rgba(217, 119, 87, .3); }
+.key-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.key-row .input { flex: 1; min-width: 240px; }
+.key-note { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--info-soft); color: var(--t2); font-size: 13.5px; line-height: 1.5; }
+.key-note .ic { color: var(--info); margin-top: 2px; }
+.dev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1px; background: var(--line); }
+.dev-grid > div { background: var(--bg-2); padding: 14px 18px; }
+.dev-grid .k { color: var(--t3); font-size: 12.5px; }
+.dev-grid .v { font-weight: 600; margin-top: 3px; word-break: break-word; }
+.trash-row { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.trash-row:first-child { border-top: 0; }
+.notes-edit { font-family: var(--mono); font-size: 13.5px !important; min-height: 220px; }
+
+/* ── Editor: estructura táctil ───────────────────────────────────────── */
+.editor-shell { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.editor-shell > .editor { flex: 1; }
+.ed-work.touch { position: relative; display: flex; min-height: 0; overflow: hidden; }
+.ed-work.touch > .viewer { flex: 1; }
+html.touch .viewer-bar { height: 52px; gap: 6px; padding: 0 10px; }
+html.touch .viewer-bar .vdiv { margin: 10px 4px; }
+.vb-btn-label { display: inline-flex; }
+@media (max-width: 1000px) { .vb-btn-label { display: none; } }
+html.touch .transport { height: 68px; padding: 0 14px; }
+html.touch .transport .b-icon { width: 48px; height: 48px; border-radius: 14px; }
+html.touch .play-btn { width: 56px !important; height: 56px !important; margin: 0 10px; box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent), inset 0 1px 0 rgba(255, 255, 255, .2) !important; }
+html.touch .timecode { font-size: 18px; }
+html.touch .timecode .t3 { font-size: 13.5px; }
+
+/* Paneles deslizables (medios a la izquierda, propiedades a la derecha) */
+.drawer { position: absolute; top: 0; bottom: 0; width: var(--drawer); z-index: 30; display: flex; flex-direction: column; background: var(--bg-1);
+  box-shadow: 0 0 0 1px var(--line-2), 18px 0 48px rgba(0, 0, 0, .45); transition: transform .26s var(--ease), visibility 0s linear .26s; visibility: hidden; }
+.drawer.left { left: 0; transform: translateX(-104%); }
+.drawer.right { right: 0; transform: translateX(104%); box-shadow: 0 0 0 1px var(--line-2), -18px 0 48px rgba(0, 0, 0, .45); }
+.drawer.open { transform: none; visibility: visible; transition: transform .26s var(--ease), visibility 0s; }
+.drawer > .pane { flex: 1; min-height: 0; border: 0; }
+.drawer-head { height: 56px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 18px; border-bottom: 1px solid var(--line); }
+.drawer-title { font: 600 16px var(--font-display); display: flex; align-items: center; gap: 10px; }
+.drawer-grip { position: absolute; top: 50%; width: 5px; height: 56px; margin-top: -28px; border-radius: 3px; background: var(--line-3); }
+.drawer.left .drawer-grip { right: 6px; } .drawer.right .drawer-grip { left: 6px; }
+html.touch .drawer .pane-head { height: 52px; }
+
+/* Medios en pantalla táctil */
+html.touch .pane-title { font-size: 15px; }
+html.touch .media-tools { padding: 10px 12px 6px; }
+html.touch .media-filters { padding: 6px 12px 10px; gap: 6px; }
+html.touch .chip-f { height: 34px; padding: 0 13px; font-size: 13.5px; gap: 7px; }
+html.touch .chip-f:hover { color: var(--t2); border-color: var(--line-2); }
+html.touch .chip-f.on, html.touch .chip-f.on:hover { color: var(--accent-t); border-color: transparent; }
+html.touch .media-group-h { padding: 14px 16px 6px; }
+html.touch .mgrid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding: 6px 12px 12px; }
+html.touch .mtile-img { border-radius: 12px; }
+html.touch .mtile-name { font-size: 13px; padding-top: 7px; }
+html.touch .mtile:active .mtile-img { transform: scale(.97); }
+html.touch .mtile.sel .mtile-img { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+html.touch .mlist-item { height: 48px; font-size: 14px; border-radius: 10px; margin: 0 8px; }
+.madd { position: absolute; right: 6px; top: 6px; width: 34px; height: 34px; border-radius: 11px; border: 0; display: grid; place-items: center; color: #fff; background: rgba(10, 11, 14, .66); backdrop-filter: blur(6px); z-index: 2; }
+.madd:active { background: var(--accent); }
+html.touch .mtile { position: relative; }
+html.touch .mprev { font-size: 14px; }
+
+/* Propiedades en pantalla táctil */
+html.touch .insp-head { padding: 16px 18px; gap: 12px; }
+html.touch .insp-kind { width: 38px; height: 38px; border-radius: 11px; }
+html.touch .insp-sec { padding: 16px 18px 6px; }
+html.touch .insp-sec-title { margin-bottom: 12px; }
+html.touch .insp .fields { gap: 14px; }
+
+/* Pantalla completa del visor (sin la API de pantalla completa del navegador) */
+html.touch .viewer.is-full { position: fixed; inset: 0; z-index: 400; }
+html.touch .viewer.is-full .viewer-bar, html.touch .viewer.is-full .transport { display: none; }
+html.touch .fs-bar { bottom: 28px; padding: 14px 18px 12px; border-radius: 22px; }
+html.touch .fs-scrub { height: 32px; }
+html.touch .fs-scrub::-webkit-slider-runnable-track { height: 6px; }
+html.touch .fs-scrub::-webkit-slider-thumb { width: 22px; height: 22px; margin-top: -8px; }
+html.touch .fs-row .b-icon { width: 48px; height: 48px; }
+
+/* ── Timeline táctil ─────────────────────────────────────────────────── */
+html.touch .tl-bar { height: 56px; gap: 6px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; }
+html.touch .tl-bar > * { flex: none; }
+html.touch .tl-bar .vdiv { margin: 12px 4px; }
+html.touch .tl-heads { width: 196px; }
+html.touch .tl-head, html.touch .tl-track { height: 64px; }
+html.touch .tl-head .name { font-size: 13.5px; }
+html.touch .tl-head .ctrls { gap: 2px; }
+html.touch .tl-head .ctrls .b-xs.b-icon { width: 32px; height: 28px; }
+html.touch .tl-ruler, html.touch .tl-head-ruler { height: 36px; }
+html.touch .tl-ruler { touch-action: none; }
+html.touch .tl-ruler .tick span { font-size: 11.5px; }
+html.touch .tl-scroll { touch-action: pan-x pan-y; }
+html.touch .clip { touch-action: pan-x pan-y; border-radius: 9px; font-size: 12.5px; }
+html.touch .clip::before { height: 20px; }
+html.touch .clip .lbl { top: 2px; height: 17px; line-height: 17px; font-size: 12px; }
+html.touch .clip .sub { font-size: 11px; }
+html.touch .clip-wave, html.touch .clip-pattern { inset: 20px 0 0 0; }
+html.touch .clip-thumb, html.touch .clip .fade { top: 20px; }
+html.touch .clip.sel { touch-action: none; box-shadow: inset 0 0 0 2.5px #fff, 0 0 0 1px rgba(0, 0, 0, .5), 0 6px 18px rgba(0, 0, 0, .35); z-index: 3; }
+html.touch .clip .hdl { display: none; width: 26px; touch-action: none; }
+html.touch .clip.sel .hdl { display: block; background: none; }
+html.touch .clip.sel .hdl::after { content: ''; position: absolute; top: 50%; width: 6px; height: 28px; margin-top: -10px; border-radius: 3px; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .6); }
+html.touch .clip.sel .hdl.l::after { left: 5px; } html.touch .clip.sel .hdl.r::after { right: 5px; }
+html.touch .clip.dragging { opacity: .92; box-shadow: inset 0 0 0 2.5px #fff, 0 12px 32px rgba(0, 0, 0, .55); }
+html.touch .playhead { width: 2px; }
+html.touch .playhead::before { content: ''; position: absolute; top: 0; left: -8px; width: 18px; height: 14px; background: #ff4f6d; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+html.touch .note-mark { transform: scale(1.35); transform-origin: 50% 100%; }
+html.touch .tl-resize { top: -14px; height: 28px; touch-action: none; }
+html.touch .tl-resize::before { content: ''; position: absolute; left: 50%; top: 11px; width: 52px; height: 5px; margin-left: -26px; border-radius: 3px; background: var(--line-3); }
+html.touch .tl-resize:hover::after { display: none; }
+
+/* ── Vista de Claude (pantalla propia) ───────────────────────────────── */
+.claude-view { position: absolute; inset: 0; z-index: 50; display: flex; background: var(--bg-1); animation: viewIn .22s var(--ease); }
+@keyframes viewIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.claude-main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+.claude-main > div { flex: 1; min-height: 0; }
+.claude-center { width: 100%; max-width: 900px; margin: 0 auto; }
+.claude-side { width: 340px; flex: none; border-left: 1px solid var(--line); background: var(--bg-0); display: flex; flex-direction: column; gap: 16px; padding: 18px; overflow: auto; }
+@media (max-width: 1180px) { .claude-side { display: none; } }
+.cs-title { display: flex; align-items: center; gap: 8px; font: 600 14px var(--font-display); color: var(--t2); }
+.cs-frame { position: relative; border-radius: 14px; overflow: hidden; background: #000; border: 1px solid var(--line-2); box-shadow: var(--shadow-2); }
+.cs-frame img { display: block; width: 100%; height: auto; }
+.cs-frame .cs-empty { aspect-ratio: 16 / 9; display: grid; place-items: center; color: var(--t4); }
+.cs-frame .cs-tc { position: absolute; left: 10px; bottom: 10px; font: 500 12px var(--mono); padding: 3px 8px; border-radius: 7px; background: rgba(0, 0, 0, .65); color: #eee; }
+.cs-frame .cs-busy { position: absolute; right: 10px; top: 10px; }
+.cs-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.cs-stat { padding: 12px 14px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
+.cs-stat .v { font: 600 17px var(--font-display); } .cs-stat .l { color: var(--t3); font-size: 12.5px; margin-top: 2px; }
+.cs-actions { display: flex; flex-direction: column; gap: 8px; }
+.cs-actions .b { justify-content: flex-start; }
+.wait-banner { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 12px; padding: 10px 10px 10px 16px; border-radius: 16px;
+  background: #2a2417; border: 1px solid rgba(242, 181, 61, .4); box-shadow: var(--shadow-3); color: #f7d992; font-weight: 500; animation: toastIn .22s var(--ease); max-width: 92%; }
+.wait-banner .ic { color: var(--warn); }
+
+/* Chat en pantalla táctil */
+html.touch .pane-head { height: 52px; padding: 0 10px 0 14px; gap: 6px; }
+html.touch .claude-view .pane-head { height: 60px; padding: 0 16px 0 20px; }
+html.touch .chat-list { padding: 22px 26px 12px; gap: 16px; font-size: 15px; }
+html.touch .msg-user { padding: 12px 16px; border-radius: 20px 20px 6px 20px; font-size: 15px; line-height: 1.55; }
+html.touch .msg-ai { gap: 14px; }
+html.touch .msg-ai-avatar { width: 30px; height: 30px; border-radius: 9px; }
+html.touch .msg-ai-body { font-size: 15px; line-height: 1.65; }
+html.touch .md code { font-size: 13px; }
+html.touch .md h1, html.touch .md h2, html.touch .md h3, html.touch .md h4 { font-size: 16px; }
+html.touch .tool-card, html.touch .perm-card, html.touch .turn-meta, html.touch .thinking, html.touch .thinking-h { margin-left: 44px; }
+html.touch .tool-card { border-radius: 14px; font-size: 13.5px; }
+html.touch .tool-card summary { height: 46px; padding: 0 14px; gap: 10px; }
+html.touch .tool-card pre { font-size: 12.5px; }
+html.touch .perm-card { border-radius: 16px; padding: 14px 16px; font-size: 14.5px; }
+html.touch .perm-cmd { font-size: 13px; }
+html.touch .notice { font-size: 14px; padding: 12px 14px; border-radius: 12px; }
+html.touch .turn-meta { font-size: 12.5px; }
+html.touch .suggest button { padding: 14px 16px; border-radius: 14px; font-size: 14.5px; gap: 12px; }
+html.touch .suggest button:hover { border-color: var(--line); background: var(--bg-2); color: var(--t2); }
+html.touch .suggest button:active { background: var(--bg-3); }
+html.touch .chat-hello { padding: 36px 6px 10px; }
+html.touch .chat-hello-title { font-size: 22px; margin: 14px 0 6px; }
+html.touch .composer-wrap { padding: 12px 20px 18px; }
+html.touch .composer { border-radius: 20px; }
+html.touch .composer textarea { font-size: 16px; padding: 16px 18px 6px; min-height: 58px; }
+html.touch .composer-bar { padding: 6px 10px 10px; gap: 4px; }
+html.touch .send-btn { width: 46px !important; height: 46px !important; border-radius: 14px !important; }
+html.touch .att-chip { padding: 6px 8px 6px 6px; border-radius: 12px; font-size: 13.5px; }
+html.touch .att-chip img { width: 64px; height: 36px; border-radius: 7px; }
+html.touch .mention-row { min-height: 48px; font-size: 14.5px; }
+html.touch .to-bottom { height: 44px; min-width: 44px; border-radius: 22px; }
+html.touch .hist-row { min-height: 64px; }
+
+/* ── Exportar (Android) ──────────────────────────────────────────────── */
+.xp-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.xp-preset { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; border-radius: 16px; border: 1px solid var(--line-2); background: var(--bg-2); text-align: left; transition: border-color .15s, background .15s; }
+.xp-preset:active { transform: scale(.98); }
+.xp-preset.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-soft); }
+.xp-preset .ic { color: var(--accent-t); }
+.xp-preset b { font-size: 15px; } .xp-preset span { color: var(--t3); font-size: 13px; }
+.xp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 22px; }
+.xp-est { display: flex; align-items: center; gap: 14px; margin-top: 22px; padding: 14px 16px; border-radius: 14px; background: var(--bg-0); border: 1px solid var(--line); color: var(--t2); font-size: 14px; }
+.xp-est b { color: var(--t1); }
+.xp-run { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; align-items: center; }
+.xp-preview { position: relative; border-radius: 16px; overflow: hidden; background: #000; border: 1px solid var(--line-2); aspect-ratio: 16 / 9; display: grid; place-items: center; }
+.xp-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.xp-big { font: 600 44px/1 var(--font-display); letter-spacing: -1px; }
+.xp-phase { color: var(--t2); font-size: 15px; margin-top: 8px; }
+.xp-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+.xp-meta > div { padding: 10px 12px; border-radius: 12px; background: var(--bg-2); border: 1px solid var(--line); }
+.xp-meta .k { color: var(--t3); font-size: 12.5px; } .xp-meta .v { font: 600 15px var(--font-display); margin-top: 2px; }
+.xp-list { display: flex; flex-direction: column; margin-top: 8px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.xp-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; border-top: 1px solid var(--line); }
+.xp-item:first-child { border-top: 0; }
+.xp-done { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 10px 0 4px; }
+.xp-done-ico { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); }
+
+/* ── Retrato (tablet vertical): todo en una columna ──────────────────── */
+@media (orientation: portrait) {
+  html.touch .home, html.touch .settings { grid-template-columns: minmax(0, 1fr); }
+  html.touch .home > .side, html.touch .settings > .side { display: none; }
+  html.touch .hero-stats { position: static; transform: none; margin-top: 20px; }
+  html.touch .xp-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  html.touch .xp-run { grid-template-columns: minmax(0, 1fr); }
+  html.touch .fmt-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.portrait-nav { display: none; }
+@media (orientation: portrait) {
+  html.touch .portrait-nav { display: flex; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--bg-0); overflow-x: auto; }
+  html.touch .portrait-nav .side-item { width: auto; flex: none; height: 42px; }
+}
+
+/* Arranque fallido */
+.boot-error { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 14px; padding: 48px; color: #e7e9ee; background: #0b0c0f; font: 15px system-ui, sans-serif; }
+.boot-error h1 { font-size: 22px; margin: 0; }
+.boot-error pre { white-space: pre-wrap; color: #f28b82; background: #16181d; padding: 16px; border-radius: 12px; max-height: 60vh; overflow: auto; font-size: 13px; }
+.boot-error button { align-self: flex-start; padding: 12px 22px; border-radius: 12px; border: 0; background: #7c5cff; color: #fff; font: 600 15px system-ui, sans-serif; }
+
+/* Fila del estado del sistema que se puede tocar (lleva a Ajustes) */
+.sys-btn { border: 0; background: none; padding: 0; width: 100%; text-align: left; font: inherit; color: var(--t2); cursor: pointer; }
+.sys-btn:active { opacity: .7; }

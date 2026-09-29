@@ -6,6 +6,8 @@ import ChatPanel from './components/ChatPanel'
 import { AppInfo, call, Settings, SettingsPatch } from './api'
 import { Icon } from './ui/icons'
 import { TooltipLayer } from './ui/kit'
+import { isAndroid } from './platform'
+import AndroidIntegration from './android/ui/Integration'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
 type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route }
@@ -16,6 +18,7 @@ type Ctx = {
   updateSettings: (patch: SettingsPatch) => Promise<void>
   go: (r: Route) => void
   route: Route
+  refreshInfo: () => void
 }
 const AppCtx = createContext<Ctx>(null as any)
 export const useApp = () => useContext(AppCtx)
@@ -66,13 +69,14 @@ export default function App() {
     if (settings.ui.reduceMotion) d.setAttribute('data-reduce-motion', ''); else d.removeAttribute('data-reduce-motion')
   }, [settings?.ui.accent, settings?.ui.density, settings?.ui.reduceMotion])
 
+  const refreshInfo = useCallback(() => { call<AppInfo>('app:info').then(setInfo).catch(() => {}) }, [])
   const go = useCallback((r: Route) => {
     setRoute(r)
     if (r.page === 'editor') call('settings:set', { lastProject: r.id }).catch(() => {})
   }, [])
 
   return (
-    <AppCtx.Provider value={{ toast, info, settings, updateSettings, go, route }}>
+    <AppCtx.Provider value={{ toast, info, settings, updateSettings, go, route, refreshInfo }}>
       <div className={`app ${chatWin ? 'chat-window' : ''}`}>
         {chatWin ? <ChatPanel projectId={chatWin.project} windowMode attachTo={chatWin.session} visible
           context={async () => (await call('chat:getCtx', chatWin.project)) || { timeline: 'main', t: 0 }} />
@@ -90,6 +94,7 @@ export default function App() {
         ))}
       </div>
       <TooltipLayer />
+      {isAndroid() && <AndroidIntegration />}
     </AppCtx.Provider>
   )
 }

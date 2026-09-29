@@ -65,3 +65,24 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`restartWhenIdle`). El `close` de un proceso viejo no pisa `this.proc` del nuevo.
 - Historial: `listSessions`/`loadTranscript` leen `~/.claude/projects/<ruta con [^a-zA-Z0-9]→->/*.jsonl`
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
+
+## Android (tablet) — `android/`, `src/android/`
+- Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente
+  nativo (`window.AndroidBridge`, `src/android/host.ts`). `src/platform.ts` (`isAndroid`, `projectUrl`,
+  `compositorUrl`) resuelve las diferencias: nunca escribir `oa://` a mano en la interfaz.
+- Orígenes: interfaz `https://appassets.androidplatform.net` (+ `/fs/` datos, `/app/` recursos) y proyectos
+  `https://oaproject.androidplatform.net/p/<id>/` (escenas, `__oa/` compositor). El puente pide un token que
+  se entrega una sola vez por carga de página (`B.init()`).
+- Claves: sólo en Java (Keystore). La interfaz manda `{{secret:NOMBRE}}` y Java lo reemplaza **sólo en
+  cabeceras** y sólo hacia el host de ese servicio (`SECRET_HOSTS` en `Bridge.java`).
+- Chat: `agent.ts` usa `@anthropic-ai/sdk` con `fetch` nativo (`nativeFetch`: eventos head + chunk). Historial
+  sólo-agregar; sistema y herramientas congelados por conversación y guardados en `<proyecto>/.oa-chat/`
+  (imágenes aparte en `img/`); los cambios de opciones van como notas en el próximo mensaje. Streaming ansioso
+  de herramientas → validar entrada (`__json_buf` estricto + `validateInput`). `fallbacks: 'default'`.
+- Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
+  la exportación manda JPEG a `enc.frame` (MediaCodec + EGL) y el audio mezclado con Web Audio a `enc.audio`.
+- Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles
+  (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
+  `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.
+- Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`.
+  APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.

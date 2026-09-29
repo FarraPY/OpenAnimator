@@ -6,6 +6,7 @@ import { Button, Empty, Menu, MenuItem, Segmented, Spinner, TextInput } from '..
 import { useDialogs } from './Dialogs'
 import Modal from './Modal'
 import { Markdown } from './ChatPanel'
+import { isAndroid, isTouch } from '../platform'
 
 const KINDS: Array<{ kind: Asset['kind']; label: string; icon: IconName; color: string }> = [
   { kind: 'scene', label: 'Escenas', icon: 'code', color: 'var(--scene)' },
@@ -55,7 +56,8 @@ function useAudio() {
   return { playing, toggle, stop: () => { player?.pause(); setPlaying(null) } }
 }
 
-export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { projectId: string; assets: Asset[]; onRefresh: () => void; onAdd: (a: Asset) => void }) {
+export default function MediaPanel({ projectId, assets, onRefresh, onAdd, onClose }: { projectId: string; assets: Asset[]; onRefresh: () => void; onAdd: (a: Asset) => void; onClose?: () => void }) {
+  const touch = isTouch(), android = isAndroid()
   const { toast } = useApp()
   const dlg = useDialogs()
   const [q, setQ] = useState('')
@@ -79,7 +81,7 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
     try { uses = await call('assets:usage', projectId, a.path) } catch { /* ignore */ }
     const ok = await dlg.confirm({
       title: `¿Eliminar «${a.name}»?`, danger: true, ok: 'Mandar a la papelera', icon: 'trash',
-      message: <>El archivo va a la <b>Papelera de reciclaje</b> de Windows (se puede recuperar desde ahí).{uses.length ? <><br /><br /><span style={{ color: 'var(--warn)' }}>Está usado en {uses.map((u) => `«${u.timeline}» (${u.count} clip${u.count > 1 ? 's' : ''})`).join(', ')}: esos clips van a quedar sin archivo.</span></> : null}</>,
+      message: <>El archivo va a la <b>{android ? 'papelera de OpenAnimator' : 'Papelera de reciclaje'}</b>{android ? ' (Ajustes › Almacenamiento)' : ' de Windows'} y se puede recuperar desde ahí.{uses.length ? <><br /><br /><span style={{ color: 'var(--warn)' }}>Está usado en {uses.map((u) => `«${u.timeline}» (${u.count} clip${u.count > 1 ? 's' : ''})`).join(', ')}: esos clips van a quedar sin archivo.</span></> : null}</>,
     })
     if (!ok) return
     try {
@@ -87,13 +89,19 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
       await call('assets:trash', projectId, [a.path]); toast(`«${a.name}» enviado a la papelera`); setSel(null); onRefresh()
     } catch (e: any) { toast(e.message, true) }
   }
+  const rename = async (a: Asset) => {
+    const name = await dlg.prompt({ title: 'Renombrar archivo', label: 'Nombre', value: a.name, ok: 'Renombrar', subtitle: 'Los clips que ya lo usan en el timeline quedan sin archivo: renombralo antes de usarlo.' })
+    if (!name || name === a.name) return
+    try { await call('assets:rename', projectId, a.path, name); onRefresh() } catch (e: any) { toast(e.message, true) }
+  }
   const menuItems = (a: Asset): MenuItem[] => [
     { header: a.path },
-    ...(canAdd(a) ? [{ label: 'Agregar al timeline', icon: 'plus' as IconName, hint: 'doble clic', onSelect: () => onAdd(a) }] : []),
+    ...(canAdd(a) ? [{ label: 'Agregar al timeline', icon: 'plus' as IconName, hint: touch ? 'en el cursor' : 'doble clic', onSelect: () => onAdd(a) }] : []),
     ...(a.kind === 'audio' ? [{ label: audio.playing === fileUrl(projectId, a.path) ? 'Detener' : 'Escuchar', icon: 'play' as IconName, onSelect: () => audio.toggle(fileUrl(projectId, a.path)) }] : []),
     { label: 'Vista previa', icon: 'eye', onSelect: () => (a.kind === 'doc' || a.kind === 'video' || a.kind === 'image') ? setFull(a) : setSel(a.path) },
-    { label: 'Abrir con la app predeterminada', icon: 'external', onSelect: () => call('assets:open', projectId, a.path) },
-    { label: 'Mostrar en la carpeta', icon: 'folder-open', onSelect: () => call('project:reveal', projectId, a.path) },
+    { label: android ? 'Abrir con…' : 'Abrir con la app predeterminada', icon: 'external', onSelect: () => call('assets:open', projectId, a.path) },
+    android ? { label: 'Compartir', icon: 'share', onSelect: () => call('assets:share', projectId, a.path) } : { label: 'Mostrar en la carpeta', icon: 'folder-open', onSelect: () => call('project:reveal', projectId, a.path) },
+    ...(android ? [{ label: 'Renombrar…', icon: 'edit' as IconName, onSelect: () => rename(a) }] : []),
     { sep: true },
     { label: 'Eliminar…', icon: 'trash', danger: true, kbd: 'Supr', onSelect: () => remove(a) },
   ]
@@ -102,9 +110,9 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
   const counts = Object.fromEntries(KINDS.map((k) => [k.kind, assets.filter((a) => a.kind === k.kind).length]))
   const selAsset = assets.find((a) => a.path === sel) || null
   const item = (a: Asset) => ({
-    draggable: canAdd(a),
+    draggable: canAdd(a) && !touch,
     tabIndex: 0,
-    'data-tip': `${a.path} · ${fmtSize(a.size)} — ${canAdd(a) ? 'arrastrá al timeline o doble clic' : 'doble clic para leerlo'}`,
+    'data-tip': touch ? undefined : `${a.path} · ${fmtSize(a.size)} — ${canAdd(a) ? 'arrastrá al timeline o doble clic' : 'doble clic para leerlo'}`,
     onDragStart: (e: React.DragEvent) => { e.dataTransfer.setData('application/x-oa-asset', JSON.stringify(a)); e.dataTransfer.effectAllowed = 'copy' },
     onClick: () => setSel(a.path),
     onDoubleClick: () => (canAdd(a) ? onAdd(a) : setFull(a)),
@@ -127,7 +135,8 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
         <span className="pane-title">Medios</span><span className="t3 tabnum" style={{ fontSize: 11.5 }}>{assets.length}</span>
         <div className="grow" />
         <Segmented size="sm" value={view} onChange={setView} options={[{ value: 'grid', icon: 'grid', tip: 'Miniaturas' }, { value: 'list', icon: 'list', tip: 'Lista' }]} />
-        <Button size="sm" variant="ghost" icon="plus" tip="Agregar archivos" onClick={() => importFiles()} />
+        <Button size="sm" variant={touch ? 'subtle' : 'ghost'} icon="plus" tip="Agregar archivos" onClick={() => importFiles()}>{touch ? 'Agregar' : null}</Button>
+        {onClose && <Button size="sm" variant="ghost" icon="x" tip="Cerrar" onClick={onClose} />}
       </div>
       <div className="media-tools"><TextInput icon="search" size="sm" placeholder="Buscar medios…" value={q} onChange={setQ} clearable width="100%" /></div>
       <div className="media-filters">
@@ -149,8 +158,9 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
                 <div className="mgrid">
                   {items.map((a) => (
                     <div key={a.path} className={`mtile ${sel === a.path ? 'sel' : ''}`} {...item(a)}>
-                      <Thumb projectId={projectId} a={a} hover={hover === a.path} />
+                      <Thumb projectId={projectId} a={a} hover={!touch && hover === a.path} />
                       {playBtn(a)}
+                      {touch && canAdd(a) && <button className="madd" aria-label="Agregar al timeline" onClick={(e) => { e.stopPropagation(); onAdd(a) }} onDoubleClick={(e) => e.stopPropagation()}><Icon name="plus" size={18} stroke={2.2} /></button>}
                       {recent(a) && <span className="mnew">nuevo</span>}
                       <div className="mtile-name">{a.name}</div>
                     </div>
@@ -167,7 +177,7 @@ export default function MediaPanel({ projectId, assets, onRefresh, onAdd }: { pr
         })}
         {!list.length && (assets.length
           ? <Empty compact icon="search" title="Sin resultados" />
-          : <Empty compact icon="import" title="Sin medios" desc="Arrastrá video, audio, imágenes, escenas .html o guiones, o usá el botón +.">
+          : <Empty compact icon="import" title="Sin medios" desc={touch ? 'Agregá video, audio, imágenes, escenas .html o guiones desde la tablet con el botón «Agregar».' : 'Arrastrá video, audio, imágenes, escenas .html o guiones, o usá el botón +.'}>
             <Button size="sm" icon="plus" onClick={() => importFiles()}>Agregar archivos</Button>
           </Empty>)}
       </div>
@@ -212,7 +222,7 @@ function Preview({ projectId, a, audio, onAdd, onFull, onDelete, onClose }: { pr
         {(a.kind === 'doc' && isText(a)) || a.kind === 'image' || a.kind === 'video' ? <Button size="xs" variant="ghost" icon="maximize" onClick={onFull}>Ampliar</Button> : null}
         {a.kind === 'doc' && !isText(a) && <Button size="xs" variant="ghost" icon="external" onClick={() => call('assets:open', projectId, a.path)}>Abrir</Button>}
         <div className="grow" />
-        <Button size="xs" variant="ghost" icon="folder-open" tip="Mostrar en la carpeta" onClick={() => call('project:reveal', projectId, a.path)} />
+        <Button size="xs" variant="ghost" icon={isAndroid() ? 'share' : 'folder-open'} tip={isAndroid() ? 'Compartir' : 'Mostrar en la carpeta'} onClick={() => call(isAndroid() ? 'assets:share' : 'project:reveal', projectId, a.path)} />
         <Button size="xs" variant="ghost" icon="trash" tip="Eliminar (Supr)" onClick={onDelete} />
       </div>
     </div>
@@ -226,7 +236,7 @@ function FullPreview({ projectId, a, onClose, onAdd }: { projectId: string; a: A
   useEffect(() => { if (isText(a)) call('assets:readText', projectId, a.path).then(setDoc).catch((e) => setDoc({ text: String(e.message), truncated: false })) }, [a.path])
   return (
     <Modal size="xl" title={a.name} subtitle={<span className="mono">{a.path} · {fmtSize(a.size)}</span>} icon={K[a.kind]?.icon || 'file'} onClose={onClose}
-      footer={<><Button variant="ghost" icon="folder-open" onClick={() => call('project:reveal', projectId, a.path)}>Mostrar en la carpeta</Button><Button variant="ghost" icon="external" onClick={() => call('assets:open', projectId, a.path)}>Abrir con…</Button><div className="grow" />{onAdd && <Button icon="plus" onClick={onAdd}>Agregar al timeline</Button>}<Button variant="primary" onClick={onClose}>Cerrar</Button></>}>
+      footer={<><Button variant="ghost" icon={isAndroid() ? 'share' : 'folder-open'} onClick={() => call(isAndroid() ? 'assets:share' : 'project:reveal', projectId, a.path)}>{isAndroid() ? 'Compartir' : 'Mostrar en la carpeta'}</Button><Button variant="ghost" icon="external" onClick={() => call('assets:open', projectId, a.path)}>Abrir con…</Button><div className="grow" />{onAdd && <Button icon="plus" onClick={onAdd}>Agregar al timeline</Button>}<Button variant="primary" onClick={onClose}>Cerrar</Button></>}>
       {a.kind === 'video' && <video src={url} controls autoPlay style={{ width: '100%', maxHeight: '64vh', background: '#000', borderRadius: 8 }} />}
       {a.kind === 'image' && <img src={url} alt="" style={{ maxWidth: '100%', maxHeight: '64vh', display: 'block', margin: '0 auto', borderRadius: 8 }} />}
       {a.kind === 'doc' && (doc == null ? <div className="row t3" style={{ gap: 8 }}><Spinner size={12} />Cargando…</div>

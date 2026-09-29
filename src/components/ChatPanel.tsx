@@ -1,5 +1,6 @@
 import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
+import { isAndroid } from '../platform'
 import { useApp } from '../App'
 import { Icon, IconName } from '../ui/icons'
 import { Button, Empty, Select, Spinner, TextInput, useMenu } from '../ui/kit'
@@ -128,11 +129,17 @@ function ContextRing({ pct, level }: { pct: number; level: number }) {
   )
 }
 
-export default function ChatPanel({ projectId, context, visible, windowMode, attachTo }: {
+export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number }
+export default function ChatPanel({ projectId, context, visible, windowMode, attachTo, onStatus, inject }: {
   projectId: string; context: () => Ctx | Promise<Ctx>; visible: boolean
   /** Ventana separada: se conecta a la conversación `attachTo` y no la cierra al salir. */
   windowMode?: boolean; attachTo?: string
+  /** Estado para mostrar afuera (pestaña de Claude en la tablet): trabajando, esperando permiso, respuestas. */
+  onStatus?: (s: ChatStatus) => void
+  /** Texto para poner en el cuadro de mensaje desde afuera (acciones rápidas). */
+  inject?: { text: string; n: number } | null
 }) {
+  const android = isAndroid()
   const { toast, info, settings, go, updateSettings } = useApp()
   const dlg = useDialogs()
   const [session, setSession] = useState<string | null>(null)
@@ -199,6 +206,14 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   }, [popped, windowMode, projectId])
 
   useEffect(() => { if (busy) setBusySince(Date.now()) }, [busy])
+  const lastStatus = useRef('')
+  useEffect(() => {
+    if (!onStatus) return
+    const st: ChatStatus = { busy, waiting: items.some((x) => x.kind === 'permission' && x.status === 'pendiente'), assistant: items.filter((x) => x.kind === 'assistant' && !!x.text && x.status !== 'streaming').length }
+    const k = JSON.stringify(st)
+    if (k !== lastStatus.current) { lastStatus.current = k; onStatus(st) }
+  }, [busy, items])
+  useEffect(() => { if (inject?.text) { setText(inject.text); setTimeout(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 60) } }, [inject?.n])
   // ── ir al último mensaje ──
   const [away, setAway] = useState(false)
   const [unread, setUnread] = useState(0)
@@ -226,7 +241,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   }, [items, busy])
   useEffect(() => { seenCount.current = 0; setUnread(0); requestAnimationFrame(() => toBottom(false)) }, [session])
   useEffect(() => { const el = ta.current; if (el) { el.style.height = 'auto'; el.style.height = Math.min(220, el.scrollHeight) + 'px' } }, [text])
-  useEffect(() => { if (visible && !popped) setTimeout(() => ta.current?.focus(), 50) }, [visible, popped])
+  useEffect(() => { if (visible && !popped && !android) setTimeout(() => ta.current?.focus(), 50) }, [visible, popped])
 
   // ── @ menciones de archivos del proyecto ─────────────────────────────────────
   const [projFiles, setProjFiles] = useState<ProjFile[] | null>(null)
@@ -259,7 +274,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
 
   const setOption = (patch: Partial<typeof opts> & { saver?: boolean }, label: string) => {
     // Permisos y modelo se aplican en caliente; esfuerzo y modo ahorro esperan a que Claude termine lo que está haciendo.
-    const live = 'model' in patch || 'permissionMode' in patch
+    const live = 'permissionMode' in patch || (!android && 'model' in patch)
     label = label.replace(/ \(se aplica al próximo mensaje\)\.?$/, '') + (live ? (busy ? ' (desde el próximo paso, sin interrumpir).' : '.') : busy ? ' (se aplica cuando Claude termine lo que está haciendo).' : ' (se aplica al próximo mensaje).')
     const { saver: sv, ...rest } = patch
     setOpts((o) => ({ ...o, ...rest }))
@@ -324,10 +339,23 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pickMention(matches[mIdx]); return }
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setMention(null); return }
     }
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!busy) send() }
+    // En la tablet, Enter del teclado en pantalla hace un salto de línea (se envía con el botón);
+    // con teclado físico y mouse/trackpad (DeX, funda con teclado) Enter envía, como en la PC.
+    const enterSends = !android || e.ctrlKey || matchMedia('(any-pointer: fine)').matches
+    if (e.key === 'Enter' && !e.shiftKey && enterSends) { e.preventDefault(); if (!busy) send() }
     e.stopPropagation()
   }
 
+  if (info && !info.claude && android) {
+    return (
+      <div className="pane-body" style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', justifyContent: 'center' }}>
+        <Empty icon="sparkles" title="Conectá Claude" desc="En la tablet, Claude trabaja con tu clave de la API de Claude (se cobra por uso en tu cuenta de desarrollador, aparte de la suscripción). Cargala una vez en Ajustes y listo: queda guardada cifrada en este equipo.">
+          <Button variant="primary" icon="key" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'editor', id: projectId } })}>Cargar la clave</Button>
+          <Button icon="external" onClick={() => call('shell:openExternal', 'https://platform.claude.com/settings/keys')}>Conseguir una clave</Button>
+        </Empty>
+      </div>
+    )
+  }
   if (info && !info.claude) {
     return (
       <div className="pane-body" style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', justifyContent: 'center' }}>
@@ -365,7 +393,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           : <span className="row t3" style={{ gap: 6, fontSize: 12 }} data-tip="Modelo de la sesión"><span className="sys-dot ok" style={{ marginLeft: 0, width: 6, height: 6 }} />{liveModel ? modelName(liveModel) : 'Listo'}</span>}
         <div className="grow" />
         <button className={`ctx-meter no-drag ${level === 2 ? 'err' : level === 1 ? 'warn' : ''}`} onClick={ctxMenu.open}
-          data-tip={stats?.context ? `Contexto: ${kTok(stats.context)} de ${kTok(stats.window)} tokens (${pct}%). Cada mensaje vuelve a enviar todo esto: cuanto más grande, más consume de tu límite de uso.` : stats?.compactions ? 'Conversación compactada: se mide de nuevo en el próximo mensaje' : 'Contexto de la conversación (se mide al primer mensaje)'}>
+          data-tip={stats?.context ? `Contexto: ${kTok(stats.context)} de ${kTok(stats.window)} tokens (${pct}%). Cada mensaje vuelve a enviar todo esto: cuanto más grande, ${android ? 'más cuesta cada mensaje' : 'más consume de tu límite de uso'}.` : stats?.compactions ? 'Conversación compactada: se mide de nuevo en el próximo mensaje' : 'Contexto de la conversación (se mide al primer mensaje)'}>
           <ContextRing pct={pct} level={level} /><span className="tabnum">{stats?.context ? kShort(stats.context) : '—'}</span>
         </button>
         {ctxMenu.render([
@@ -380,8 +408,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           renderValue={() => perm.label}
           onChange={(v) => setOption({ permissionMode: v as string }, `Permisos: ${PERMS.find((p) => p.value === v)?.label}`)}
           options={PERMS.map((p) => ({ value: p.value, label: p.label, desc: p.desc, icon: p.icon }))} />
-        <Button size="sm" variant="ghost" icon="terminal" tip={claudeSession ? 'Seguir esta conversación en una terminal (Claude Code)' : 'Abrir Claude Code en una terminal'} onClick={() => call('shell:terminal', projectId, claudeSession)} />
-        {windowMode
+        {!android && <Button size="sm" variant="ghost" icon="terminal" tip={claudeSession ? 'Seguir esta conversación en una terminal (Claude Code)' : 'Abrir Claude Code en una terminal'} onClick={() => call('shell:terminal', projectId, claudeSession)} />}
+        {android ? null : windowMode
           ? <Button size="sm" variant="ghost" icon="popin" tip="Volver a poner el chat en el editor" onClick={() => call('chat:popin', projectId)} />
           : <Button size="sm" variant="ghost" icon="popout" tip="Abrir el chat en otra ventana" onClick={() => session && call('chat:popout', projectId, session)} />}
         <Button size="sm" variant="ghost" icon="history" tip="Conversaciones anteriores" active={history} onClick={() => setHistory(true)} />
@@ -472,7 +500,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       <div className="composer-wrap">
         {level > 0 && !busy && (
           <div className={`ctx-warn ${level === 2 ? 'err' : ''}`}>
-            <Icon name="gauge" size={14} /><span className="grow">La conversación ya ocupa <b>{kTok(stats!.context)} tokens</b> y cada mensaje los reenvía: compactala para gastar menos de tu límite.</span>
+            <Icon name="gauge" size={14} /><span className="grow">La conversación ya ocupa <b>{kTok(stats!.context)} tokens</b> y cada mensaje los reenvía: compactala para gastar menos{android ? '' : ' de tu límite'}.</span>
             <Button size="xs" icon="compress" onClick={() => compact()}>Compactar</Button>
           </div>
         )}
@@ -496,14 +524,14 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               <span className="ellipsis" style={{ maxWidth: 150 }}>{f.name}</span><span className="t4" style={{ fontSize: 11 }}>{fmtSize(f.size)}</span>
               <Button size="xs" variant="ghost" icon="x" tip="Quitar" onClick={() => setFiles((xs) => xs.filter((x) => x.rel !== f.rel))} /></div>)}
           </div>}
-          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? 'Claude está trabajando… podés escribir el próximo pedido' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
+          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? 'Claude está trabajando… podés escribir el próximo pedido' : android ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
             onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)} onBlur={() => setTimeout(() => setMention(null), 150)}
             onKeyDown={onKey} />
           <div className="composer-bar">
             <Button size="sm" variant="ghost" icon="paperclip" tip="Adjuntar" active={attMenu.isOpen} onClick={attMenu.open} />
             {attMenu.render([
               { label: 'Fotograma actual', icon: 'camera', onSelect: attachFrame },
-              { label: 'Archivos…', icon: 'file', onSelect: pickFiles },
+              { label: android ? 'Archivos de la tablet…' : 'Archivos…', icon: 'file', onSelect: pickFiles },
               { label: 'Mencionar un archivo del proyecto', icon: 'at', hint: '@', onSelect: () => { const v = text + (text && !/\s$/.test(text) ? ' @' : '@'); setText(v); onTextChange(v, v.length); ta.current?.focus() } },
             ], { placement: 'top' })}
             <Select size="sm" variant="ghost" value={opts.model} tip="Modelo" menuWidth={300} placement="top"
