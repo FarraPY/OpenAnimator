@@ -15,6 +15,7 @@ import { runTool, validateInput, type ToolContent } from './tools'
 export const PORT = 47821
 const VERSION = +(/const VERSION = (\d+)/.exec(bridgeSrc)?.[1] || 0)
 const PREFIX = '/data/data/com.termux/files/usr'
+const HOME = '/data/data/com.termux/files/home'
 const BASH = `${PREFIX}/bin/bash`
 const TOKEN_FILE = '.termux-token'
 
@@ -115,13 +116,27 @@ async function connectOrStart(): Promise<string> {
     if (!/sin puente|token/.test(String(e?.message))) throw e
   }
   await install()
-  await start()
+  const exited = start()
   let last: any
   for (let i = 0; i < 40; i++) {
     await sleep(i < 10 ? 250 : 500)
+    const r = exited.result
+    if (r) throw new Error(`El puente de Termux se cerró al arrancar (código ${r.exitCode}): ${tail(r.stderr || r.stdout || r.errmsg) || 'sin detalles'}`)
     try { const c = await open(); current = c.link; return c.link } catch (e) { last = e }
   }
-  throw new Error(`El puente de Termux no arrancó (${last?.message || 'sin respuesta'}). Revisá que Node.js esté instalado en Termux (el comando de preparación lo instala).`)
+  throw new Error(`El puente de Termux no arrancó (${last?.message || 'sin respuesta'}). ${await diagnose()}`)
+}
+
+const tail = (t: string, n = 4) => (t || '').trim().split('\n').slice(-n).join(' · ').slice(0, 600)
+
+/** Lo último del registro del puente en Termux, para que el error diga qué pasó. */
+async function diagnose() {
+  try {
+    const r = await host().callAsync<RunResult>('termux.run', {
+      path: BASH, args: ['-c', 'tail -n 6 "$HOME/.openanimator/bridge.log" 2>&1; node --version 2>&1'], background: true, result: true, timeoutMs: 15000, label: 'OpenAnimator: diagnóstico',
+    })
+    return `Termux dice: ${tail(r.stdout || r.stderr, 7) || 'nada'}`
+  } catch (e: any) { return `No se pudo leer el registro del puente: ${e.message}` }
 }
 
 /** Resultado de un comando en Termux (err -1 = sin error de Termux). */
@@ -138,6 +153,8 @@ async function install() {
   const script = [
     'set -e',
     'mkdir -p "$HOME/.openanimator"',
+    // El token queda en la carpeta privada de Termux (otras apps no la ven); el puente lo lee al arrancar.
+    `(umask 077 && printf '%s\\n' '${token()}' > "$HOME/.openanimator/token")`,
     ...file('bridge.mjs', bridgeSrc, 'OA_BRIDGE_EOF'),
     ...file('oa-mcp.mjs', mcpSrc, 'OA_MCP_EOF'),
     'command -v node >/dev/null 2>&1 || { echo "Falta Node.js en Termux: corré el comando de preparación (pkg install nodejs)." >&2; exit 3; }',
@@ -147,9 +164,17 @@ async function install() {
   checkRun(r, 'la instalación del puente')
 }
 
-async function start() {
-  // El token va por la entrada estándar (no queda en la lista de procesos).
-  await host().callAsync('termux.run', { path: BASH, args: ['-lc', `exec node "$HOME/.openanimator/bridge.mjs" --port ${PORT}`], stdin: token() + '\n', background: true, result: false, label: 'OpenAnimator: Claude Code' })
+/**
+ * Arranca el puente (node directo, sin shell). Termux avisa cuando el proceso termina: si pasa enseguida,
+ * `result` trae su salida para mostrar el motivo.
+ */
+function start() {
+  const state: { result: RunResult | null } = { result: null }
+  host().callAsync<RunResult>('termux.run', {
+    path: `${PREFIX}/bin/node`, background: true, result: true, timeoutMs: 7 * 24 * 3600e3, label: 'OpenAnimator: Claude Code',
+    args: [`${HOME}/.openanimator/bridge.mjs`, '--port', String(PORT), '--token-file', `${HOME}/.openanimator/token`],
+  }).then((r) => { state.result = r || { stdout: '', stderr: '', exitCode: -1, err: 0, errmsg: '' } }, (e) => { state.result = { stdout: '', stderr: String(e?.message || e), exitCode: -1, err: 0, errmsg: '' } })
+  return state
 }
 
 // ── mensajes del puente ─────────────────────────────────────────────────────────

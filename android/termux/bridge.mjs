@@ -7,7 +7,8 @@
  * (`claude -p` con stream-json, con la sesión de su plan: el puente nunca toca las credenciales) y le
  * presta las herramientas de la app por MCP (oa-mcp.mjs), porque los proyectos viven en la app.
  *
- * Lo instala y lo arranca la app (Termux RUN_COMMAND); el token llega por la entrada estándar.
+ * Lo instala y lo arranca la app (Termux RUN_COMMAND); el token lo deja la instalación en
+ * ~/.openanimator/token (sólo Termux lo puede leer) y el puente lo lee con --token-file.
  * Protocolo: una línea JSON por mensaje; la primera de cada conexión se presenta.
  *   app   → puente: hello {token, version, fresh} · start {proc, opts} · in {proc, msg} · kill {proc}
  *                   toolResult {call, content, isError} · req {id, op, …} · ping
@@ -23,7 +24,7 @@ import crypto from 'node:crypto'
 import readline from 'node:readline'
 import { spawn, execFile } from 'node:child_process'
 
-const VERSION = 1
+const VERSION = 2
 const HOME = os.homedir()
 const DIR = path.join(HOME, '.openanimator')
 const TMP = path.join(DIR, 'tmp')
@@ -342,6 +343,7 @@ function listen(token) {
     // El puente anterior todavía está cerrando: se reintenta un momento.
     if (e.code === 'EADDRINUSE' && tries++ < 25) { setTimeout(() => server.listen(PORT, '127.0.0.1'), 200); return }
     log('no se pudo escuchar', e.message)
+    console.error(`No se pudo escuchar en 127.0.0.1:${PORT}: ${e.message}`)
     process.exit(2)
   })
   server.listen(PORT, '127.0.0.1', () => log('escuchando', PORT, 'versión', VERSION, 'claude:', claudeBin || '(no encontrado)'))
@@ -358,7 +360,12 @@ function shutdown(code) {
 process.on('SIGTERM', () => shutdown(0))
 process.on('SIGINT', () => shutdown(0))
 
+// Un error al arrancar queda en el registro y en stderr (la app lo recibe si el puente se cierra).
+process.on('uncaughtException', (e) => { log('fallo', e?.stack || e); console.error(e?.stack || String(e)); process.exit(1) })
+
 function readToken() {
+  const file = arg('token-file')
+  if (file) { try { return Promise.resolve(fs.readFileSync(file, 'utf8').trim()) } catch (e) { log('sin archivo de token', e.message); return Promise.resolve('') } }
   if (process.env.OA_TOKEN) return Promise.resolve(process.env.OA_TOKEN)
   return new Promise((resolve) => {
     let buf = ''
@@ -371,7 +378,7 @@ function readToken() {
 }
 
 const token = await readToken()
-if (!token) { log('sin token: el puente lo arranca la app'); process.exit(1) }
+if (!token) { log('sin token: el puente lo arranca la app'); console.error('Sin token: el puente lo arranca OpenAnimator.'); process.exit(1) }
 // Un solo puente: el anterior (de otra apertura de la app) se cierra.
 try { const old = +fs.readFileSync(PID, 'utf8'); if (old && old !== process.pid) process.kill(old, 'SIGTERM') } catch { /* no había */ }
 fs.writeFileSync(PID, String(process.pid))

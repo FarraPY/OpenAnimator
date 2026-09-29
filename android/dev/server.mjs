@@ -141,12 +141,15 @@ function termuxEnv() {
   if (TERMUX_CLAUDE === 'fake') env.OA_CLAUDE_BIN = path.join(ROOT, 'android', 'dev', 'fake-claude.mjs')
   return env
 }
+// Las rutas de Termux se traducen a la carpeta de prueba (y su bash/node a los de la PC).
+const inTermux = (p) => String(p).replace('/data/data/com.termux/files/home', TERMUX_HOME).replace('/data/data/com.termux/files/usr', path.join(DATA, '.dev-termux', 'usr'))
 function termuxRun(a) {
   if (!termuxPerm) throw new Error('OpenAnimator todavía no tiene permiso para usar Termux')
   fs.mkdirSync(TERMUX_HOME, { recursive: true })
-  const args = (a.args || []).map(String)
+  const args = (a.args || []).map(inTermux)
   if (a.background === false) { console.log('[termux] sesión visible:', args.join(' ')); return true }
-  const p = spawn('bash', args, { env: termuxEnv(), cwd: TERMUX_HOME, stdio: ['pipe', a.result ? 'pipe' : 'ignore', a.result ? 'pipe' : 'inherit'] })
+  const exe = /\/bin\/node$/.test(a.path) ? process.execPath : /\/bin\/bash$/.test(a.path) ? 'bash' : inTermux(a.path)
+  const p = spawn(exe, args, { env: termuxEnv(), cwd: TERMUX_HOME, stdio: ['pipe', a.result ? 'pipe' : 'ignore', a.result ? 'pipe' : 'inherit'] })
   p.stdin.end(a.stdin || '')
   if (!a.result) return true
   return new Promise((resolve) => {

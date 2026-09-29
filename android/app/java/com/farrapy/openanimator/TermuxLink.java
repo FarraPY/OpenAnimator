@@ -29,6 +29,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -48,6 +49,7 @@ final class TermuxLink {
     private final AtomicInteger codes = new AtomicInteger(3000);
     private final Map<Integer, String> permissionWaits = new ConcurrentHashMap<>();
     private final Map<String, Link> links = new ConcurrentHashMap<>();
+    private final Set<BroadcastReceiver> receivers = ConcurrentHashMap.newKeySet();
 
     TermuxLink(MainActivity act, Bridge bridge) {
         this.act = act;
@@ -174,6 +176,7 @@ final class TermuxLink {
         IntentFilter filter = new IntentFilter(action);
         if (Build.VERSION.SDK_INT >= 33) act.registerReceiver(self[0], filter, Context.RECEIVER_NOT_EXPORTED);
         else act.registerReceiver(self[0], filter);
+        receivers.add(self[0]);
         main.postDelayed(timeout, timeoutMs);
         Intent result = new Intent(action).setPackage(act.getPackageName());
         int flags = PendingIntent.FLAG_ONE_SHOT | (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0);
@@ -181,6 +184,7 @@ final class TermuxLink {
     }
 
     private void unregister(BroadcastReceiver r) {
+        if (r == null || !receivers.remove(r)) return;
         try {
             act.unregisterReceiver(r);
         } catch (Exception ignored) {
@@ -257,6 +261,9 @@ final class TermuxLink {
     void closeAll() {
         for (Link l : links.values()) l.close();
         links.clear();
+        // El puente sigue en Termux; sólo se dejan de esperar sus resultados (la actividad se cierra).
+        main.removeCallbacksAndMessages(null);
+        for (BroadcastReceiver r : receivers.toArray(new BroadcastReceiver[0])) unregister(r);
     }
 
     // ── abrir Termux y los ajustes ───────────────────────────────────────────────
