@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Asset, call, Clip, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../api'
 import { useApp } from '../App'
 import Stage, { StageHandle } from '../components/Stage'
@@ -19,6 +19,8 @@ import { Badge, Button, Divider, Empty, Menu, MenuItem, NumberInput, Segmented, 
 const KIND_TRACK: Record<string, TrackType> = { scene: 'scene', video: 'video', image: 'video', audio: 'audio' }
 const TRACK_NAME: Record<TrackType, string> = { scene: 'Escenas', video: 'Video', audio: 'Audio' }
 const isImage = (src: string) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(src)
+/** Respuestas de Claude ya vistas, por proyecto y conversación (sobrevive a salir y volver a entrar al editor). */
+const seenChat = new Map<string, { session: string; n: number }>()
 
 export default function Editor({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { toast, settings, updateSettings, go } = useApp()
@@ -73,12 +75,21 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
     return () => ro.disconnect()
   }, [touch, !!tl])
   const merged = touch && wide
-  const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0 })
+  const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0, session: null })
   const [seen, setSeen] = useState(0)
   const [inject, setInject] = useState<{ text: string; n: number } | null>(null)
   const projMenu = useMenu()
   const moreMenu = useMenu()
+  // Al volver al proyecto el editor se monta de nuevo: lo que ya se había visto de la conversación no vuelve a
+  // contar como nuevo (sólo lo que Claude respondió mientras tanto); una conversación retomada del historial, tampoco.
+  // Antes de pintar: si no, el contador con todas las respuestas llegaba a verse un instante.
+  useLayoutEffect(() => {
+    if (!chat.session) return
+    const prev = seenChat.get(projectId)
+    setSeen(prev?.session === chat.session ? Math.min(prev.n, chat.assistant) : chat.assistant)
+  }, [chat.session])
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
+  useEffect(() => { if (chat.session) seenChat.set(projectId, { session: chat.session, n: seen }) }, [seen, chat.session])
   // El visor se desmonta en la pestaña de Claude: la reproducción se detiene.
   useEffect(() => { if (tab === 'claude') setPlaying(false) }, [tab])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)

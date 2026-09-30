@@ -59,6 +59,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   cursor con `chat:setCtx`. Terminal: `shell:terminal` abre `claude --mcp-config … --resume <id> --fork-session`
   con `windowsVerbatimArguments` (sin eso Node escapa las comillas y cmd.exe no arranca).
 - `.chat-list > * { flex-shrink: 0 }`: sin eso las tarjetas se aplastaban a 10 px con el chat lleno.
+- El chat está montado aunque no se vea (`display: none` en la otra pestaña o panel) y el navegador ignora el
+  scroll de un elemento oculto: la lista recuerda si sigue al último mensaje (`stick` en ChatPanel) y lo aplica al
+  mostrarse; si no, una conversación cargada con el chat oculto (al volver al proyecto) aparecía desde el principio.
+  El contador de la pestaña Claude (tablet) guarda lo visto por proyecto y conversación (`seenChat` en Editor.tsx):
+  el editor se monta de nuevo al volver y contaba como nuevas todas las respuestas.
 - Medios: tipo `doc` (md, txt, pdf, json, srt…) para los guiones que escribe la IA; borrar = `shell.trashItem`
   (Papelera, recuperable); vista previa abajo del panel y ampliada en un modal. `@` en el chat busca en
   `project:files`. Colores de pista por rol (`trackRole`: voz, música, sfx) en Timeline.tsx.

@@ -1,4 +1,4 @@
-import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
 import { isAndroid } from '../platform'
 import { useApp } from '../App'
@@ -212,7 +212,8 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
         
 })
 
-export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number }
+/** assistant: respuestas terminadas de la conversación `session` (el editor cuenta las que no se vieron). */
+export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number; session: string | null }
 export default function ChatPanel({ projectId, context, visible, windowMode, attachTo, onStatus, inject }: {
   projectId: string; context: () => Ctx | Promise<Ctx>; visible: boolean
   /** Ventana separada: se conecta a la conversación `attachTo` y no la cierra al salir. */
@@ -314,23 +315,29 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const lastStatus = useRef('')
   useEffect(() => {
     if (!onStatus) return
-    const st: ChatStatus = { busy, waiting: items.some((x) => x.kind === 'permission' && x.status === 'pendiente'), assistant: items.filter((x) => x.kind === 'assistant' && !!x.text && x.status !== 'streaming').length }
+    const st: ChatStatus = { busy, waiting: items.some((x) => x.kind === 'permission' && x.status === 'pendiente'), assistant: items.filter((x) => x.kind === 'assistant' && !!x.text && x.status !== 'streaming').length, session }
     const k = JSON.stringify(st)
     if (k !== lastStatus.current) { lastStatus.current = k; onStatus(st) }
-  }, [busy, items])
+  }, [busy, items, session])
   useEffect(() => { if (inject?.text) { setText(inject.text); setTimeout(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 60) } }, [inject?.n])
   // ── ir al último mensaje ──
+  // La lista sigue al último mensaje (stick) salvo que el usuario haya subido. Oculta (la otra pestaña en la tablet,
+  // otro panel en la PC) el navegador ignora el scroll: se aplica al mostrarla. Si no, una conversación que se
+  // cargó con el chat oculto (al volver al proyecto) aparecía desde el principio.
   const [away, setAway] = useState(false)
   const [unread, setUnread] = useState(0)
   const seenCount = useRef(0)
+  const stick = useRef(true)
   const onListScroll = () => {
     const el = list.current
-    if (!el) return
+    if (!el || !el.clientHeight) return
     const far = el.scrollHeight - el.scrollTop - el.clientHeight > 260
+    stick.current = !far
     setAway(far)
     if (!far) setUnread(0)
   }
   const toBottom = (smooth = true) => {
+    stick.current = true
     const el = list.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
@@ -341,10 +348,20 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     const fresh = items.slice(seenCount.current).filter((x) => x.kind === 'assistant' || x.kind === 'permission').length
     seenCount.current = items.length
     if (!el) return
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 260) el.scrollTop = el.scrollHeight
+    if (stick.current) el.scrollTop = el.scrollHeight
     else if (fresh) setUnread((n) => n + fresh)
   }, [items, busy])
-  useEffect(() => { seenCount.current = 0; setUnread(0); requestAnimationFrame(() => toBottom(false)) }, [session])
+  useEffect(() => { seenCount.current = 0; setUnread(0); stick.current = true; requestAnimationFrame(() => toBottom(false)) }, [session])
+  const listShown = !(info && !info.claude) && !(popped && !windowMode) && !gone // si no, en su lugar va un aviso
+  useLayoutEffect(() => { const el = list.current; if (visible && el && stick.current) el.scrollTop = el.scrollHeight }, [visible, listShown])
+  // Las imágenes que cargan después agrandan la lista: si iba abajo, sigue abajo ('load' no burbujea: se toma al bajar).
+  useEffect(() => {
+    const el = list.current
+    if (!el) return
+    const f = () => { if (stick.current && el.clientHeight) el.scrollTop = el.scrollHeight }
+    el.addEventListener('load', f, true)
+    return () => el.removeEventListener('load', f, true)
+  }, [listShown])
   useEffect(() => { const el = ta.current; if (el) { el.style.height = 'auto'; el.style.height = Math.min(220, el.scrollHeight) + 'px' } }, [text])
   useEffect(() => { if (visible && !popped && !android) setTimeout(() => ta.current?.focus(), 50) }, [visible, popped])
 
