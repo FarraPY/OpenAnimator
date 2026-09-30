@@ -13,6 +13,13 @@ export const isAndroid = () => oa()?.platform === 'android'
 /** Pantalla táctil principal (Android): controles más grandes y gestos. */
 export const isTouch = () => isAndroid()
 
+/**
+ * Android volvió a crear la página porque su motor web se cerró (casi siempre por falta de memoria):
+ * la app vuelve al proyecto que estaba abierto y retoma las conversaciones de Claude en Termux.
+ * Se lee al cargar (la interfaz después limpia la dirección).
+ */
+export const recoveredBoot = typeof location !== 'undefined' && /[?&]recovered=1\b/.test(location.search)
+
 const enc = (s: string) => s.split('/').map(encodeURIComponent).join('/')
 
 /** Carpeta de un proyecto: oa://p/<id>/ en la PC, https://oaproject…/p/<id>/ en Android. */

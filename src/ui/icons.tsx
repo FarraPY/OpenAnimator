@@ -153,15 +153,20 @@ export function Icon({ name, size = 16, stroke = 1.75, style, className }: { nam
 /** Marca de la app (el mismo diseño que el ícono del .exe). */
 export function Logo({ size = 22 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="0 0 32 32" aria-hidden="true" style={{ flex: 'none' }}>
+    // El ícono de la app (android/icon/icon.svg): pistas de voz, música y efectos que forman un "play",
+    // con el cabezal de reproducción.
+    <svg width={size} height={size} viewBox="18 18 72 72" aria-hidden="true" style={{ flex: 'none' }}>
       <defs>
-        <linearGradient id="oa-lg" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#23b9d0" /><stop offset=".5" stopColor="#7b6cff" /><stop offset="1" stopColor="#e0862f" />
-        </linearGradient>
+        <linearGradient id="oa-logo-bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#1A1726" /><stop offset="1" stopColor="#0B0A10" /></linearGradient>
+        <radialGradient id="oa-logo-gl" cx=".85" cy=".85" r=".8"><stop offset="0" stopColor="#7C6BFF" stopOpacity=".35" /><stop offset="1" stopColor="#7C6BFF" stopOpacity="0" /></radialGradient>
       </defs>
-      <rect x="1" y="1" width="30" height="30" rx="8" fill="url(#oa-lg)" />
-      <rect x="7.5" y="9" width="17" height="14" rx="2.5" fill="none" stroke="#fff" strokeWidth="2.2" />
-      <path d="M14 13v6l5-3z" fill="#fff" />
+      <rect x="18" y="18" width="72" height="72" rx="16" fill="url(#oa-logo-bg)" />
+      <rect x="18" y="18" width="72" height="72" rx="16" fill="url(#oa-logo-gl)" />
+      <rect x="31" y="36.5" width="30" height="9" rx="4.5" fill="#2DD4BF" />
+      <rect x="31" y="49.5" width="46" height="9" rx="4.5" fill="#8C7CFF" />
+      <rect x="31" y="62.5" width="30" height="9" rx="4.5" fill="#FF7A59" />
+      <path d="M69 32V77" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+      <path d="M64 28.5H74L69 34.5Z" fill="#fff" stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
     </svg>
   )
 }

@@ -88,8 +88,10 @@ puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo 
   sola cuando Claude cambia algo y pedidos rápidos. Si Claude necesita permiso mientras estás en el
   editor, aparece un aviso arriba. Mientras razona se ve cuánto lleva (tiempo y tokens estimados) y,
   si Claude deja de dar señales por más de dos minutos y medio, un aviso para detenerlo. Ir a Ajustes o
-  al inicio no lo corta: sigue trabajando y al volver al proyecto está donde iba (una conversación
-  sin usar se cierra sola a la media hora).
+  al inicio no lo corta: sigue trabajando y al volver al proyecto está donde iba. Al abrir un proyecto,
+  Claude sigue con su última conversación (el botón + empieza una nueva; se puede cambiar en Ajustes ›
+  Claude). Si Android cierra la página por falta de memoria, la app vuelve sola al proyecto y, con tu
+  plan, retoma la conversación que siguió corriendo en Termux.
 - **Exportar**: presets (Recomendado 1080p, 4K HEVC, Liviano 720p, Para editar), calidad, códec y
   audio. El video se guarda en *Galería › Movies/OpenAnimator* y se puede compartir o abrir.
 - Con teclado físico (funda con teclado o Samsung DeX) funcionan los mismos atajos que en la PC.
@@ -143,6 +145,12 @@ arma en cada cambio y lo adjunta a los releases.
 propósito, para que cualquier build pueda actualizar la app instalada. Eso también significa que
 cualquiera puede firmar un APK "compatible": instalá OpenAnimator sólo desde este repositorio. Para
 firmar con una clave privada: `OA_KEYSTORE`, `OA_KEYSTORE_PASS` y `OA_KEY_ALIAS`.
+
+### Ícono
+
+Las fuentes están en `android/icon/` (capas del ícono adaptable y el ícono completo, en SVG). Después de
+cambiarlas: `node android/scripts/icons.mjs` (usa el Chromium de Playwright) regenera los PNG de cada
+densidad, el ícono temático y los de la PC (`build/icon.png`, `build/icon.ico`).
 
 ### Probar en la PC
 

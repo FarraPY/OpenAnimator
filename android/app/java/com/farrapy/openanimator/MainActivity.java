@@ -81,6 +81,9 @@ public class MainActivity extends Activity {
         handleIntent(getIntent());
     }
 
+    /** El motor web se cerró y la página se volvió a crear (se le avisa con ?recovered=1). */
+    private boolean recovered = false;
+
     private void createWebView() {
         web = new WebView(this);
         web.setBackgroundColor(Color.parseColor("#0b0c0f"));
@@ -104,7 +107,8 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
         setContentView(web);
-        web.loadUrl(START_URL);
+        // Después de que el motor web se cerró, la página se entera (vuelve al proyecto y retoma a Claude).
+        web.loadUrl(recovered ? START_URL + "?recovered=1" : START_URL);
     }
 
     WebView web() {
@@ -130,6 +134,19 @@ public class MainActivity extends Activity {
         super.onResume();
         applyImmersive();
         emit("resume", null);
+    }
+
+    /** Android pide memoria: la página suelta lo que puede volver a armar (compositores ocultos sin uso). */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (level < TRIM_MEMORY_RUNNING_LOW) return;
+        try {
+            JSONObject o = new JSONObject();
+            o.put("level", level);
+            emit("memory", o);
+        } catch (Exception ignored) {
+        }
     }
 
     @Override
@@ -370,6 +387,7 @@ public class MainActivity extends Activity {
                 setContentView(new View(MainActivity.this));
                 web.destroy();
                 web = null;
+                recovered = true;
                 createWebView();
             }
             return true;

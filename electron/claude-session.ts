@@ -62,14 +62,15 @@ export abstract class ClaudeStreamSession {
     if (it) Object.assign(it, p)
     this.emit({ session: this.id, type: 'patch', item: { id, ...p } })
   }
-  // Avances que llegan muy seguido (tokens de razonamiento, entrada de una herramienta): se mandan agrupados.
+  // Lo que llega de a poquito (texto y razonamiento palabra por palabra, tokens estimados, la entrada de
+  // una herramienta) se manda agrupado cada 100 ms: un evento por palabra ahogaba a la tablet.
   private pending = new Map<string, Partial<ChatItem>>()
   private pendingTimer: ReturnType<typeof setTimeout> | null = null
   private patchLater(id: string, p: Partial<ChatItem>) {
     const it = this.items.find((x) => x.id === id)
     if (it) Object.assign(it, p)
     this.pending.set(id, { ...(this.pending.get(id) || {}), ...p })
-    if (!this.pendingTimer) this.pendingTimer = setTimeout(() => this.flushPatches(), 400)
+    if (!this.pendingTimer) this.pendingTimer = setTimeout(() => this.flushPatches(), 100)
   }
   private flushPatches() {
     if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null }
@@ -179,6 +180,19 @@ export abstract class ClaudeStreamSession {
 
   kill() { this.terminate(); this.busy = false; this.state() }
 
+  /**
+   * Rearma la conversación con lo que guardó quien la transporta (el puente de Termux, al retomarla
+   * después de que Android reinició la página): los pedidos del usuario llegan como `oa_user` y el resto
+   * tal como lo mandó Claude Code. Los permisos pendientes van aparte (acá no se vuelven a pedir).
+   */
+  protected replay(history: any[]) {
+    for (const m of history) {
+      if (m?.type === 'oa_user') { this.push({ id: nid('u'), kind: 'user', text: String(m.text || ''), images: m.images || 0 }); this.streamedText = false; continue }
+      if (m?.type === 'control_request') continue
+      this.onMessage(m)
+    }
+  }
+
   /** Una línea de la salida de Claude Code. */
   protected onLine(line: string) {
     let m: any
@@ -275,13 +289,12 @@ export abstract class ClaudeStreamSession {
       const it = this.items.find((x) => x.id === id)
       if (!it) return
       const d = ev.delta || {}
-      if (d.type === 'text_delta') { this.streamedText = true; this.patch(id, { text: (it.text || '') + d.text }) }
+      if (d.type === 'text_delta') { this.streamedText = true; this.patchLater(id, { text: (it.text || '') + d.text }) }
       else if (d.type === 'thinking_delta') {
         // Con el razonamiento oculto llega sólo la cantidad estimada de tokens; con texto, se estima por su largo.
         const text = typeof d.thinking === 'string' ? d.thinking : ''
         const tokens = (it.tokens || 0) + (typeof d.estimated_tokens === 'number' ? d.estimated_tokens : Math.ceil(text.length / 4))
-        if (text) this.patch(id, { text: (it.text || '') + text, tokens })
-        else this.patchLater(id, { tokens })
+        this.patchLater(id, text ? { text: (it.text || '') + text, tokens } : { tokens })
       } else if (d.type === 'input_json_delta' && it.kind === 'tool') this.patchLater(id, { streamed: (it.streamed || 0) + String(d.partial_json || '').length })
     } else if (ev.type === 'content_block_stop') {
       const id = this.blocks.get(ev.index)

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+  <!-- Frente: pistas de voz, música y efectos que forman un "play", y el cabezal de reproducción.
+       Todo dentro del círculo seguro de radio 33 alrededor del centro. -->
+  <rect x="31" y="36.5" width="30" height="9" rx="4.5" fill="#2DD4BF"/>
+  <rect x="31" y="49.5" width="46" height="9" rx="4.5" fill="#8C7CFF"/>
+  <rect x="31" y="62.5" width="30" height="9" rx="4.5" fill="#FF7A59"/>
+  <path d="M69 32V77" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  <path d="M64 28.5H74L69 34.5Z" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+</svg>

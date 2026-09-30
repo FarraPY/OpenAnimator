@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
+  <!-- Silueta para el ícono temático de Android 13+ (el sistema la pinta con el color del tema). -->
+  <g fill="#000">
+    <rect x="31" y="36.5" width="30" height="9" rx="4.5"/>
+    <rect x="31" y="49.5" width="46" height="9" rx="4.5"/>
+    <rect x="31" y="62.5" width="30" height="9" rx="4.5"/>
+    <path d="M64 28.5H74L69 34.5Z" stroke="#000" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+  <path d="M69 32V77" stroke="#000" stroke-width="3" stroke-linecap="round"/>
+</svg>

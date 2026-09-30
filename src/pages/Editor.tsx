@@ -9,7 +9,7 @@ import ExportDialog from '../components/ExportDialog'
 import ExportAndroid from '../android/ui/ExportAndroid'
 import ClaudeSide from '../android/ui/ClaudeSide'
 import { useBack } from '../android/ui/back'
-import { isAndroid, isTouch } from '../platform'
+import { isAndroid, isTouch, recoveredBoot } from '../platform'
 import SaveTemplate from '../components/SaveTemplate'
 import Modal from '../components/Modal'
 import { useDialogs } from '../components/Dialogs'
@@ -57,7 +57,9 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const tlMenuM = useMenu()
   // ── tablet: pestañas Editor / Claude y paneles que se deslizan ────────────
   const touch = isTouch(), android = isAndroid()
-  const [tab, setTab] = useState<'edit' | 'claude'>('edit')
+  // Tras un reinicio de la página (Android), se vuelve a la misma pestaña.
+  const [tab, setTab] = useState<'edit' | 'claude'>(() => { try { return recoveredBoot && localStorage.getItem('oa.editorTab') === 'claude' ? 'claude' : 'edit' } catch { return 'edit' } })
+  useEffect(() => { try { localStorage.setItem('oa.editorTab', tab) } catch { /* sin almacenamiento */ } }, [tab])
   const [drawer, setDrawer] = useState<'media' | 'props' | null>(null)
   const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0 })
   const [seen, setSeen] = useState(0)
@@ -65,6 +67,8 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const projMenu = useMenu()
   const moreMenu = useMenu()
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
+  // El visor se desmonta en la pestaña de Claude: la reproducción se detiene.
+  useEffect(() => { if (tab === 'claude') setPlaying(false) }, [tab])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
   const askClaude = (text: string) => { setTab('claude'); setInject({ text, n: Date.now() }) }
   const fittedTl = useRef(false)
@@ -94,14 +98,30 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
     return () => { call('project:close', projectId) }
   }, [projectId])
 
-  useEffect(() => on('project:changed', async (e: { id: string; kind: string; file: string }) => {
+  // Cambios de archivos (Claude guarda la escena, el timeline, un audio…): llegan en ráfagas, así que se
+  // juntan y se recarga una sola vez cuando paran (antes cada archivo recargaba la escena entera).
+  const changes = useRef<{ project?: boolean; timeline?: boolean; assets?: boolean; timer?: number }>({})
+  useEffect(() => on('project:changed', (e: { id: string; kind: string; file: string }) => {
     if (e.id !== projectId) return
-    if (e.kind === 'project') { const p = await call<Project>('project:get', projectId); setProject(p) }
+    const q = changes.current
+    if (e.kind === 'project') q.project = true
     else if (e.kind === 'timeline') {
       const ref = project?.timelines.find((x) => x.id === tlId)
-      if (ref && e.file === ref.file.replace(/\\/g, '/')) { const x = await call<TL>('timeline:get', projectId, tlId); setTl(x); stage.current?.reload() }
-    } else { refreshAssets(); stage.current?.reload() }
+      if (ref && e.file === ref.file.replace(/\\/g, '/')) q.timeline = true
+    } else q.assets = true
+    window.clearTimeout(q.timer)
+    q.timer = window.setTimeout(async () => {
+      const { project: pj, timeline, assets } = changes.current
+      changes.current = {}
+      try {
+        if (pj) setProject(await call<Project>('project:get', projectId))
+        if (timeline) setTl(await call<TL>('timeline:get', projectId, tlId))
+      } catch (err: any) { toast(err.message, true) }
+      if (assets) refreshAssets()
+      if (timeline || assets) stage.current?.reload()
+    }, 400)
   }), [projectId, project, tlId])
+  useEffect(() => () => window.clearTimeout(changes.current.timer), [])
 
   // ── edición con deshacer ──────────────────────────────────────────────────
   const persist = (next: TL) => {
@@ -431,8 +451,11 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
               <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" kbd="F" onClick={toggleFull} />
               </>}
             </div>
-            <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
+            {/* En la tablet, con la pestaña de Claude al frente el visor no se ve: se desmonta para no tener otra
+                copia viva de la escena mientras Claude trabaja (con escenas pesadas la memoria no alcanzaba). */}
+            {!touch || tab === 'edit' ? <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
               onError={(m) => toast(m, true)} bg={full ? 'black' : ed!.stageBg} safeAreas={!full && ed!.safeAreas} thirds={!full && ed!.thirds} onScale={setScale} pad={full ? 0 : 20} />
+              : <div className="stage-wrap" />}
             {full && (
               <div className="fs-bar" onMouseMove={(e) => e.stopPropagation()} onMouseEnter={() => { window.clearTimeout(idleTimer.current); setFsIdle(false) }} onMouseLeave={wake}>
                 <input type="range" className="fs-scrub" min={0} max={tl.duration} step={1 / fps} value={t} style={{ ['--pct' as any]: `${(t / Math.max(0.001, tl.duration)) * 100}%` }}

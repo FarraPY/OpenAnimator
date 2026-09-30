@@ -29,12 +29,23 @@ export default function ClaudeSide({ projectId, tlId, tl, t, fps, visible, busy,
   }
   // Al entrar a la pantalla y cuando cambia el instante o el timeline.
   useEffect(() => { if (visible) { window.clearTimeout(timer.current); timer.current = window.setTimeout(refresh, 250) } }, [visible, tlId, t])
-  // Claude guardó algo: se vuelve a dibujar (agrupado, sin ahogar a la tablet mientras trabaja).
+  // Claude guardó algo: mientras sigue trabajando no se redibuja (compite con lo que él mismo está
+  // dibujando para revisar); se redibuja una vez cuando termina. Sin Claude, agrupado.
+  const dirty = useRef(false)
+  const busyRef = useRef(busy)
+  busyRef.current = busy
   useEffect(() => on('project:changed', (e: { id: string }) => {
     if (e.id !== projectId) return
+    if (busyRef.current) { dirty.current = true; return }
     window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(refresh, 2200)
+    timer.current = window.setTimeout(refresh, 1200)
   }), [projectId])
+  useEffect(() => {
+    if (busy || !dirty.current) return
+    dirty.current = false
+    window.clearTimeout(timer.current)
+    timer.current = window.setTimeout(refresh, 800)
+  }, [busy])
   useEffect(() => () => window.clearTimeout(timer.current), [])
 
   const clips = tl.tracks.reduce((n, x) => n + x.clips.length, 0)

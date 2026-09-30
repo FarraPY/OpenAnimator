@@ -53,6 +53,27 @@ class TermuxChat extends ClaudeStreamSession {
 
   private reset() { this.running = false; this.ready = false; this.queue = []; this.proc = '' }
 
+  /** Retoma una conversación que siguió corriendo en Termux mientras Android reiniciaba la página. */
+  adopt(r: T.Adoptable) {
+    const proc = r.proc
+    this.proc = proc
+    this.running = true
+    this.ready = true
+    this.queue = []
+    T.attachProc(proc, this.opts.projectId, {
+      out: (m) => { if (this.proc === proc) this.onMessage(m) },
+      exit: (code, err) => { if (this.proc === proc) { this.reset(); this.closed(code, err) } },
+    })
+    this.replay(r.history || [])
+    this.notice(r.busy
+      ? 'Android reinició la app (seguramente por falta de memoria), pero Claude siguió trabajando en Termux: la conversación sigue acá.'
+      : 'Android reinició la app (seguramente por falta de memoria): la conversación sigue acá.', 'info')
+    this.busy = !!r.busy
+    // Permisos que quedaron sin responder: se vuelven a mostrar (o se conceden solos, como siempre).
+    for (const p of r.perms || []) this.onMessage(p)
+    this.state()
+  }
+
   protected writeLine(obj: unknown) {
     if (!this.running) return
     if (this.ready) { try { T.sendProc(this.proc, obj) } catch (e: any) { this.notice(e.message, 'error') } } else this.queue.push(obj)
@@ -101,6 +122,29 @@ export async function createChat(projectId: string, o?: { resume?: string }) {
   return snapshot(chat)
 }
 export function getChat(id: string) { const c = chats.get(id); return c ? snapshot(c) : null }
+
+/**
+ * Tras un reinicio de la página: las conversaciones que siguen vivas en el puente se retoman (una por
+ * proyecto: si hubiera más, queda la que está trabajando) y se avisan a index.ts para que el editor
+ * las encuentre al volver al proyecto.
+ */
+export function enableAdoption(onAdopted: (id: string, projectId: string) => void) {
+  T.setAdopter((list) => {
+    const keep = new Map<string, T.Adoptable>()
+    for (const r of list) {
+      if (!r.project || !projectDir(r.project)) { T.killProc(r.proc); continue }
+      const cur = keep.get(r.project)
+      if (!cur || (r.busy && !cur.busy)) { if (cur) T.killProc(cur.proc); keep.set(r.project, r) } else T.killProc(r.proc)
+    }
+    for (const r of keep.values()) {
+      const chat = new TermuxChat(options(r.project, r.sessionId || undefined), (e) => send('chat:event', e))
+      if (r.sessionId) chat.sessionId = r.sessionId
+      chat.adopt(r)
+      chats.set(chat.id, chat)
+      onAdopted(chat.id, r.project)
+    }
+  })
+}
 export async function listSessions(projectId: string) {
   try { return await T.request('sessions', { project: projectId }) } catch { return [] }
 }

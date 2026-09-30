@@ -29,7 +29,7 @@ import crypto from 'node:crypto'
 import readline from 'node:readline'
 import { spawn, execFile } from 'node:child_process'
 
-const VERSION = 3
+const VERSION = 4
 const HOME = os.homedir()
 const DIR = path.join(HOME, '.openanimator')
 const TMP = path.join(DIR, 'tmp')
@@ -113,9 +113,13 @@ async function startProc(procId, o) {
   const mcpFile = path.join(TMP, `mcp-${safeId(procId)}.json`)
   const server = { command: process.execPath, args: [path.join(DIR, 'oa-mcp.mjs')], env: { OA_PORT: String(PORT), OA_PROC: procId, OA_KEY: key } }
   fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { openanimator: server } }), { mode: 0o600 })
+  // --setting-sources "": sin la configuración del usuario en Termux (hooks, complementos, permisos propios).
+  // Un complemento instalado ahí le agregaba instrucciones a la conversación; la de la app va aislada.
+  // Lo único que la instalación de Termux necesita de esa configuración (no actualizarse solo) lo pone
+  // DISABLE_AUTOUPDATER en claudeEnv().
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--permission-prompt-tool', 'stdio', '--permission-mode', MODES.has(o.permissionMode) ? o.permissionMode : 'acceptEdits',
-    '--mcp-config', mcpFile, '--strict-mcp-config']
+    '--mcp-config', mcpFile, '--strict-mcp-config', '--setting-sources', '']
   if (await supportsToolsFlag()) args.push('--tools', '')
   else args.push('--disallowedTools', BUILTIN.join(','))
   if (typeof o.system === 'string' && o.system) args.push('--append-system-prompt', o.system)
@@ -125,14 +129,18 @@ async function startProc(procId, o) {
   if (EFFORTS.has(o.effort)) args.push('--effort', o.effort)
   if (typeof o.resume === 'string' && /^[\w-]+$/.test(o.resume)) args.push('--resume', o.resume)
   const child = spawn(claudeBin, args, { cwd, env: claudeEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
-  const p = { child, key, tools: Array.isArray(o.tools) ? o.tools : [], errTail: '', mcpFile }
+  // project/sessionId/busy/perms/history: para que una app que se reinició (Android cerró la página por
+  // memoria) pueda retomar la conversación sin cortarla (ver adopt en el hello).
+  const p = { child, key, tools: Array.isArray(o.tools) ? o.tools : [], errTail: '', mcpFile, project: String(o.project || ''), sessionId: null, busy: false, perms: new Map(), history: [], inflight: [] }
   procs.set(procId, p)
   log('start', procId, o.project, o.model || '(modelo por defecto)', o.resume ? `resume ${o.resume}` : '')
   child.stderr.on('data', (d) => { p.errTail = (p.errTail + d).slice(-3000) })
   readline.createInterface({ input: child.stdout, crlfDelay: Infinity }).on('line', (line) => {
     let msg
     try { msg = JSON.parse(line) } catch { return }
-    send({ t: 'out', proc: procId, msg: slim(msg) })
+    msg = slim(msg)
+    track(p, msg)
+    send({ t: 'out', proc: procId, msg })
   })
   child.on('error', (e) => { p.errTail += `\n${e.message}` })
   child.on('close', (code, signal) => {
@@ -143,6 +151,42 @@ async function startProc(procId, o) {
     send({ t: 'exit', proc: procId, code: code ?? (signal ? 1 : 0), err: p.errTail.trim().slice(-2000) })
   })
 }
+
+/** Una versión liviana de un mensaje para la historia (las entradas y resultados largos se recortan). */
+function lite(m) {
+  const cut = (v) => (typeof v === 'string' && v.length > 4000 ? v.slice(0, 4000) + '…' : v)
+  const c = m?.message?.content
+  if (!Array.isArray(c)) return m
+  const content = c.map((b) => {
+    if (b?.type === 'tool_use' && b.input && typeof b.input === 'object') return { ...b, input: Object.fromEntries(Object.entries(b.input).map(([k, v]) => [k, cut(v)])) }
+    if (b?.type === 'tool_result') return { ...b, content: typeof b.content === 'string' ? cut(b.content) : Array.isArray(b.content) ? b.content.map((x) => (x?.type === 'text' ? { ...x, text: cut(x.text) } : x)) : b.content }
+    return b
+  })
+  return { ...m, message: { ...m.message, content } }
+}
+
+/**
+ * Lo que hace falta para retomar la conversación: los mensajes completos (history), lo que está llegando
+ * del mensaje en curso (inflight), si está trabajando y los permisos sin responder.
+ */
+function track(p, m) {
+  if (m.type === 'stream_event') { p.inflight.push(m); if (p.inflight.length > 5000) p.inflight.shift(); return }
+  if (m.type === 'system' && m.subtype === 'init') p.sessionId = m.session_id || p.sessionId
+  if (m.type === 'result') p.busy = false
+  if (m.type === 'control_request') { if (m.request?.subtype === 'can_use_tool') p.perms.set(m.request_id, m); return }
+  if (m.type === 'control_response' || m.type === 'active_goal' || m.type === 'autocompact_state' || m.type === 'rate_limit_event' || (m.type === 'system' && m.subtype === 'thinking_tokens')) return
+  p.inflight = []
+  p.history.push(lite(m))
+  if (p.history.length > 800) p.history.splice(0, p.history.length - 800)
+}
+
+function userEcho(msg) {
+  const c = msg?.message?.content
+  const text = typeof c === 'string' ? c : Array.isArray(c) ? c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : ''
+  return { type: 'oa_user', text, images: Array.isArray(c) ? c.filter((b) => b?.type === 'image').length : 0 }
+}
+
+const procList = () => [...procs].map(([proc, p]) => ({ proc, project: p.project, sessionId: p.sessionId, busy: p.busy, perms: [...p.perms.values()], history: [...p.history, ...p.inflight] }))
 
 function killProc(procId) {
   const p = procs.get(procId)
@@ -429,12 +473,19 @@ let appQueue = Promise.resolve()
 let outbox = [] // lo que sale mientras la app no está conectada (p. ej. se cerró la pantalla un momento)
 let outboxBytes = 0
 let lastApp = Date.now()
+let holding = false // la app está retomando conversaciones: lo que sale espera a su "flush" (en orden)
 function send(obj) {
   const line = JSON.stringify(obj) + '\n'
-  if (app && !app.destroyed) { app.write(line); return }
+  if (app && !app.destroyed && (!holding || obj.t === 'reply' || obj.t === 'pong')) { app.write(line); return }
   outbox.push(line)
   outboxBytes += line.length
   while (outboxBytes > 8 << 20 && outbox.length) outboxBytes -= outbox.shift().length
+}
+function flushOutbox() {
+  if (!app || app.destroyed) return
+  const pending = outbox
+  outbox = []; outboxBytes = 0
+  for (const l of pending) app.write(l)
 }
 
 async function fromApp(m) {
@@ -447,9 +498,13 @@ async function fromApp(m) {
       return
     case 'in': {
       const p = procs.get(String(m.proc))
-      if (p && !p.child.stdin.destroyed) p.child.stdin.write(JSON.stringify(m.msg) + '\n')
+      if (!p) return
+      if (m.msg?.type === 'user') { p.busy = true; p.inflight = []; p.history.push(userEcho(m.msg)) }
+      if (m.msg?.type === 'control_response') p.perms.delete(m.msg.response?.request_id)
+      if (!p.child.stdin.destroyed) p.child.stdin.write(JSON.stringify(m.msg) + '\n')
       return
     }
+    case 'flush': holding = false; flushOutbox(); return
     case 'kill': killProc(String(m.proc)); return
     case 'toolResult': {
       const c = calls.get(m.call)
@@ -509,12 +564,15 @@ function listen(token) {
           if (app && app !== sock) app.destroy()
           app = sock
           lastApp = Date.now()
-          // Una app recién abierta no conoce las conversaciones viejas: se cierran.
+          // Una app recién abierta no conoce las conversaciones viejas: se cierran. Una que se reinició
+          // (Android cerró la página por falta de memoria) las retoma: recibe su historia y lo que salió
+          // mientras tanto ya está en ella, así que lo guardado se descarta y lo nuevo espera su "flush".
           if (m.fresh) { for (const id of [...procs.keys()]) killProc(id); dropJobs(); outbox = []; outboxBytes = 0 }
-          sock.write(JSON.stringify({ t: 'hello', ok: true, version: VERSION, pid: process.pid }) + '\n')
-          const pending = outbox
-          outbox = []; outboxBytes = 0
-          for (const l of pending) sock.write(l)
+          const adopt = !m.fresh && !!m.adopt
+          if (adopt) { outbox = []; outboxBytes = 0 }
+          holding = adopt
+          sock.write(JSON.stringify({ t: 'hello', ok: true, version: VERSION, pid: process.pid, ...(adopt ? { procs: procList() } : {}) }) + '\n')
+          if (!adopt) flushOutbox()
         } else if (m.t === 'mcp' && procs.get(String(m.proc)) && sameToken(m.key, procs.get(String(m.proc)).key)) {
           role = 'mcp'
           procId = String(m.proc)

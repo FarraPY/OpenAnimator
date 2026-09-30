@@ -97,6 +97,9 @@ export class Renderer {
     })
   }
 
+  /** Sin pedidos en curso (se puede cerrar sin cortarle nada a nadie). */
+  get idle() { return !this.pending.size && !this.reloading }
+
   destroy() {
     renderers.delete(this)
     this.pending.forEach((p) => p.reject(new Error('cancelado')))
@@ -134,6 +137,11 @@ async function getRenderer(projectId: string, tlId: string) {
 
 export function closeFramePool(projectId?: string) {
   for (const [k, r] of pool) if (!projectId || k.startsWith(projectId + '|')) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
+}
+
+/** Poca memoria: cierra los compositores ocultos que no están dibujando nada (se vuelven a abrir al pedirlos). */
+export function trimFramePool() {
+  for (const [k, r] of pool) if (r.idle) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
 }
 
 /**

@@ -4,6 +4,7 @@
  * en la PC y en la tablet. Lo que en Windows hace Node/FFmpeg acá lo hacen Java (host) y el WebView.
  */
 import type { AppInfo, Project, Timeline } from '../../api'
+import { recoveredBoot } from '../../platform'
 import { host } from '../host'
 import * as P from './projects'
 import * as S from './settings'
@@ -285,6 +286,22 @@ const engine = async (id?: string) => (((id && chatMode.get(id)) || claudeMode()
  * editor las retoma al volver al proyecto. Se cierran solas tras media hora sin actividad.
  */
 const parked = new Map<string, { id: string; since: number }>() // proyecto → conversación
+/**
+ * Android reinició la página (el motor web se cerró por falta de memoria): con Claude en Termux, las
+ * conversaciones siguieron corriendo en el puente y se retoman antes de que el editor pida la suya.
+ */
+let adopting: Promise<void> | null = null
+function adoptAfterRestart() {
+  if (!recoveredBoot || claudeMode() !== 'termux') return
+  adopting = (async () => {
+    const T = await import('./termux')
+    const st = T.termuxStatus()
+    if (!st.installed || !st.permission) return
+    const C = await code()
+    C.enableAdoption((id, projectId) => { chatMode.set(id, 'termux'); chatProject.set(id, projectId); parked.set(projectId, { id, since: Date.now() }) })
+    await T.bridge()
+  })().catch((e) => console.error('No se pudieron retomar las conversaciones:', e)).finally(() => { adopting = null })
+}
 const PARK_MS = 30 * 60e3
 async function chatBusy(projectId: string) {
   for (const [id, pid] of chatProject) if (pid === projectId && (await (await engine(id)).getChat(id))?.busy) return true
@@ -325,6 +342,7 @@ h('chat:leave', async (id) => {
 })
 // El editor vuelve a abrir el proyecto: retoma la conversación que dejó (o null para empezar una nueva).
 h('chat:forProject', async (projectId) => {
+  if (adopting) await Promise.race([adopting, new Promise((r) => setTimeout(r, 20000))])
   const p = parked.get(projectId)
   parked.delete(projectId)
   return p ? (await engine(p.id)).getChat(p.id) : null
@@ -374,6 +392,8 @@ export function installBackend() {
   hst.onEvent('open', () => send('app:open', null))
   hst.onEvent('pause', () => send('app:pause', null))
   hst.onEvent('resume', () => send('app:resume', null))
+  hst.onEvent('memory', () => F.trimFramePool())
+  adoptAfterRestart()
   return oa
 }
 

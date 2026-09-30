@@ -130,6 +130,7 @@ export function ClaudeSection() {
       <Row label="Modo ahorro" desc="Claude gasta menos: mira fotogramas más chicos y menos veces, no relee archivos, resume adjuntos largos y responde corto."><Switch checked={s.claude.saver !== false} onChange={(v) => up({ claude: { saver: v } })} /></Row>
       <Row label="Mostrar el razonamiento" desc="Ver un resumen de lo que Claude piensa mientras trabaja."><Switch checked={s.claude.showThinking} onChange={(v) => up({ claude: { showThinking: v } })} /></Row>
       <Row label="Mostrar costo y duración" desc="Al final de cada respuesta (estimado según los precios de la API)."><Switch checked={s.claude.showCost} onChange={(v) => up({ claude: { showCost: v } })} /></Row>
+      <Row label="Seguir la última conversación" desc="Al abrir un proyecto, Claude sigue donde quedó (con el botón + empezás una nueva)."><Switch checked={s.claude.continueChat !== false} onChange={(v) => up({ claude: { continueChat: v } })} /></Row>
       <Row label="Adjuntar el fotograma actual" desc="Cada mensaje incluye la imagen del visor en el cursor."><Switch checked={s.claude.autoAttachFrame} onChange={(v) => up({ claude: { autoAttachFrame: v } })} /></Row>
     </Group>
     {dlg.element}

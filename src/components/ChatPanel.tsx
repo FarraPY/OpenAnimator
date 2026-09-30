@@ -1,4 +1,4 @@
-import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
 import { isAndroid } from '../platform'
 import { useApp } from '../App'
@@ -140,6 +140,78 @@ function ContextRing({ pct, level }: { pct: number; level: number }) {
   )
 }
 
+/**
+ * Un mensaje del chat. Memoizado: mientras Claude escribe sólo cambia el último, y re-dibujar (y volver a
+ * leer el markdown de) toda la conversación con cada palabra trababa la tablet en conversaciones largas.
+ */
+const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, showCost, since }: {
+  it: ChatItem; session: string | null; projectId: string; showThinking: boolean; showCost: boolean; since?: number
+}) {
+  if (it.kind === 'user') return (
+    <div key={it.id} className="msg-user">{it.text?.replace(/\n\n\(Contexto del editor:[\s\S]*$/, '').split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
+      {it.files?.length || it.images ? <div className="att-row">
+        {it.files?.map((f) => <span key={f} className="att"><Icon name={/\.(png|jpe?g|webp|gif)$/i.test(f) ? 'image' : 'file'} size={12} />{f.split('/').pop()}</span>)}
+        {(it.images || 0) > (it.files?.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length || 0) && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
+      </div> : null}</div>
+  )
+  if (it.kind === 'assistant') return it.text ? (
+    <div key={it.id} className="msg-ai"><span className="msg-ai-avatar"><Icon name="sparkles" size={13} stroke={2} /></span><div className="msg-ai-body"><Markdown text={it.text} /></div></div>
+  ) : null
+  if (it.kind === 'thinking') {
+    // Los tokens estimados muestran que sigue razonando aunque el texto del razonamiento no llegue.
+    const tok = it.tokens ? <span className="t3 tabnum" data-tip="Tokens de razonamiento estimados">· {kTok(it.tokens)} tokens</span> : null
+    if (it.status === 'streaming') return (
+      <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={since || Date.now()} />{tok}
+        {showThinking && it.text ? <div className="think-text">{it.text.slice(-500)}</div> : null}</div>
+    )
+    const secs = it.durationMs ? Math.max(1, Math.round(it.durationMs / 1000)) : null
+    if (showThinking && it.text) return <details key={it.id} className="think"><summary><Icon name="brain" size={12} />Razonamiento{secs ? ` · ${dur(secs)}` : ''}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}<Icon name="chevron-down" size={11} /></summary><div className="think-text full">{it.text}</div></details>
+    return secs && secs >= 2 ? <div key={it.id} className="think done"><Icon name="brain" size={12} />Pensó {dur(secs)}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}</div> : null
+  }
+  if (it.kind === 'notice') return <div key={it.id} className={`notice ${it.level || ''}`}><Icon name={it.level === 'error' ? 'x-circle' : it.level === 'warn' ? 'alert' : 'info'} size={14} />{it.text}</div>
+  if (it.kind === 'result') return it.isError
+    ? <div key={it.id} className="notice error"><Icon name="x-circle" size={14} />{it.text}</div>
+    : showCost ? <div key={it.id} className="turn-meta"><span className="row" style={{ gap: 4 }}><Icon name="check" size={11} />listo</span>{it.durationMs ? <span>{(it.durationMs / 1000).toFixed(0)} s</span> : null}{it.cost ? <span>US$ {it.cost.toFixed(3)}</span> : null}</div> : null
+  if (it.kind === 'tool') {
+    const m = toolMeta(it)
+    const media = !it.isError && it.result ? /guardad[oa] en (assets\/\S+?\.(png|jpe?g|webp|mp3|wav))/i.exec(it.result) : null
+    return (
+      <Fragment key={it.id}>
+        <details className="tool-card">
+          <summary>
+            <span className="tool-state">{it.status === 'ejecutando' ? <Spinner size={12} /> : <Icon name={it.isError ? 'x-circle' : 'check-circle'} size={13} style={{ color: it.isError ? 'var(--err)' : 'var(--ok)' }} />}</span>
+            <Icon name={m.icon} size={13} /><b>{m.name}</b>
+            <span className="t3 ellipsis grow mono" style={{ fontSize: 11 }}>{m.arg || (it.status === 'ejecutando' && it.streamed ? `escribiendo… ${kSize(it.streamed)}` : '')}</span><Icon name="chevron-down" size={12} />
+          </summary>
+          <pre>{JSON.stringify(it.input, null, 1)?.slice(0, 3000)}{it.result ? '\n\n→ ' + String(it.result).slice(0, 4000) : ''}</pre>
+        </details>
+        {media && (/\.(mp3|wav)$/i.test(media[1])
+          ? <div className="gen-media"><Icon name={/sfx/.test(media[1]) ? 'wave' : 'mic'} size={14} /><span className="mono ellipsis">{media[1].split('/').pop()}</span><audio controls src={fileUrl(projectId, media[1])} /></div>
+          : <div className="gen-media img"><img src={fileUrl(projectId, media[1])} alt="" onClick={() => call('project:reveal', projectId, media[1])} data-tip="Mostrar en la carpeta" /><span className="mono ellipsis">{media[1]}</span></div>)}
+      </Fragment>
+    )
+  }
+  if (it.kind === 'permission') {
+    const m = toolMeta(it)
+    return (
+      <div key={it.id} className="perm-card">
+        <div className="t"><Icon name="shield" size={15} /><div className="grow">Claude quiere usar <b>{m.name}</b>{it.input?.description ? <div className="t3" style={{ fontSize: 12 }}>{it.input.description}</div> : null}</div></div>
+        {m.arg && <div className="perm-cmd">{it.input?.command || m.arg}</div>}
+        {it.status === 'pendiente'
+          ? <div className="row" style={{ gap: 6 }}>
+            <Button size="sm" variant="primary" icon="check" onClick={() => call('chat:permission', session, it.id, true)}>Permitir</Button>
+            <Button size="sm" tip="No volver a preguntar por esta herramienta en este chat" onClick={() => call('chat:permission', session, it.id, true, true)}>Permitir siempre</Button>
+            <div className="grow" />
+            <Button size="sm" variant="ghost" onClick={() => call('chat:permission', session, it.id, false)}>Rechazar</Button>
+          </div>
+          : <span className="t3 row" style={{ gap: 5, fontSize: 12 }}><Icon name={it.status === 'rechazado' ? 'x' : 'check'} size={12} />{it.status}</span>}
+      </div>
+    )
+  }
+  return null
+        
+})
+
 export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number }
 export default function ChatPanel({ projectId, context, visible, windowMode, attachTo, onStatus, inject }: {
   projectId: string; context: () => Ctx | Promise<Ctx>; visible: boolean
@@ -186,8 +258,18 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   }
   const start = async (resume?: string) => load(await call('chat:create', projectId, resume ? { resume } : undefined))
   const reattach = async (id: string) => { const r = await call('chat:get', id); if (r) load(r); else setGone(true) }
-  // Al volver al proyecto (desde Ajustes o el inicio) se retoma la conversación que quedó abierta.
-  const resumeOrStart = async () => { const r = await call('chat:forProject', projectId).catch(() => null); if (r) load(r); else await start() }
+  // Al volver al proyecto (desde Ajustes o el inicio) se retoma la conversación que quedó abierta; si no
+  // hay (se cerró la app o pasó mucho), la última del historial del proyecto, salvo que se pida empezar de cero.
+  const resumeOrStart = async () => {
+    const open = await call('chat:forProject', projectId).catch(() => null)
+    if (open) { load(open); return }
+    const s = settings || await call<any>('settings:get').catch(() => null)
+    if (s?.claude?.continueChat !== false) {
+      const last = (await call<Array<{ id: string }>>('chat:sessions', projectId).catch(() => []))[0]
+      if (last?.id) { try { await start(last.id); return } catch { /* no se pudo retomar: una nueva */ } }
+    }
+    await start()
+  }
   const busyRef = useRef(false)
   busyRef.current = busy
 
@@ -449,70 +531,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             </div>
           </div>
         )}
-        {items.map((it) => {
-          if (it.kind === 'user') return (
-            <div key={it.id} className="msg-user">{it.text?.replace(/\n\n\(Contexto del editor:[\s\S]*$/, '').split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
-              {it.files?.length || it.images ? <div className="att-row">
-                {it.files?.map((f) => <span key={f} className="att"><Icon name={/\.(png|jpe?g|webp|gif)$/i.test(f) ? 'image' : 'file'} size={12} />{f.split('/').pop()}</span>)}
-                {(it.images || 0) > (it.files?.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length || 0) && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
-              </div> : null}</div>
-          )
-          if (it.kind === 'assistant') return it.text ? (
-            <div key={it.id} className="msg-ai"><span className="msg-ai-avatar"><Icon name="sparkles" size={13} stroke={2} /></span><div className="msg-ai-body"><Markdown text={it.text} /></div></div>
-          ) : null
-          if (it.kind === 'thinking') {
-            // Los tokens estimados muestran que sigue razonando aunque el texto del razonamiento no llegue.
-            const tok = it.tokens ? <span className="t3 tabnum" data-tip="Tokens de razonamiento estimados">· {kTok(it.tokens)} tokens</span> : null
-            if (it.status === 'streaming') return (
-              <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={seen.current.get(it.id) || Date.now()} />{tok}
-                {showThinking && it.text ? <div className="think-text">{it.text.slice(-500)}</div> : null}</div>
-            )
-            const secs = it.durationMs ? Math.max(1, Math.round(it.durationMs / 1000)) : null
-            if (showThinking && it.text) return <details key={it.id} className="think"><summary><Icon name="brain" size={12} />Razonamiento{secs ? ` · ${dur(secs)}` : ''}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}<Icon name="chevron-down" size={11} /></summary><div className="think-text full">{it.text}</div></details>
-            return secs && secs >= 2 ? <div key={it.id} className="think done"><Icon name="brain" size={12} />Pensó {dur(secs)}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}</div> : null
-          }
-          if (it.kind === 'notice') return <div key={it.id} className={`notice ${it.level || ''}`}><Icon name={it.level === 'error' ? 'x-circle' : it.level === 'warn' ? 'alert' : 'info'} size={14} />{it.text}</div>
-          if (it.kind === 'result') return it.isError
-            ? <div key={it.id} className="notice error"><Icon name="x-circle" size={14} />{it.text}</div>
-            : showCost ? <div key={it.id} className="turn-meta"><span className="row" style={{ gap: 4 }}><Icon name="check" size={11} />listo</span>{it.durationMs ? <span>{(it.durationMs / 1000).toFixed(0)} s</span> : null}{it.cost ? <span>US$ {it.cost.toFixed(3)}</span> : null}</div> : null
-          if (it.kind === 'tool') {
-            const m = toolMeta(it)
-            const media = !it.isError && it.result ? /guardad[oa] en (assets\/\S+?\.(png|jpe?g|webp|mp3|wav))/i.exec(it.result) : null
-            return (
-              <Fragment key={it.id}>
-                <details className="tool-card">
-                  <summary>
-                    <span className="tool-state">{it.status === 'ejecutando' ? <Spinner size={12} /> : <Icon name={it.isError ? 'x-circle' : 'check-circle'} size={13} style={{ color: it.isError ? 'var(--err)' : 'var(--ok)' }} />}</span>
-                    <Icon name={m.icon} size={13} /><b>{m.name}</b>
-                    <span className="t3 ellipsis grow mono" style={{ fontSize: 11 }}>{m.arg || (it.status === 'ejecutando' && it.streamed ? `escribiendo… ${kSize(it.streamed)}` : '')}</span><Icon name="chevron-down" size={12} />
-                  </summary>
-                  <pre>{JSON.stringify(it.input, null, 1)?.slice(0, 3000)}{it.result ? '\n\n→ ' + String(it.result).slice(0, 4000) : ''}</pre>
-                </details>
-                {media && (/\.(mp3|wav)$/i.test(media[1])
-                  ? <div className="gen-media"><Icon name={/sfx/.test(media[1]) ? 'wave' : 'mic'} size={14} /><span className="mono ellipsis">{media[1].split('/').pop()}</span><audio controls src={fileUrl(projectId, media[1])} /></div>
-                  : <div className="gen-media img"><img src={fileUrl(projectId, media[1])} alt="" onClick={() => call('project:reveal', projectId, media[1])} data-tip="Mostrar en la carpeta" /><span className="mono ellipsis">{media[1]}</span></div>)}
-              </Fragment>
-            )
-          }
-          if (it.kind === 'permission') {
-            const m = toolMeta(it)
-            return (
-              <div key={it.id} className="perm-card">
-                <div className="t"><Icon name="shield" size={15} /><div className="grow">Claude quiere usar <b>{m.name}</b>{it.input?.description ? <div className="t3" style={{ fontSize: 12 }}>{it.input.description}</div> : null}</div></div>
-                {m.arg && <div className="perm-cmd">{it.input?.command || m.arg}</div>}
-                {it.status === 'pendiente'
-                  ? <div className="row" style={{ gap: 6 }}>
-                    <Button size="sm" variant="primary" icon="check" onClick={() => call('chat:permission', session, it.id, true)}>Permitir</Button>
-                    <Button size="sm" tip="No volver a preguntar por esta herramienta en este chat" onClick={() => call('chat:permission', session, it.id, true, true)}>Permitir siempre</Button>
-                    <div className="grow" />
-                    <Button size="sm" variant="ghost" onClick={() => call('chat:permission', session, it.id, false)}>Rechazar</Button>
-                  </div>
-                  : <span className="t3 row" style={{ gap: 5, fontSize: 12 }}><Icon name={it.status === 'rechazado' ? 'x' : 'check'} size={12} />{it.status}</span>}
-              </div>
-            )
-          }
-          return null
-        })}
+        {items.map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} />)}
         {busy && !activeNow && <div className="think live"><span className="think-dot" /><span>{last?.kind === 'tool' ? 'Procesando el resultado…' : 'Pensando…'}</span><Elapsed since={busySince || Date.now()} /></div>}
         {busy && !!signalAt && !(last?.kind === 'tool' && last.status === 'ejecutando' && !last.streamed) && !(last?.kind === 'permission' && last.status === 'pendiente') && <Stall key={signalAt} at={signalAt} />}
       </div>

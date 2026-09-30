@@ -7,7 +7,7 @@ import type { Settings } from './settings'
 export const DEFAULTS: Settings = {
   ui: { accent: 'violet', density: 'comfortable', reduceMotion: false, openLastProject: false, confirmDelete: true, homeView: 'grid', homeSort: 'recent' },
   editor: { snap: true, snapFrames: true, followPlayhead: true, waveforms: true, imageDuration: 5, defaultZoom: 60, stageBg: 'dark', safeAreas: false, thirds: false, showChat: true },
-  claude: { permissionMode: 'acceptEdits', model: '', effort: '', extraInstructions: '', saver: true, showThinking: true, showCost: true, autoAttachFrame: false, claudePath: '' },
+  claude: { permissionMode: 'acceptEdits', model: '', effort: '', extraInstructions: '', saver: true, showThinking: true, showCost: true, autoAttachFrame: false, continueChat: true, claudePath: '' },
   export: {},
   exportPrefs: { defaultDir: '', openFolderWhenDone: false, notify: true },
   plugins: {

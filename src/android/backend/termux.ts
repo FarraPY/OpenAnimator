@@ -8,6 +8,7 @@
 import bridgeSrc from '../../../android/termux/bridge.mjs?raw'
 import mcpSrc from '../../../android/termux/oa-mcp.mjs?raw'
 import whisperSrc from '../../../android/termux/whisper-install.sh?raw'
+import { recoveredBoot } from '../../platform'
 import { host } from '../host'
 import { projectChanged } from './events'
 import { fs } from './fsx'
@@ -59,7 +60,16 @@ const replies = new Map<string, { resolve: (v: any) => void; reject: (e: Error) 
 const progress = new Map<string, (pct: number) => void>() // avance de las transcripciones con Whisper
 let current: string | null = null // id de la conexión abierta
 let connecting: Promise<string> | null = null
-let fresh = true // la primera conexión de esta apertura de la app cierra las conversaciones viejas del puente
+let fresh = !recoveredBoot // la primera conexión de esta apertura de la app cierra las conversaciones viejas del puente
+/**
+ * Si la página se reinició (Android cerró el motor web por falta de memoria), la primera conexión en vez
+ * de cerrarlas las retoma: el puente manda cada conversación viva con su historia y retiene lo nuevo
+ * hasta el "flush" (ver adopt en android/termux/bridge.mjs).
+ */
+let adoptPending = recoveredBoot
+export type Adoptable = { proc: string; project: string; sessionId: string | null; busy: boolean; perms: any[]; history: any[] }
+let adopter: ((list: Adoptable[]) => void | Promise<void>) | null = null
+export function setAdopter(fn: (list: Adoptable[]) => void | Promise<void>) { adopter = fn }
 let seq = 0
 
 const sendRaw = (link: string, obj: unknown) => host().call('termux.send', { link, line: JSON.stringify(obj) })
@@ -69,11 +79,11 @@ function sendNow(obj: unknown) {
 }
 
 /** Abre una conexión y se presenta; resuelve con su id (o falla: "sin puente", "token", …). */
-function open(): Promise<{ link: string; version: number }> {
+function open(): Promise<{ link: string; version: number; procs?: Adoptable[] }> {
   const link = `tl${++seq}-${Date.now().toString(36)}`
   return new Promise((resolve, reject) => {
     let greeted = false
-    const hello = JSON.stringify({ t: 'hello', token: token(), version: VERSION, fresh })
+    const hello = JSON.stringify({ t: 'hello', token: token(), version: VERSION, fresh, adopt: adoptPending })
     host().callAsync<boolean>('termux.link', { port: PORT, hello }, {
       id: link,
       onEvent: (e) => {
@@ -82,7 +92,7 @@ function open(): Promise<{ link: string; version: number }> {
         try { m = JSON.parse(e.line) } catch { return }
         if (!greeted) {
           greeted = true
-          if (m.t === 'hello' && m.ok) { fresh = false; resolve({ link, version: m.version }) } else reject(new Error('token'))
+          if (m.t === 'hello' && m.ok) { fresh = false; resolve({ link, version: m.version, procs: m.procs }) } else reject(new Error('token'))
           return
         }
         onMessage(m)
@@ -113,7 +123,7 @@ async function connectOrStart(): Promise<string> {
   if (!st.permission) throw new Error('OpenAnimator todavía no tiene permiso para usar Termux. Dáselo en Ajustes › Claude.')
   try {
     const c = await open()
-    if (c.version === VERSION) { current = c.link; return c.link }
+    if (c.version === VERSION) { current = c.link; await afterConnect(c); return c.link }
     // Un puente de otra versión de la app: se reemplaza.
     host().call('termux.close', { link: c.link })
   } catch (e: any) {
@@ -129,9 +139,26 @@ async function connectOrStart(): Promise<string> {
       const detail = tail(r.stderr || r.stdout || r.errmsg) || 'sin detalles'
       throw new Error(hint(detail) ? `${hint(detail)} (Detalle: ${detail})` : `El puente de Termux se cerró al arrancar (código ${r.exitCode}): ${detail}`)
     }
-    try { const c = await open(); current = c.link; return c.link } catch (e) { last = e }
+    let c: Awaited<ReturnType<typeof open>>
+    try { c = await open() } catch (e) { last = e; continue }
+    current = c.link
+    await afterConnect(c)
+    return c.link
   }
   throw new Error(`El puente de Termux no arrancó (${last?.message || 'sin respuesta'}). ${await diagnose()}`)
+}
+
+/** Después de conectar tras un reinicio de la página: retoma (o cierra) las conversaciones vivas y suelta lo retenido. */
+async function afterConnect(c: { procs?: Adoptable[] }) {
+  if (!adoptPending) return
+  adoptPending = false
+  const list = c.procs || []
+  try {
+    if (list.length && adopter) await adopter(list)
+    else for (const p of list) sendNow({ t: 'kill', proc: p.proc })
+  } catch (e) { console.error(e) } finally {
+    try { sendNow({ t: 'flush' }) } catch { /* se cortó */ }
+  }
 }
 
 const tail = (t: string, n = 4) => (t || '').trim().split('\n').slice(-n).join(' · ').slice(0, 600)
@@ -252,6 +279,8 @@ export async function startProc(proc: string, project: string, opts: Record<stri
   procs.set(proc, { ...h, project })
   sendNow({ t: 'start', proc, opts: { ...opts, project } })
 }
+/** Una conversación que ya corre en el puente (retomada tras un reinicio de la página). */
+export function attachProc(proc: string, project: string, h: Omit<Proc, 'project'>) { procs.set(proc, { ...h, project }) }
 export function sendProc(proc: string, msg: unknown) { sendNow({ t: 'in', proc, msg }) }
 export function killProc(proc: string) {
   procs.delete(proc)

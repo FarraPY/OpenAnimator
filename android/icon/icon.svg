@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="18 18 72 72" width="512" height="512">
+  <!-- Ícono completo (PC y Android viejo): fondo y frente recortados en un cuadrado redondeado. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1A1726"/><stop offset="1" stop-color="#0B0A10"/></linearGradient>
+    <radialGradient id="gl" cx=".85" cy=".85" r=".8"><stop offset="0" stop-color="#7C6BFF" stop-opacity=".35"/><stop offset="1" stop-color="#7C6BFF" stop-opacity="0"/></radialGradient>
+    <clipPath id="shape"><rect x="18" y="18" width="72" height="72" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#shape)">
+    <rect width="108" height="108" fill="url(#bg)"/>
+    <rect width="108" height="108" fill="url(#gl)"/>
+    <rect x="31" y="36.5" width="30" height="9" rx="4.5" fill="#2DD4BF"/>
+    <rect x="31" y="49.5" width="46" height="9" rx="4.5" fill="#8C7CFF"/>
+    <rect x="31" y="62.5" width="30" height="9" rx="4.5" fill="#FF7A59"/>
+    <path d="M69 32V77" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+    <path d="M64 28.5H74L69 34.5Z" fill="#fff" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+  </g>
+</svg>

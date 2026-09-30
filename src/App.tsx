@@ -6,7 +6,7 @@ import ChatPanel from './components/ChatPanel'
 import { AppInfo, call, Settings, SettingsPatch } from './api'
 import { Icon } from './ui/icons'
 import { TooltipLayer } from './ui/kit'
-import { isAndroid } from './platform'
+import { isAndroid, recoveredBoot } from './platform'
 import AndroidIntegration from './android/ui/Integration'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
@@ -28,7 +28,10 @@ export default function App() {
   const initialOpen = qs.get('open')
   // Ventana de chat separada: ?chat=<proyecto>&session=<conversación>
   const chatWin = qs.get('chat') ? { project: qs.get('chat')!, session: qs.get('session') || '' } : null
-  const [route, setRoute] = useState<Route>(initialOpen ? { page: 'editor', id: initialOpen } : { page: 'home' })
+  // Android reinició la página (su motor web se cerró, casi siempre por falta de memoria): se vuelve al
+  // proyecto que estaba abierto.
+  const recoveredTo = recoveredBoot && !initialOpen && !chatWin ? (() => { try { return localStorage.getItem('oa.openProject') || '' } catch { return '' } })() : ''
+  const [route, setRoute] = useState<Route>(initialOpen ? { page: 'editor', id: initialOpen } : recoveredTo ? { page: 'editor', id: recoveredTo } : { page: 'home' })
   const [toasts, setToasts] = useState<ToastT[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -56,8 +59,12 @@ export default function App() {
     call<AppInfo>('app:info').then(setInfo).catch(() => {})
     call<Settings>('settings:get').then((s) => {
       setSettings(s)
-      if (!initialOpen && !chatWin && s.ui.openLastProject && s.lastProject) setRoute({ page: 'editor', id: s.lastProject })
+      if (!initialOpen && !chatWin && !recoveredTo && s.ui.openLastProject && s.lastProject) setRoute({ page: 'editor', id: s.lastProject })
     })
+    if (recoveredBoot) {
+      history.replaceState(null, '', location.pathname)
+      toast(recoveredTo ? 'Android reinició la app (seguramente por falta de memoria): volviste a tu proyecto.' : 'Android reinició la app (seguramente por falta de memoria).', 'info')
+    }
   }, [])
 
   // Tema: acento, densidad y animaciones.
@@ -73,6 +80,8 @@ export default function App() {
   const go = useCallback((r: Route) => {
     setRoute(r)
     if (r.page === 'editor') call('settings:set', { lastProject: r.id }).catch(() => {})
+    // Para volver acá si Android reinicia la página (en Ajustes se sigue recordando el proyecto de antes).
+    if (r.page !== 'settings') try { localStorage.setItem('oa.openProject', r.page === 'editor' ? r.id : '') } catch { /* sin almacenamiento */ }
   }, [])
 
   return (

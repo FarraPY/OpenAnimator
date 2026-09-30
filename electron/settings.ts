@@ -40,6 +40,8 @@ export type Settings = {
     showThinking: boolean
     showCost: boolean
     autoAttachFrame: boolean
+    /** Al abrir un proyecto, seguir con su última conversación (si no, una nueva). */
+    continueChat: boolean
     claudePath: string
   }
   export: Partial<ExportSettings>

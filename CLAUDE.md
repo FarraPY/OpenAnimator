@@ -69,7 +69,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
 - Salir del editor NO corta a Claude: ChatPanel manda `chat:leave` (la conversación queda "estacionada" por
   proyecto, sigue el turno) y al volver `chat:forProject` la retoma; sin uso, se cierra a los 30 min. Mientras
-  un chat del proyecto trabaja, `project:close` no cierra el compositor de fotogramas.
+  un chat del proyecto trabaja, `project:close` no cierra el compositor de fotogramas. Si no hay una abierta, se
+  retoma la última del historial (`settings.claude.continueChat`, activado por defecto; el + empieza una nueva).
+- Rendimiento del chat: `ChatRow` memoizado (re-dibujar y re-leer el markdown de toda la conversación con cada
+  palabra trababa la tablet) y el texto que llega de a poco se manda agrupado cada 100 ms (`patchLater`). El editor
+  junta las ráfagas de `project:changed` y recarga una vez (400 ms).
 - Razonamiento oculto (Opus 5.5 en Claude Code): los `thinking_delta` traen sólo `estimated_tokens` → `ChatItem.tokens`
   («Pensando… · N mil tokens»). `signalAt` (última línea de Claude Code) avisa "puede haberse trabado" a los 150 s
   sin señales, salvo mientras corre una herramienta (`streamed` = entrada de la herramienta que va llegando).
@@ -97,6 +101,15 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   de la PC (`electron/claude-session.ts`, compartido); `code.ts` es el transporte. Nunca leer credenciales de Claude.
   Si el puente no arranca, el error trae la salida de Termux y `~/.openanimator/bridge.log`. Trampa vista en la
   tablet: Node.js nuevo con OpenSSL viejo no enlaza (`CANNOT LINK EXECUTABLE`) → la preparación hace `yes | pkg upgrade`.
+- Claude Code en Termux arranca con `--setting-sources ""`: sin hooks, complementos ni permisos de la configuración
+  del usuario (un complemento suyo le metía instrucciones a la conversación). Lo que el instalador de Termux pone ahí
+  (`autoUpdates: false`) lo cubre `DISABLE_AUTOUPDATER=1`.
+- Memoria del WebView: con escenas pesadas el motor web se cerraba (Android reinicia la página). En la pestaña de
+  Claude el visor del editor se desmonta, la vista previa lateral no se redibuja mientras Claude trabaja y
+  `onTrimMemory` → evento `memory` → `trimFramePool()`. Si igual se cierra, Java recarga con `?recovered=1`
+  (`recoveredBoot` en platform.ts): la interfaz vuelve al proyecto y a la pestaña (`localStorage` oa.openProject,
+  oa.editorTab) y el puente, en vez de cerrar las conversaciones (`fresh`), se las pasa a la app (`adopt`: historia,
+  permisos pendientes; retiene lo nuevo hasta `flush`) y code.ts las retoma (`TermuxChat.adopt` + `replay`).
 - Whisper en la tablet: whisper.cpp 1.9.4 compilado en Termux por `android/termux/whisper-install.sh` (commit y
   SHA-1 de los modelos fijados; base/small/large-v3-turbo-q5_0). El audio viaja como PCM 16 kHz por el puente
   (`whisper.put`), `whisper.run` corre `whisper-cli -ojf --dtw <modelo> -nfa -bs 1 -sns -pp` y arma las palabras con
@@ -114,3 +127,6 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`
   (Termux se imita con el puente real, `android/dev/fake-claude.mjs` y, para Whisper, `fake-whisper.mjs`).
   APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.
+- Ícono de la app: fuentes en `android/icon/*.svg` (fondo, frente y silueta del ícono adaptable, e `icon.svg`
+  completo); `node android/scripts/icons.mjs` genera los mipmaps, `build/icon.png` y `build/icon.ico`. El `Logo`
+  de la interfaz (src/ui/icons.tsx) es el mismo dibujo.
