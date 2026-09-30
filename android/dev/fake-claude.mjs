@@ -83,11 +83,13 @@ async function turn(text) {
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, total_cost_usd: 0.01, result: '' })
     return
   }
-  // «[pensar]»: razonamiento oculto (sólo llegan los tokens estimados, como con Opus 5.5) y una respuesta corta.
-  if (/^\[pensar\]/.test(text)) {
+  // «[pensar]» o «[pensar 20]» (segundos, 4 por defecto): razonamiento oculto (sólo llegan los tokens
+  // estimados, como con Opus 5.5) y una respuesta corta.
+  const think = /^\[pensar(?:\s+(\d+))?\]/.exec(text)
+  if (think) {
     out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 15000, cache_creation_input_tokens: 0 } } } })
     out({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } })
-    for (let k = 0; k < 16; k++) {
+    for (let k = 0; k < 4 * (+think[1] || 4); k++) {
       await sleep(250)
       out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '', estimated_tokens: 420 } } })
       out({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 420 * (k + 1), estimated_tokens_delta: 420 })

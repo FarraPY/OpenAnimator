@@ -13,6 +13,8 @@ export type ChatItem = {
   requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: 'info' | 'warn' | 'error'
   /** Razonamiento: tokens estimados hasta ahora (aunque el texto no se muestre). */
   tokens?: number
+  /** Razonamiento: cuándo empezó (así el tiempo sigue bien aunque la interfaz se vuelva a abrir). */
+  at?: number
   /** Herramienta: caracteres de la entrada que ya llegaron mientras Claude la escribe (p. ej. un archivo largo). */
   streamed?: number
 }
@@ -38,7 +40,6 @@ export abstract class ClaudeStreamSession {
   private toolItems = new Map<string, string>()     // tool_use_id → id de item
   private streamedText = false
   private pendingPerms = new Map<string, any>()
-  private thinkStart = new Map<string, number>()
   private usage: ChatStats = { context: 0, window: 200000, cost: 0, turns: 0, compactions: 0, output: 0 }
   private compacting = false
 
@@ -197,7 +198,15 @@ export abstract class ClaudeStreamSession {
   protected onLine(line: string) {
     let m: any
     try { m = JSON.parse(line) } catch { return }
-    // Señal de vida: mientras trabaja, la interfaz se entera cada tanto (si deja de llegar, puede estar trabado).
+    this.received(m)
+  }
+
+  /**
+   * Un mensaje que Claude Code acaba de mandar (en la PC llega como línea; el puente de Termux ya lo manda
+   * leído). Además de procesarlo es una señal de vida: mientras trabaja, la interfaz se entera cada tanto
+   * y, si dejan de llegar, avisa que puede estar trabado.
+   */
+  protected received(m: any) {
     this.signalAt = Date.now()
     this.onMessage(m)
     if (this.busy && Date.now() - this.signalSent > 5000) this.state()
@@ -273,8 +282,7 @@ export abstract class ClaudeStreamSession {
       const b = ev.content_block || {}
       if (b.type === 'text' || b.type === 'thinking' || b.type === 'redacted_thinking') {
         const think = b.type !== 'text'
-        const it: ChatItem = { id: nid(think ? 'th' : 'a'), kind: think ? 'thinking' : 'assistant', text: b.text || b.thinking || '', status: 'streaming' }
-        if (think) this.thinkStart.set(it.id, Date.now())
+        const it: ChatItem = { id: nid(think ? 'th' : 'a'), kind: think ? 'thinking' : 'assistant', text: b.text || b.thinking || '', status: 'streaming', ...(think ? { at: Date.now() } : {}) }
         this.blocks.set(ev.index, it.id)
         this.push(it)
       } else if (b.type === 'tool_use') {
@@ -301,11 +309,7 @@ export abstract class ClaudeStreamSession {
       const it = id && this.items.find((x) => x.id === id)
       // La entrada de la herramienta ya llegó entera: ahora se ejecuta (streamed 0 = ya no se está escribiendo).
       if (it && it.kind === 'tool' && it.streamed) this.patch(it.id, { streamed: 0 })
-      if (it && it.kind !== 'tool') {
-        const t0 = this.thinkStart.get(it.id)
-        this.thinkStart.delete(it.id)
-        this.patch(it.id, { status: 'ok', ...(t0 ? { durationMs: Date.now() - t0 } : {}) })
-      }
+      if (it && it.kind !== 'tool') this.patch(it.id, { status: 'ok', ...(it.at ? { durationMs: Date.now() - it.at } : {}) })
     }
   }
 

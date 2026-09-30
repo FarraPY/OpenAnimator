@@ -451,7 +451,17 @@ public class MainActivity extends Activity {
      * "visible" so Chromium keeps drawing it). No JavaScript interface: it only loads project pages.
      */
     WebView newCaptureView(int width, int height) {
-        WebView v = new WebView(this);
+        WebView v = captureWebView(this);
+        root.addView(v, 0, new FrameLayout.LayoutParams(width, height));
+        return v;
+    }
+
+    /**
+     * A WebView for Capture (see CaptureClient), created with ctx: this activity, or the context of a
+     * Presentation on a virtual display (then its density is the display's, not the tablet's).
+     */
+    WebView captureWebView(Context ctx) {
+        WebView v = new WebView(ctx);
         v.setBackgroundColor(Color.BLACK);
         WebSettings s = v.getSettings();
         s.setJavaScriptEnabled(true);
@@ -471,13 +481,38 @@ public class MainActivity extends Activity {
         v.setFocusableInTouchMode(false);
         v.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         v.setWebViewClient(new CaptureClient());
-        root.addView(v, 0, new FrameLayout.LayoutParams(width, height));
         return v;
     }
 
     void removeCaptureView(WebView v) {
         root.removeView(v);
         v.destroy();
+    }
+
+    private int modeBefore = -1;
+
+    /**
+     * While capturing with the GPU: the screen at its fastest refresh rate (the virtual display gets its
+     * frames at the pace of the screen's vsync, so 120 Hz can double the export speed). on=false restores it.
+     */
+    void preferFastDisplay(boolean on) {
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        if (on) {
+            android.view.Display d = getWindowManager().getDefaultDisplay();
+            android.view.Display.Mode cur = d.getMode(), best = cur;
+            for (android.view.Display.Mode m : d.getSupportedModes()) {
+                if (m.getPhysicalWidth() == cur.getPhysicalWidth() && m.getPhysicalHeight() == cur.getPhysicalHeight()
+                        && m.getRefreshRate() > best.getRefreshRate() + 0.5f) best = m;
+            }
+            if (modeBefore < 0) modeBefore = lp.preferredDisplayModeId;
+            if (lp.preferredDisplayModeId == best.getModeId()) return;
+            lp.preferredDisplayModeId = best.getModeId();
+        } else {
+            if (modeBefore < 0) return;
+            lp.preferredDisplayModeId = modeBefore;
+            modeBefore = -1;
+        }
+        getWindow().setAttributes(lp);
     }
 
     /**

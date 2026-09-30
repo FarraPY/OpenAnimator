@@ -456,10 +456,13 @@ public final class Bridge {
                 return;
             // Captura nativa de la exportación (Capture): abrir el compositor, un fotograma, cerrar.
             case "cap.start":
-                resolve(id, ok(capture.start(a.getString("url"), a.getInt("width"), a.getInt("height"))));
+                resolve(id, ok(capture.start(a.getString("url"), a.getInt("width"), a.getInt("height"), a.optString("mode", "draw"))));
                 return;
             case "cap.frame":
-                resolve(id, ok(capture.frame(a.getDouble("t"), a.optBoolean("preview"))));
+                resolve(id, ok(capture.frame(a.getDouble("t"), a.optJSONArray("next"), a.optBoolean("preview"))));
+                return;
+            case "enc.frames":
+                resolve(id, ok(encoder.frames()));
                 return;
             case "cap.stop":
                 capture.stop();

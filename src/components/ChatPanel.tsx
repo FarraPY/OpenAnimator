@@ -161,7 +161,7 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
     // Los tokens estimados muestran que sigue razonando aunque el texto del razonamiento no llegue.
     const tok = it.tokens ? <span className="t3 tabnum" data-tip="Tokens de razonamiento estimados">· {kTok(it.tokens)} tokens</span> : null
     if (it.status === 'streaming') return (
-      <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={since || Date.now()} />{tok}
+      <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={it.at || since || Date.now()} />{tok}
         {showThinking && it.text ? <div className="think-text">{it.text.slice(-500)}</div> : null}</div>
     )
     const secs = it.durationMs ? Math.max(1, Math.round(it.durationMs / 1000)) : null

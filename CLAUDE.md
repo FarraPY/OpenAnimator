@@ -75,8 +75,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   palabra trababa la tablet) y el texto que llega de a poco se manda agrupado cada 100 ms (`patchLater`). El editor
   junta las ráfagas de `project:changed` y recarga una vez (400 ms).
 - Razonamiento oculto (Opus 5.5 en Claude Code): los `thinking_delta` traen sólo `estimated_tokens` → `ChatItem.tokens`
-  («Pensando… · N mil tokens»). `signalAt` (última línea de Claude Code) avisa "puede haberse trabado" a los 150 s
-  sin señales, salvo mientras corre una herramienta (`streamed` = entrada de la herramienta que va llegando).
+  («Pensando… · N mil tokens»; `at` = cuándo empezó, así el tiempo no vuelve a 0 al reabrir el chat). `signalAt`
+  (último mensaje de Claude Code) avisa "puede haberse trabado" a los 150 s sin señales, salvo mientras corre una
+  herramienta (`streamed` = entrada de la herramienta que va llegando). Todo mensaje entra por `received()` (la
+  tablet los recibe ya leídos): llamar a `onMessage` directo no cuenta como señal y el aviso salta en falso.
 
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente
@@ -126,12 +128,22 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `POST /__dev/sd {present}`; la lógica de Java se probó en la PC con el android-all de Robolectric.
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
-- Exportación con captura directa (`Capture.java`): un WebView del tamaño del video, detrás de la app, abre el
-  compositor con `capture=1` (el escenario se escala a la vista; `__oaCap(t, n)` → `__oaCapDone`, sin interfaz JS);
-  Java espera con `postVisualStateCallback`, dibuja el WebView en un bitmap (dos que se turnan) y lo pasa a
-  `Encoder.frameBitmap` (sin JPEG ni base64). Redibujar el DOM con modern-screenshot era ~90 % del tiempo. Si el
-  primer fotograma sale vacío prueba `LAYER_TYPE_SOFTWARE`; si igual falla, sigue desde ese fotograma con el método
-  compatible. Esa vista nunca carga la página de la app (AppServer le daría otro token al puente).
+- Captura de la exportación (`Capture.java`, compositor con `capture=1`: el escenario se escala a la vista;
+  `__oaCap(t, n)` → `__oaCapDone`, pedidos en orden, sin interfaz JS). Se prueba en orden y, si uno falla a mitad,
+  se sigue con el siguiente desde `enc.frames` (lo que ya está en el video):
+  1. `gpu`: el WebView vive en una pantalla virtual privada (`Presentation`, 160 dpi) de W×(H+16) cuya Surface es
+     una SurfaceTexture en el contexto EGL del codificador: la imagen nunca sale de la GPU. Con `marker=1` la página
+     pinta el número del pedido en una franja de 8 celdas abajo (3 bits por celda; 0 = cambiando) y, antes del
+     siguiente, espera rAF + una tarea. `Encoder.latch` toma cada imagen apenas llega (en su hilo; si no, la
+     pantalla virtual se traba esperando), la codifica si es la esperada (`gpuExpect`), ignora las viejas y, si
+     llega una posterior, la esperada se perdió (se vuelve a pedir). Java pide 2 fotogramas por adelantado y sube
+     la pantalla a su máxima frecuencia (`preferFastDisplay`). Antes, `__oaCapTest` (patrón de 6 colores) comprueba
+     colores, orientación y recorte. Errores de la página: `__oaCapError` (queda aunque sigan pedidos).
+  2. `draw`: un WebView del tamaño del video, detrás de la app; `postVisualStateCallback` y `WebView.draw` en un
+     bitmap (dos que se turnan) → `Encoder.frameBitmap`. El motor dibuja por software (lento; los videos pueden salir
+     negros). Si el primer fotograma sale vacío prueba `LAYER_TYPE_SOFTWARE`.
+  3. compatible: modern-screenshot (era ~90 % del tiempo). La vista de captura nunca carga la página de la app
+     (AppServer le daría otro token al puente). En la PC (server.mjs) el modo gpu se imita con capturas de pantalla.
 - Fotogramas (miniaturas, Claude y el método compatible): el compositor rasteriza el DOM con modern-screenshot
   (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL); el audio, mezclado con Web Audio, a `enc.audio`.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):

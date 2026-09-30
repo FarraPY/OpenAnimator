@@ -22,10 +22,13 @@
  * El puente no tiene token: por defecto sólo escucha en 127.0.0.1 (con --host 0.0.0.0 cualquiera en
  * la red podría leer y escribir la carpeta de datos).
  *
- * La captura directa de la exportación (Capture.java: un WebView del tamaño del video) se imita con el
- * Chromium de Playwright si está instalado (una captura de pantalla por fotograma); sin Playwright, o con
- * OA_DEV_NO_CAPTURE=1, la app usa el método compatible. OA_DEV_CAPTURE_FAIL_AT=n la hace fallar en el
- * fotograma n (para probar el cambio de método a mitad de la exportación).
+ * La captura de la exportación (Capture.java) se imita con el Chromium de Playwright si está instalado
+ * (una captura de pantalla por fotograma). Modo "gpu": la vista es 16 píxeles más alta, se lee la franja
+ * de marca de cada imagen, se comprueba el patrón de prueba y se recorta la franja (sin pedidos por
+ * adelantado: las capturas de pantalla no ven cada imagen como la pantalla virtual). Modo "draw": una
+ * vista del tamaño del video. OA_DEV_NO_GPU=1 hace fallar el modo gpu y OA_DEV_NO_CAPTURE=1 los dos (la
+ * app sigue con el método siguiente); OA_DEV_GPU_FAIL_AT=n / OA_DEV_CAPTURE_FAIL_AT=n hacen fallar el modo
+ * gpu / draw en el fotograma n del video (para probar el cambio de método a mitad de la exportación).
  *
  * El codificador de video (MediaCodec) se imita con ffmpeg y los selectores de archivos con
  * POST /__dev/pick (la próxima selección devuelve esos archivos). Con --mock-claude, los pedidos a
@@ -41,6 +44,7 @@ import crypto from 'node:crypto'
 import { execFile, execFileSync, spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const arg = (name, def) => { const i = process.argv.indexOf(`--${name}`); return i > 0 ? process.argv[i + 1] : def }
@@ -524,26 +528,37 @@ async function playwright() {
   return createRequire(path.join(execFileSync('npm', ['root', '-g']).toString().trim(), 'noop.js'))('playwright')
 }
 async function capClose() { const c = cap; cap = null; if (c) await c.browser.close().catch(() => {}) }
+const MARK = 16, TEST_SEQ = 0x249249 // como Capture.java
 async function capStart(a) {
   await capClose()
-  if (process.env.OA_DEV_NO_CAPTURE === '1') throw new Error('Captura directa desactivada (OA_DEV_NO_CAPTURE)')
+  const gpu = a.mode === 'gpu'
+  if (process.env.OA_DEV_NO_CAPTURE === '1') throw new Error('Captura desactivada (OA_DEV_NO_CAPTURE)')
+  if (gpu && process.env.OA_DEV_NO_GPU === '1') throw new Error('Sin pantalla virtual (OA_DEV_NO_GPU)')
   if (!/[?&]capture=1\b/.test(a.url)) throw new Error('Dirección de captura inválida')
   let chromium
-  try { chromium = (await playwright()).chromium } catch { throw new Error('Captura directa no disponible en el servidor de desarrollo (falta Playwright)') }
+  try { chromium = (await playwright()).chromium } catch { throw new Error('Captura no disponible en el servidor de desarrollo (falta Playwright)') }
   const browser = await chromium.launch()
   try {
-    const page = await browser.newPage({ viewport: { width: a.width, height: a.height }, deviceScaleFactor: 1 })
-    await page.goto(a.url)
+    const page = await browser.newPage({ viewport: { width: a.width, height: a.height + (gpu ? MARK : 0) }, deviceScaleFactor: 1 })
+    await page.goto(a.url + (gpu ? '&marker=1' : ''))
     await page.waitForFunction(() => window.__oaCapReady === true || /^error/.test(String(window.__oaCapReady)), null, { timeout: 60000 })
     const r = await page.evaluate(() => String(window.__oaCapReady))
     if (r !== 'true') throw new Error(r)
-    cap = { browser, page, seq: 0, frames: 0 }
-    return { width: a.width, height: a.height }
-  } catch (e) { await browser.close().catch(() => {}); throw e }
+    cap = { browser, page, gpu, W: a.width, H: a.height, seq: gpu ? TEST_SEQ : 0, frames: 0 }
+    if (gpu) {
+      // El patrón de prueba, como Capture.startGpu: tiene que llegar con su número y con los colores en su lugar.
+      await page.evaluate((n) => { window.__oaCapTest(n) }, TEST_SEQ)
+      const img = await gpuImage(TEST_SEQ, 10000)
+      const bad = checkPattern(img, a.width, a.height)
+      if (bad) throw new Error(`La captura por GPU no coincide con la página (${bad})`)
+    }
+    return { width: a.width, height: a.height, mode: gpu ? 'gpu' : 'draw' }
+  } catch (e) { cap = null; await browser.close().catch(() => {}); throw e }
 }
 async function capFrame(a) {
   if (!cap) throw new Error('La captura no está abierta')
-  if (+process.env.OA_DEV_CAPTURE_FAIL_AT === cap.frames) throw new Error('captura vacía (simulada)')
+  if (cap.gpu) return capFrameGpu(a)
+  if (+process.env.OA_DEV_CAPTURE_FAIL_AT === enc?.frames) throw new Error('captura vacía (simulada)')
   const n = ++cap.seq
   await cap.page.evaluate(([t, n]) => window.__oaCap(t, n), [a.t, n])
   const done = await cap.page.evaluate(() => String(window.__oaCapDone))
@@ -552,6 +567,90 @@ async function capFrame(a) {
   encFrame(jpg)
   cap.frames++
   return a.preview ? { preview: jpg } : {}
+}
+async function capFrameGpu(a) {
+  if (+process.env.OA_DEV_GPU_FAIL_AT === enc?.frames) throw new Error('La pantalla virtual dejó de entregar imágenes (simulado)')
+  const c = cap
+  c.seq = c.seq % 0xFFFFFF + 1
+  const n = c.seq
+  await c.page.evaluate(([t, n]) => { window.__oaCap(t, n) }, [a.t, n]) // sin esperar, como post() en Java
+  const img = await gpuImage(n, 30000)
+  // El video sin la franja: las primeras H filas.
+  const rgb = Buffer.alloc(c.W * c.H * 3)
+  for (let i = 0, j = 0; i < c.W * c.H; i++, j += 4) { rgb[i * 3] = img.data[j]; rgb[i * 3 + 1] = img.data[j + 1]; rgb[i * 3 + 2] = img.data[j + 2] }
+  const jpg = execFileSync('ffmpeg', ['-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${c.W}x${c.H}`, '-i', 'pipe:0', '-q:v', '2', '-f', 'mjpeg', 'pipe:1'], { input: rgb, maxBuffer: 64 << 20 }).toString('base64')
+  encFrame(jpg)
+  c.frames++
+  const now = Date.now()
+  if (now - (c.lastPreview || 0) > 1000) { c.lastPreview = now; return { preview: jpg } }
+  return {}
+}
+/** La próxima imagen de la página que tenga el número n en su franja (lo que hace Encoder.latch). */
+async function gpuImage(n, timeoutMs) {
+  const c = cap, deadline = Date.now() + timeoutMs
+  while (true) {
+    const img = decodePng(await c.page.screenshot({ type: 'png' }))
+    const m = readMark(img, c.W, c.H)
+    if (m === n) return img
+    const err = await c.page.evaluate(() => window.__oaCapError || null)
+    if (err) throw new Error(err)
+    if (Date.now() > deadline) throw new Error(`La pantalla virtual no entregó la imagen ${n} (se ve la ${m})`)
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+/** El número de la franja: celda i = bits 3i (rojo), 3i+1 (verde), 3i+2 (azul). */
+function readMark(img, W, H) {
+  let v = 0
+  const y = H + (MARK >> 1)
+  for (let i = 0; i < 8; i++) {
+    const o = (y * img.width + Math.floor((i + 0.5) * W / 8)) * 4
+    if (img.data[o] > 127) v |= 1 << (3 * i)
+    if (img.data[o + 1] > 127) v |= 1 << (3 * i + 1)
+    if (img.data[o + 2] > 127) v |= 1 << (3 * i + 2)
+  }
+  return v
+}
+/** Capture.checkPattern: 3×2 parches (rojo, verde, azul / blanco, gris, negro), centro y esquinas. */
+function checkPattern(img, W, H) {
+  const want = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [128, 128, 128], [0, 0, 0]]
+  for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) {
+    const x0 = Math.floor(W * c / 3) + 2, x1 = Math.floor(W * (c + 1) / 3) - 3, y0 = Math.floor(H * r / 2) + 2, y1 = Math.floor(H * (r + 1) / 2) - 3
+    for (const [x, y, tol] of [[(x0 + x1) >> 1, (y0 + y1) >> 1, 10], [x0, y0, 28], [x1, y0, 28], [x0, y1, 28], [x1, y1, 28]]) {
+      const o = (y * img.width + x) * 4, px = [img.data[o], img.data[o + 1], img.data[o + 2]], w = want[r * 3 + c]
+      if (px.some((v, k) => Math.abs(v - w[k]) > tol)) return `en ${x},${y} hay ${px} y tenía que haber ${w}`
+    }
+  }
+  return null
+}
+/** PNG de 8 bits (RGB o RGBA, sin entrelazar, como las capturas de Chromium) → RGBA. */
+function decodePng(buf) {
+  let o = 8, width = 0, height = 0, type = 0
+  const idat = []
+  while (o < buf.length) {
+    const len = buf.readUInt32BE(o), kind = buf.toString('latin1', o + 4, o + 8), body = buf.subarray(o + 8, o + 8 + len)
+    if (kind === 'IHDR') { width = body.readUInt32BE(0); height = body.readUInt32BE(4); type = body[9]; if (body[8] !== 8 || body[12]) throw new Error('PNG no soportado') }
+    else if (kind === 'IDAT') idat.push(body)
+    else if (kind === 'IEND') break
+    o += 12 + len
+  }
+  const bpp = type === 6 ? 4 : type === 2 ? 3 : 0
+  if (!bpp) throw new Error('PNG no soportado (tipo ' + type + ')')
+  const raw = zlib.inflateSync(Buffer.concat(idat)), stride = width * bpp
+  const px = Buffer.alloc(stride * height), data = Buffer.alloc(width * height * 4)
+  for (let y = 0; y < height; y++) {
+    const f = raw[y * (stride + 1)], line = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1)), cur = y * stride, prev = cur - stride
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? px[cur + x - bpp] : 0, b = y ? px[prev + x] : 0, c = x >= bpp && y ? px[prev + x - bpp] : 0
+      let v = line[x]
+      if (f === 1) v += a
+      else if (f === 2) v += b
+      else if (f === 3) v += (a + b) >> 1
+      else if (f === 4) { const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c); v += pa <= pb && pa <= pc ? a : pb <= pc ? b : c }
+      px[cur + x] = v & 255
+    }
+  }
+  for (let i = 0; i < width * height; i++) { data[i * 4] = px[i * bpp]; data[i * 4 + 1] = px[i * bpp + 1]; data[i * 4 + 2] = px[i * bpp + 2]; data[i * 4 + 3] = bpp === 4 ? px[i * bpp + 3] : 255 }
+  return { width, height, data }
 }
 
 // ── puente ────────────────────────────────────────────────────────────────────
@@ -642,6 +741,7 @@ async function async(method, a, id, emit) {
     case 'cap.start': return await capStart(a)
     case 'cap.frame': return await capFrame(a)
     case 'cap.stop': await capClose(); return true
+    case 'enc.frames': if (!enc) throw new Error('No hay una exportación en curso'); return enc.frames
   }
   throw new Error('Método desconocido: ' + method)
 }

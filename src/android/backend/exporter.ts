@@ -5,11 +5,14 @@
  *
  *  1. Mezcla del audio del timeline con Web Audio (por ventanas de 30 s; Java decodifica sólo el
  *     tramo de cada archivo que suena en la ventana) → PCM → Java.
- *  2. Fotograma a fotograma, captura directa (Capture.java): un WebView del tamaño del video, escondido
- *     detrás de la app, abre el compositor; Java lo mueve a cada t y copia lo que dibujó el motor a un
- *     bitmap que va derecho al codificador. Si eso no anda en el equipo, se sigue (desde ese mismo
- *     fotograma) con el método compatible: el compositor oculto redibuja el DOM (modern-screenshot, ~10
- *     veces más lento) → JPEG → Java. En los dos, mientras se codifica uno ya se prepara el siguiente.
+ *  2. Fotograma a fotograma, con el primer método que ande en el equipo (Capture.java):
+ *     - captura GPU: el compositor abre en una pantalla virtual cuyas imágenes van a una textura del
+ *       codificador (nunca pasan por la memoria); Java pide los próximos fotogramas por adelantado.
+ *     - captura directa: un WebView del tamaño del video, escondido detrás de la app, se dibuja en un
+ *       bitmap que va derecho al codificador.
+ *     - compatible: el compositor oculto redibuja el DOM (modern-screenshot, ~10 veces más lento) → JPEG.
+ *     Si uno falla a mitad de camino se sigue con el siguiente, desde el primer fotograma que todavía no
+ *     está en el video (lo sabe el codificador).
  *  3. El archivo queda en exports/ (o @sd/exports/ si el proyecto está en la tarjeta SD) y, si está activado, se copia a la galería.
  */
 import type { Clip, Timeline } from '../../api'
@@ -48,6 +51,8 @@ export type AndroidExportProgress = {
 }
 
 class Cancelled extends Error {}
+type Method = 'gpu' | 'draw' | 'compat'
+const LABEL: Record<Method, string> = { gpu: 'captura GPU', draw: 'captura directa', compat: 'captura compatible' }
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 const IMG = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const SR = 48000
@@ -213,18 +218,8 @@ class Export {
     const tlName = p.timelines.length > 1 ? ` - ${p.timelines.find((t) => t.id === tlId)?.name || tlId}` : ''
     const out = join(ex, uniqueName(ex, `${safeName(job.name || p.name + tlName)}.mp4`))
 
-    // Captura directa (ver arriba); si no se puede abrir, el compositor oculto de siempre.
-    let direct = false
-    const opening = host().callAsync('cap.start', { url: compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' }), width: W, height: H })
-      .then(() => { direct = true }, (e) => console.warn('Captura directa no disponible; se usa el método compatible:', e))
-    this.check()
-
     // Audio: primero se ve qué suena y se puede leer, para saber si el MP4 lleva pista de audio
     const parts = job.audio ? await audioParts(job.projectId, tl, start, end) : []
-    this.check()
-    await opening
-    this.check()
-    if (!direct) await this.compatible(job.projectId, tlId, p.width, p.height)
     this.check()
 
     const info = host().call<{ codec: string; profile: string }>('enc.start', {
@@ -232,12 +227,28 @@ class Export {
       audio: parts.length ? { sampleRate: SR, channels: 2, bitrate: Math.max(64, Math.min(320, job.audioBitrate || 192)) * 1000 } : undefined,
     })
     markStarted()
-    let allDirect = direct
+
+    // La captura (ver arriba) se abre mientras se mezcla el audio: la de GPU dibuja en el codificador,
+    // así que va después de enc.start.
+    const capUrl = compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' })
+    let method: Method = 'compat'
+    const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
+      for (const m of modes) {
+        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e) { console.warn(`Sin ${LABEL[m]} en este equipo:`, e) }
+      }
+      return 'compat' as const
+    }
+    const opening = openCapture(['gpu', 'draw']).then((m) => { method = m })
 
     if (parts.length) {
       this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: 0, total: 1 })
       await mixAudio(parts, start, end, () => this.check(), (x) => this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: x, total: 1 }))
     }
+    await opening
+    this.check()
+    if (method === 'compat') await this.compatible(job.projectId, tlId, p.width, p.height)
+    this.check()
+    const used = new Set<Method>([method])
 
     // Video
     const quality = job.quality === 'max' ? 0.95 : job.quality === 'low' ? 0.86 : 0.92
@@ -248,20 +259,24 @@ class Export {
       this.check()
       const t = start + i / fps
       let shot: string | undefined
-      if (direct) {
+      if (method !== 'compat') {
         try {
-          const r = await host().callAsync<{ preview?: string }>('cap.frame', { t, preview: performance.now() - lastPreview > 1200 })
+          // Con la GPU, los dos que siguen se piden ya (la página los prepara mientras éste se codifica).
+          const next = method === 'gpu' ? [i + 1, i + 2].filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          const r = await host().callAsync<{ preview?: string }>('cap.frame', { t, next, preview: performance.now() - lastPreview > 1200 })
           shot = r?.preview
         } catch (e: any) {
           this.check()
-          // No anduvo en este equipo (o dejó de andar): este fotograma y los que siguen, con el compatible.
-          console.warn('La captura directa falló en el fotograma', i, e)
-          direct = false
-          allDirect = false
+          // No anduvo en este equipo (o dejó de andar): se sigue con el método siguiente, desde el primer
+          // fotograma que todavía no está en el video.
+          console.warn(`La ${LABEL[method]} falló en el fotograma`, i, e)
           try { host().call('cap.close') } catch { /* ignore */ }
-          this.emit({ phase: 'render', message: 'Cambiando al método de captura compatible…', done: i, total: frames })
-          await this.compatible(job.projectId, tlId, p.width, p.height)
-          i--
+          this.emit({ phase: 'render', message: 'Cambiando de método de captura…', done: i, total: frames })
+          method = method === 'gpu' ? await openCapture(['draw']) : 'compat'
+          this.check()
+          if (method === 'compat') await this.compatible(job.projectId, tlId, p.width, p.height)
+          used.add(method)
+          i = (await host().callAsync<number>('enc.frames')) - 1
           continue
         }
       } else {
@@ -280,14 +295,14 @@ class Export {
         // Cada tanto, el fotograma que se está codificando (vista previa del diálogo).
         const preview = shot && now - lastPreview > 1200 ? `data:image/jpeg;base64,${shot}` : undefined
         if (preview) lastPreview = now
-        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames}${direct ? ' · captura directa' : ''}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
+        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames} · ${LABEL[method]}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
       }
     }
     if (inflight) await inflight
     // Los últimos fotogramas capturados terminan de codificarse y se cierra la vista de captura.
-    if (direct) await host().callAsync('cap.stop')
+    if (method !== 'compat') await host().callAsync('cap.stop')
     this.check()
-    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${allDirect ? 'captura directa' : 'captura compatible'}`
+    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => LABEL[m]).join(' + ')}`
 
     this.emit({ phase: 'final', message: 'Escribiendo el archivo…', done: 1, total: 1 })
     const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number }>('enc.finish')

@@ -35,7 +35,7 @@ class TermuxChat extends ClaudeStreamSession {
     ;(async () => {
       const system = await buildSystem(o.projectId, 'code', o.saver !== false, o.extraInstructions || '')
       await T.startProc(proc, o.projectId, { permissionMode: o.permissionMode, model: o.model, effort: o.effort, resume: o.resume, system, allowedTools: READONLY, tools: mcpTools() }, {
-        out: (m) => { if (this.proc === proc) this.onMessage(m) },
+        out: (m) => { if (this.proc === proc) this.received(m) },
         exit: (code, err) => { if (this.proc === proc) { this.reset(); this.closed(code, err) } },
       })
       if (this.proc !== proc) return // se cerró mientras arrancaba
@@ -61,7 +61,7 @@ class TermuxChat extends ClaudeStreamSession {
     this.ready = true
     this.queue = []
     T.attachProc(proc, this.opts.projectId, {
-      out: (m) => { if (this.proc === proc) this.onMessage(m) },
+      out: (m) => { if (this.proc === proc) this.received(m) },
       exit: (code, err) => { if (this.proc === proc) { this.reset(); this.closed(code, err) } },
     })
     this.replay(r.history || [])

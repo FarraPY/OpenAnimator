@@ -2,6 +2,7 @@ package com.farrapy.openanimator;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.SurfaceTexture;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
@@ -12,8 +13,12 @@ import android.opengl.EGLContext;
 import android.opengl.EGLDisplay;
 import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
+import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLUtils;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.util.Base64;
 import android.util.Log;
 import android.view.Surface;
 
@@ -30,13 +35,16 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 
 /**
  * Video export with the tablet's hardware encoder (the Android counterpart of NVENC on the PC).
@@ -49,6 +57,12 @@ import java.util.concurrent.Future;
  *   start({out, width, height, fps, bitrate, codec: avc|hevc, keyframeSec, audio: {sampleRate, channels, bitrate}})
  *   audio(pcm16le)   (all the audio, before the first frame)
  *   frame(jpeg) | frameBitmap(bitmap) …    finish() → {path, size, frames}     cancel()
+ *
+ * GPU capture (Capture, mode "gpu"): gpuSurface() gives the Surface of a SurfaceTexture that a virtual
+ * display draws into. The capture says which images it expects (gpuExpect: the number the page painted
+ * in the marker strip under the video) and each image is taken on this thread as soon as it arrives: the
+ * expected one is drawn into the encoder without ever leaving the GPU (the strip is cropped), older ones
+ * are skipped, and a newer one means the expected image was never shown (gpuAwait says it's lost).
  */
 final class Encoder {
     private static final String TAG = "OpenAnimator";
@@ -114,6 +128,103 @@ final class Encoder {
         });
     }
 
+    /** An image the GPU capture expects: the one whose marker strip says seq. */
+    static final class Want {
+        static final int WAITING = 0, DONE = 1, LOST = 2;
+        final int seq;
+        final boolean preview, probe;
+        int status;
+        /** With preview: the encoded image, small, as JPEG in base64. */
+        String previewJpeg;
+        /** With probe (nothing is encoded): the image, small, RGBA with the rows from top to bottom. */
+        byte[] pixels;
+        int pw, ph;
+
+        Want(int seq, boolean preview, boolean probe) {
+            this.seq = seq;
+            this.preview = preview;
+            this.probe = probe;
+        }
+    }
+
+    /** Surface for a virtual display of width×(height+marker) pixels (GPU capture). */
+    Surface gpuSurface(final int width, final int height, final int marker) throws Exception {
+        final Job j = job;
+        final ExecutorService t = thread;
+        if (j == null || t == null) throw new IOException("No hay una exportación en curso");
+        return run(new Callable<Surface>() {
+            @Override
+            public Surface call() throws Exception {
+                return j.gpuSetup(width, height, marker, t);
+            }
+        });
+    }
+
+    /** Before the first frame: the audio is encoded now, not while images from the virtual display arrive. */
+    void gpuPrepare() throws Exception {
+        final Job j = job;
+        if (j == null) throw new IOException("No hay una exportación en curso");
+        run(new Callable<Object>() {
+            @Override
+            public Object call() throws Exception {
+                if (j.hasAudio && !j.audioEncoded) j.encodeAudio();
+                return null;
+            }
+        });
+    }
+
+    /**
+     * The next image to wait for. Images are taken in the order they are expected, as soon as they arrive
+     * (even before gpuAwait): so the virtual display never piles up images waiting for this side.
+     */
+    Want gpuExpect(int seq, boolean preview, boolean probe) throws IOException {
+        Job j = job;
+        if (j == null) throw new IOException("No hay una exportación en curso");
+        return j.expect(seq, preview, probe);
+    }
+
+    /** Waits until w is done (encoded, or read if it's a probe) or lost; false if the time ran out first. */
+    boolean gpuAwait(Want w, long timeoutMs) throws Exception {
+        Job j = job;
+        if (j == null) throw new IOException("La exportación se canceló");
+        return j.await(w, timeoutMs);
+    }
+
+    /** Forgets the images still expected (the capture starts over from another frame). */
+    void gpuForget() {
+        Job j = job;
+        if (j != null) j.forget();
+    }
+
+    /** Releases the texture behind surface (only that one: a newer capture may have its own by now). */
+    void gpuRelease(final Surface surface) {
+        final Job j = job;
+        final ExecutorService t = thread;
+        if (j == null || t == null) return;
+        try {
+            t.execute(new Runnable() {
+                @Override
+                public void run() {
+                    if (j.stSurface == surface) j.gpuRelease();
+                }
+            });
+        } catch (Exception ignored) {
+            // ya cerrado
+        }
+    }
+
+    /** Frames already encoded (after what was queued): where to go on if the capture method changes. */
+    long frames() throws Exception {
+        final Job j = job;
+        if (j == null) throw new IOException("No hay una exportación en curso");
+        return run(new Callable<Long>() {
+            @Override
+            public Long call() {
+                return j.frames;
+            }
+        });
+    }
+
     JSONObject finish() throws Exception {
         final Job j = job;
         if (j == null) throw new IOException("No hay una exportación en curso");
@@ -171,6 +282,12 @@ final class Encoder {
             throw new IOException(String.valueOf(cause));
         }
     }
+
+    /**
+     * Texture coordinates in high precision where the GPU has it: with mediump (10 bits) a coordinate
+     * near 1.0 on a 1080-row image can be off by about a pixel.
+     */
+    private static final String HIGHP = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n";
 
     /** One export: codecs, EGL and muxer. Everything runs on the encoder thread. */
     private static final class Job {
@@ -487,6 +604,11 @@ final class Encoder {
             } catch (IOException ignored) {
             }
             pcmOut = null;
+            gpuRelease();
+            if (frameThread != null) {
+                frameThread.quitSafely();
+                frameThread = null;
+            }
             if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
                 EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT);
                 if (eglSurface != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(eglDisplay, eglSurface);
@@ -551,7 +673,7 @@ final class Encoder {
 
             String vs = "attribute vec2 aPos; attribute vec2 aTex; varying vec2 vTex;\n"
                     + "void main() { gl_Position = vec4(aPos, 0.0, 1.0); vTex = aTex; }\n";
-            String fsh = "precision mediump float; varying vec2 vTex; uniform sampler2D uTex;\n"
+            String fsh = HIGHP + "varying vec2 vTex; uniform sampler2D uTex;\n"
                     + "void main() { gl_FragColor = texture2D(uTex, vTex); }\n";
             program = GLES20.glCreateProgram();
             GLES20.glAttachShader(program, shader(GLES20.GL_VERTEX_SHADER, vs));
@@ -581,6 +703,335 @@ final class Encoder {
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
             GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
             checkGl("setup");
+        }
+
+        // ── captura por GPU: una pantalla virtual dibuja en una textura de esta misma GPU ──────────
+
+        SurfaceTexture st;
+        Surface stSurface;
+        HandlerThread frameThread;
+        int oesTex, oesProgram, oesPos, oesTexAttr, oesMatrix, oesT0, oesFlip;
+        int markProgram, markPos, markMatrix, markRow, markFbo, markTexture;
+        int prevFbo, prevTexture, prevW, prevH;
+        FloatBuffer oesQuad;
+        final float[] stMatrix = new float[16];
+        int capHeight, capMarker;
+        final ByteBuffer markPixels = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder());
+        /** Lo que espera la captura, en orden (lo agrega otro hilo: se protege con gpuLock). */
+        final Object gpuLock = new Object();
+        final ArrayDeque<Want> wants = new ArrayDeque<>();
+        Exception gpuError;
+
+        Surface gpuSetup(int w, int h, int marker, final Executor exec) throws IOException {
+            gpuRelease();
+            capHeight = h;
+            capMarker = marker;
+            if (oesProgram == 0) gpuPrograms();
+            int[] t = new int[1];
+            GLES20.glGenTextures(1, t, 0);
+            oesTex = t[0];
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            // La franja de marca (8 celdas) se lee de una textura de 8×1.
+            markTexture = texture2d(8, 1);
+            markFbo = framebuffer(markTexture);
+            if (frameThread == null) {
+                frameThread = new HandlerThread("oa-frames");
+                frameThread.start();
+            }
+            final SurfaceTexture s = new SurfaceTexture(oesTex);
+            s.setDefaultBufferSize(w, h + marker);
+            // Cada imagen nueva se toma en el hilo del codificador (el del contexto de OpenGL), una por aviso.
+            s.setOnFrameAvailableListener(new SurfaceTexture.OnFrameAvailableListener() {
+                @Override
+                public void onFrameAvailable(SurfaceTexture x) {
+                    try {
+                        exec.execute(new Runnable() {
+                            @Override
+                            public void run() {
+                                latch(s);
+                            }
+                        });
+                    } catch (RejectedExecutionException ignored) {
+                        // la exportación ya terminó
+                    }
+                }
+            }, new Handler(frameThread.getLooper()));
+            st = s;
+            stSurface = new Surface(s);
+            checkGl("gpu");
+            return stSurface;
+        }
+
+        Want expect(int seq, boolean preview, boolean probe) {
+            Want w = new Want(seq, preview, probe);
+            synchronized (gpuLock) {
+                wants.addLast(w);
+            }
+            return w;
+        }
+
+        boolean await(Want w, long timeoutMs) throws Exception {
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            synchronized (gpuLock) {
+                while (w.status == Want.WAITING) {
+                    if (gpuError != null) throw gpuError;
+                    if (cancelled) throw new IOException("cancelado");
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) return false;
+                    gpuLock.wait(left);
+                }
+            }
+            return true;
+        }
+
+        void forget() {
+            synchronized (gpuLock) {
+                for (Want w : wants) w.status = Want.LOST;
+                wants.clear();
+                gpuLock.notifyAll();
+            }
+        }
+
+        /** a is after b (sequence numbers of 24 bits that go around). */
+        private static boolean after(int a, int b) {
+            int d = (a - b) & 0xFFFFFF;
+            return d != 0 && d < 0x800000;
+        }
+
+        /** One image of the virtual display (on the encoder's thread, one call per image, in order). */
+        void latch(SurfaceTexture s) {
+            if (s != st || cancelled) return;
+            try {
+                s.updateTexImage();
+                s.getTransformMatrix(stMatrix);
+                int m = readMarker();
+                Want w;
+                synchronized (gpuLock) {
+                    w = wants.peekFirst();
+                    if (w == null || m == 0) return; // no se espera nada, o la página está cambiando de fotograma
+                    if (m != w.seq) {
+                        // Una imagen anterior se ignora. Una posterior quiere decir que la esperada nunca se mostró:
+                        // se pierde con todo lo que venía detrás (el video no puede saltear ni desordenar fotogramas).
+                        if (after(m, w.seq)) {
+                            for (Want x : wants) x.status = Want.LOST;
+                            wants.clear();
+                            gpuLock.notifyAll();
+                        }
+                        return;
+                    }
+                    wants.pollFirst();
+                }
+                if (w.probe) {
+                    ByteBuffer px = readSmall();
+                    w.pixels = new byte[px.capacity()];
+                    px.position(0);
+                    px.get(w.pixels);
+                    w.pw = prevW;
+                    w.ph = prevH;
+                } else {
+                    encodeOes();
+                    if (w.preview) w.previewJpeg = previewJpeg();
+                }
+                synchronized (gpuLock) {
+                    w.status = Want.DONE;
+                    gpuLock.notifyAll();
+                }
+            } catch (Exception e) {
+                Log.w(TAG, "captura por GPU", e);
+                synchronized (gpuLock) {
+                    gpuError = e;
+                    gpuLock.notifyAll();
+                }
+            }
+        }
+
+        /** The current image of the virtual display (without its marker strip) goes to the encoder. */
+        private void encodeOes() throws IOException {
+            if (hasAudio && !audioEncoded) encodeAudio();
+            drain(false);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(0, 0, width, height);
+            drawOes(false);
+            checkGl("gpu draw");
+            long ptsNs = Math.round(frames * 1e9 / fps);
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
+            if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) throw new IOException("eglSwapBuffers falló: 0x" + Integer.toHexString(EGL14.eglGetError()));
+            frames++;
+            drain(false);
+        }
+
+        void gpuRelease() {
+            synchronized (gpuLock) {
+                for (Want w : wants) w.status = Want.LOST;
+                wants.clear();
+                gpuError = null;
+                gpuLock.notifyAll();
+            }
+            if (st != null) {
+                st.setOnFrameAvailableListener(null);
+                st.release();
+                st = null;
+            }
+            if (stSurface != null) {
+                stSurface.release();
+                stSurface = null;
+            }
+            if (eglDisplay == EGL14.EGL_NO_DISPLAY) return;
+            int[] one = new int[1];
+            if (oesTex != 0) { one[0] = oesTex; GLES20.glDeleteTextures(1, one, 0); oesTex = 0; }
+            if (markFbo != 0) { one[0] = markFbo; GLES20.glDeleteFramebuffers(1, one, 0); markFbo = 0; }
+            if (markTexture != 0) { one[0] = markTexture; GLES20.glDeleteTextures(1, one, 0); markTexture = 0; }
+            if (prevFbo != 0) { one[0] = prevFbo; GLES20.glDeleteFramebuffers(1, one, 0); prevFbo = 0; }
+            if (prevTexture != 0) { one[0] = prevTexture; GLES20.glDeleteTextures(1, one, 0); prevTexture = 0; }
+        }
+
+        /** The number the page painted in its marker strip: 8 cells, 3 bits each (R, G, B on or off). */
+        private int readMarker() {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, markFbo);
+            GLES20.glViewport(0, 0, 8, 1);
+            GLES20.glUseProgram(markProgram);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex);
+            GLES20.glUniformMatrix4fv(markMatrix, 1, false, stMatrix, 0);
+            GLES20.glUniform1f(markRow, (capMarker * 0.5f) / (capHeight + capMarker));
+            oesQuad.position(0);
+            GLES20.glVertexAttribPointer(markPos, 2, GLES20.GL_FLOAT, false, 16, oesQuad);
+            GLES20.glEnableVertexAttribArray(markPos);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+            markPixels.position(0);
+            GLES20.glReadPixels(0, 0, 8, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, markPixels);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            int v = 0;
+            for (int i = 0; i < 8; i++) {
+                if ((markPixels.get(i * 4) & 0xFF) > 127) v |= 1 << (3 * i);
+                if ((markPixels.get(i * 4 + 1) & 0xFF) > 127) v |= 1 << (3 * i + 1);
+                if ((markPixels.get(i * 4 + 2) & 0xFF) > 127) v |= 1 << (3 * i + 2);
+            }
+            return v;
+        }
+
+        /** The virtual display's image without the marker strip; flip=true for reading it back (rows top-down). */
+        private void drawOes(boolean flip) {
+            GLES20.glClearColor(0f, 0f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            GLES20.glUseProgram(oesProgram);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTex);
+            GLES20.glUniformMatrix4fv(oesMatrix, 1, false, stMatrix, 0);
+            GLES20.glUniform1f(oesT0, (float) capMarker / (capHeight + capMarker));
+            GLES20.glUniform1f(oesFlip, flip ? -1f : 1f);
+            oesQuad.position(0);
+            GLES20.glVertexAttribPointer(oesPos, 2, GLES20.GL_FLOAT, false, 16, oesQuad);
+            GLES20.glEnableVertexAttribArray(oesPos);
+            oesQuad.position(2);
+            GLES20.glVertexAttribPointer(oesTexAttr, 2, GLES20.GL_FLOAT, false, 16, oesQuad);
+            GLES20.glEnableVertexAttribArray(oesTexAttr);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        /** The current image, 480 pixels wide, RGBA with the rows from top to bottom. */
+        private ByteBuffer readSmall() throws IOException {
+            if (prevFbo == 0) {
+                prevW = 480;
+                prevH = Math.max(2, Math.round(480f * height / width));
+                prevTexture = texture2d(prevW, prevH);
+                prevFbo = framebuffer(prevTexture);
+            }
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo);
+            GLES20.glViewport(0, 0, prevW, prevH);
+            drawOes(true);
+            ByteBuffer px = ByteBuffer.allocateDirect(prevW * prevH * 4).order(ByteOrder.nativeOrder());
+            GLES20.glReadPixels(0, 0, prevW, prevH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(0, 0, width, height);
+            return px;
+        }
+
+        private String previewJpeg() throws IOException {
+            ByteBuffer px = readSmall();
+            Bitmap b = Bitmap.createBitmap(prevW, prevH, Bitmap.Config.ARGB_8888);
+            px.position(0);
+            b.copyPixelsFromBuffer(px);
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            b.compress(Bitmap.CompressFormat.JPEG, 75, out);
+            b.recycle();
+            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+        }
+
+        private void gpuPrograms() throws IOException {
+            String vs = "attribute vec2 aPos; attribute vec2 aTex; uniform mat4 uTexM; uniform float uT0; uniform float uFlip; varying vec2 vTex;\n"
+                    + "void main() { gl_Position = vec4(aPos.x, aPos.y * uFlip, 0.0, 1.0);\n"
+                    + "  vTex = (uTexM * vec4(aTex.x, uT0 + aTex.y * (1.0 - uT0), 0.0, 1.0)).xy; }\n";
+            String fs = "#extension GL_OES_EGL_image_external : require\n"
+                    + HIGHP + "varying vec2 vTex; uniform samplerExternalOES sTex;\n"
+                    + "void main() { gl_FragColor = texture2D(sTex, vTex); }\n";
+            oesProgram = link(vs, fs);
+            oesPos = GLES20.glGetAttribLocation(oesProgram, "aPos");
+            oesTexAttr = GLES20.glGetAttribLocation(oesProgram, "aTex");
+            oesMatrix = GLES20.glGetUniformLocation(oesProgram, "uTexM");
+            oesT0 = GLES20.glGetUniformLocation(oesProgram, "uT0");
+            oesFlip = GLES20.glGetUniformLocation(oesProgram, "uFlip");
+            GLES20.glUseProgram(oesProgram);
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(oesProgram, "sTex"), 0);
+            String mvs = "attribute vec2 aPos; void main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+            String mfs = "#extension GL_OES_EGL_image_external : require\n"
+                    + HIGHP + "uniform samplerExternalOES sTex; uniform mat4 uTexM; uniform float uRowT;\n"
+                    + "void main() { float cell = floor(gl_FragCoord.x);\n"
+                    + "  vec2 p = vec2((cell + 0.5) / 8.0, uRowT);\n"
+                    + "  gl_FragColor = texture2D(sTex, (uTexM * vec4(p, 0.0, 1.0)).xy); }\n";
+            markProgram = link(mvs, mfs);
+            markPos = GLES20.glGetAttribLocation(markProgram, "aPos");
+            markMatrix = GLES20.glGetUniformLocation(markProgram, "uTexM");
+            markRow = GLES20.glGetUniformLocation(markProgram, "uRowT");
+            GLES20.glUseProgram(markProgram);
+            GLES20.glUniform1i(GLES20.glGetUniformLocation(markProgram, "sTex"), 0);
+            // Posición y coordenada (de abajo hacia arriba, como la matriz de la SurfaceTexture).
+            float[] v = {
+                    -1f, -1f, 0f, 0f,
+                    1f, -1f, 1f, 0f,
+                    -1f, 1f, 0f, 1f,
+                    1f, 1f, 1f, 1f};
+            oesQuad = ByteBuffer.allocateDirect(v.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
+            oesQuad.put(v).position(0);
+            checkGl("gpu programs");
+        }
+
+        private static int link(String vs, String fs) throws IOException {
+            int p = GLES20.glCreateProgram();
+            GLES20.glAttachShader(p, shader(GLES20.GL_VERTEX_SHADER, vs));
+            GLES20.glAttachShader(p, shader(GLES20.GL_FRAGMENT_SHADER, fs));
+            GLES20.glLinkProgram(p);
+            int[] linked = new int[1];
+            GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, linked, 0);
+            if (linked[0] == 0) throw new IOException("Shader: " + GLES20.glGetProgramInfoLog(p));
+            return p;
+        }
+
+        private static int texture2d(int w, int h) {
+            int[] t = new int[1];
+            GLES20.glGenTextures(1, t, 0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, t[0]);
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, w, h, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            return t[0];
+        }
+
+        private static int framebuffer(int texture) throws IOException {
+            int[] f = new int[1];
+            GLES20.glGenFramebuffers(1, f, 0);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, f[0]);
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, texture, 0);
+            int status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) throw new IOException("Framebuffer incompleto: 0x" + Integer.toHexString(status));
+            return f[0];
         }
 
         private static int shader(int type, String src) throws IOException {

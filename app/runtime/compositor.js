@@ -8,7 +8,10 @@
  *
  * capture=1 (exportación en Android): la página ocupa toda la vista (el escenario se escala al tamaño
  * del video) y Java la captura directamente: __oaCap(t, n) deja el compositor en t y pone
- * __oaCapDone = n; __oaCapReady avisa que cargó.
+ * __oaCapDone = n; __oaCapReady avisa que cargó. Los pedidos se atienden de a uno y en orden.
+ * Con marker=1 (captura por GPU, Capture.java) la vista es 16 píxeles más alta que el video: en esa
+ * franja de abajo, 8 celdas de colores puros dicen el número del fotograma que se está viendo (0 =
+ * cambiando); Java la recorta. __oaCapTest(n) muestra un patrón de prueba con el número n.
  *
  * Capas visuales: pistas "scene" (HTML), "video" (mp4/webm/imagen). La primera pista
  * visual del array se dibuja ADELANTE. Las pistas "audio" sólo suenan en la vista previa
@@ -21,6 +24,8 @@
   var timelineId = qs.get('tl');
   var mode = qs.get('mode') || 'preview';
   var capture = qs.get('capture') === '1';
+  var marker = capture && qs.get('marker') === '1';
+  var MARK_PX = 16; // alto de la franja de marca en píxeles de la pantalla (Capture.MARK)
   // El compositor se sirve desde <origen>/p/<proyecto>/__oa/ (oa:// en la PC, https en Android):
   // la carpeta del proyecto es lo que está antes de __oa/.
   var base = location.href.split('?')[0].replace(/__oa\/[^/]*$/, '');
@@ -70,13 +75,52 @@
     var W = project.width || 1920, H = project.height || 1080;
     var vv = window.visualViewport;
     var vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+    var mh = marker ? MARK_PX / (window.devicePixelRatio || 1) : 0;
     document.body.style.width = '100vw';
     document.body.style.height = '100vh';
-    stage.style.transform = 'scale(' + (vw / W) + ',' + (vh / H) + ')';
+    stage.style.transform = 'scale(' + (vw / W) + ',' + ((vh - mh) / H) + ')';
+    if (markEl) markEl.style.height = mh + 'px';
+    if (testEl) testEl.style.height = (vh - mh) + 'px';
   }
   if (capture) {
     msgEl.style.display = 'none';
     window.addEventListener('resize', function () { if (project) fitCapture(); });
+  }
+
+  // ── franja de marca y patrón de prueba (captura por GPU) ──────────────────
+  var markEl = null, markCells = [], testEl = null;
+  if (marker) {
+    markEl = document.createElement('div');
+    markEl.style.cssText = 'position:fixed;left:0;right:0;bottom:0;display:flex;z-index:2147483647;background:#000';
+    for (var mi = 0; mi < 8; mi++) {
+      var cell = document.createElement('div');
+      cell.style.cssText = 'flex:1;background:#000';
+      markEl.appendChild(cell);
+      markCells.push(cell);
+    }
+    document.body.appendChild(markEl);
+  }
+  /** Celda i = bits 3i (rojo), 3i+1 (verde) y 3i+2 (azul) de n: prendido 255, apagado 0. */
+  function setMark(n) {
+    for (var i = 0; i < markCells.length; i++) {
+      var v = (n >> (3 * i)) & 7;
+      markCells[i].style.background = 'rgb(' + (v & 1 ? 255 : 0) + ',' + (v & 2 ? 255 : 0) + ',' + (v & 4 ? 255 : 0) + ')';
+    }
+  }
+  /** 3×2 parches (rojo, verde, azul / blanco, gris, negro) sobre el escenario: Java comprueba que lleguen iguales. */
+  function showTest(on) {
+    if (on && !testEl) {
+      testEl = document.createElement('div');
+      testEl.style.cssText = 'position:fixed;left:0;top:0;width:100vw;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(2,1fr);z-index:2147483646';
+      ['#ff0000', '#00ff00', '#0000ff', '#ffffff', '#808080', '#000000'].forEach(function (c) {
+        var d = document.createElement('div');
+        d.style.background = c;
+        testEl.appendChild(d);
+      });
+      document.body.appendChild(testEl);
+      if (project) fitCapture();
+    }
+    if (testEl) testEl.style.display = on ? 'grid' : 'none';
   }
 
   function visualTracks() {
@@ -456,11 +500,40 @@
     throw err;
   });
 
-  // Sin esperar a que pinte: Java espera con postVisualStateCallback, que asegura que el próximo dibujo
-  // ya tiene este estado (los dos requestAnimationFrame costaban ~33 ms por fotograma).
-  if (capture) window.__oaCap = function (t, n) {
-    return renderAt(t, { force: true, skipPaint: true }).then(
-      function () { window.__oaCapDone = n; },
-      function (err) { window.__oaCapDone = 'error: ' + (err && err.message || err); });
-  };
+  // Pedidos de captura, de a uno y en orden (con la GPU, Java pide los próximos antes de que termine
+  // éste). Sin esperar a que pinte: Java espera con postVisualStateCallback, que asegura que el próximo
+  // dibujo ya tiene este estado, o mira la franja de marca en la imagen.
+  var capChain = Promise.resolve();
+  function capStep(work, n) {
+    capChain = capChain.then(function () {
+      // Mientras cambia, la franja dice 0: ninguna imagen a medio cambiar lleva el número de otro fotograma.
+      setMark(0);
+      return work();
+    }).then(function () {
+      setMark(n);
+      window.__oaCapDone = n;
+      // El próximo pedido recién cuando este estado ya se entregó para dibujar (si no, se pisarían).
+      if (marker) return afterCommit();
+    }, function (err) {
+      // __oaCapError queda: con pedidos por adelantado, __oaCapDone lo pisaría el siguiente que salga bien.
+      window.__oaCapDone = window.__oaCapError = 'error: ' + (err && err.message || err);
+    });
+    return capChain;
+  }
+  /** Después de que el cuadro con el estado actual pasó al compositor (rAF + una tarea: ya se pintó). */
+  function afterCommit() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        var ch = new MessageChannel();
+        ch.port1.onmessage = function () { resolve(); };
+        ch.port2.postMessage(0);
+      });
+    });
+  }
+  if (capture) {
+    window.__oaCap = function (t, n) {
+      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n);
+    };
+    window.__oaCapTest = function (n) { return capStep(function () { showTest(true); }, n); };
+  }
 })();
