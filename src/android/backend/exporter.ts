@@ -48,6 +48,8 @@ export type AndroidExportProgress = {
   phase: 'preparando' | 'audio' | 'render' | 'final' | 'listo' | 'error' | 'cancelado'
   message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number
   file?: string; gallery?: string; size?: number; encoder?: string; preview?: string
+  /** Al terminar: por qué no se usó la captura GPU (si no anduvo en el equipo). */
+  note?: string
 }
 
 class Cancelled extends Error {}
@@ -178,7 +180,7 @@ class Export {
     let started = false
     try {
       const r = await this.inner(() => { started = true })
-      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder })
+      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note })
     } catch (e: any) {
       if (started) try { host().call('enc.cancel') } catch { /* ignore */ }
       if (e instanceof Cancelled || this.cancelled) this.emit({ phase: 'cancelado', message: 'Exportación cancelada.', done: 0, total: 1 })
@@ -239,10 +241,11 @@ class Export {
     // así que va después de enc.start.
     const capUrl = compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' })
     let method: Method = 'compat'
+    const why: Partial<Record<Method, string>> = {} // por qué no anduvo cada método (se muestra al terminar)
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break
-        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e) { console.warn(`Sin ${LABEL[m]} en este equipo:`, e) }
+        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${LABEL[m]} en este equipo:`, e) }
       }
       return 'compat' as const
     }
@@ -262,7 +265,7 @@ class Export {
     const quality = job.quality === 'max' ? 0.95 : job.quality === 'low' ? 0.86 : 0.92
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
-    let lastEmit = 0, lastPreview = 0
+    let lastEmit = 0, lastPreview = 0, rate = 0
     for (let i = 0; i < frames; i++) {
       this.check()
       const t = start + i / fps
@@ -278,6 +281,7 @@ class Export {
           // No anduvo en este equipo (o dejó de andar): se sigue con el método siguiente, desde el primer
           // fotograma que todavía no está en el video.
           console.warn(`La ${LABEL[method]} falló en el fotograma`, i, e)
+          why[method] = `falló en el fotograma ${i + 1}: ${String(e?.message || e)}`
           try { host().call('cap.close') } catch { /* ignore */ }
           this.emit({ phase: 'render', message: 'Cambiando de método de captura…', done: i, total: frames })
           method = method === 'gpu' ? await openCapture(['draw']) : 'compat'
@@ -299,7 +303,7 @@ class Export {
       const now = performance.now()
       if (now - lastEmit > 250 || i === frames - 1) {
         lastEmit = now
-        const rate = (i + 1) / Math.max(0.001, (now - tr0) / 1000)
+        rate = (i + 1) / Math.max(0.001, (now - tr0) / 1000)
         // Cada tanto, el fotograma que se está codificando (vista previa del diálogo).
         const preview = shot && now - lastPreview > 1200 ? `data:image/jpeg;base64,${shot}` : undefined
         if (preview) lastPreview = now
@@ -321,7 +325,8 @@ class Export {
     if (getSettings().android?.saveToGallery !== false) {
       try { gallery = (await host().callAsync<{ folder: string }>('gallery.save', { path: out, name: basename(out), mime: 'video/mp4' })).folder } catch (e) { console.warn('No se pudo copiar a la galería', e) }
     }
-    return { file: out, gallery, size: res?.size || fs.stat(out)?.size || 0, encoder }
+    const note = why.gpu ? `La captura GPU no anduvo en este equipo (${why.gpu.slice(0, 300)}).` : undefined
+    return { file: out, gallery, size: res?.size || fs.stat(out)?.size || 0, encoder, fps: rate, note }
   }
 }
 

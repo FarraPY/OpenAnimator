@@ -12,7 +12,7 @@ import { Badge, Button, Field, NumberInput, Progress, Segmented, Select, Switch,
 import { autoBitrate, type ExportQuality as Quality } from '../bitrate'
 
 type Codec = 'avc' | 'hevc'
-type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; gallery?: string; size?: number; encoder?: string; preview?: string }
+type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; gallery?: string; size?: number; encoder?: string; preview?: string; note?: string }
 type Saved = { path: string; name: string; size: number; mtime: number }
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
@@ -120,7 +120,8 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
             <div style={{ font: '600 20px var(--font-display)' }}>{file.split('/').pop()}</div>
             <div className="t2">{fmtSize(prog.size || 0)} · {fmtTime(dur)} · en {secs(prog.elapsed)}</div>
             {prog.gallery ? <Badge tone="ok" icon="gallery">Guardado en la galería · {prog.gallery}</Badge> : <Badge tone="neutral" icon="drive">Guardado en la app (Ajustes › Almacenamiento)</Badge>}
-            {prog.encoder && <div className="t3" style={{ fontSize: 12.5 }}>Codificador: {prog.encoder}</div>}
+            {prog.encoder && <div className="t3" style={{ fontSize: 12.5 }}>Codificador: {prog.encoder}{prog.fps ? ` · ${prog.fps.toFixed(1).replace('.', ',')} fps` : ''}</div>}
+            {prog.note && <div className="t3" style={{ fontSize: 12.5, maxWidth: 560, textAlign: 'center' }}>{prog.note}</div>}
           </div>
         ) : (
           <div className="xp-run">
