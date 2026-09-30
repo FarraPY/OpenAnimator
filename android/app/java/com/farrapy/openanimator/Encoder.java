@@ -18,7 +18,6 @@ import android.opengl.GLES20;
 import android.opengl.GLUtils;
 import android.os.Handler;
 import android.os.HandlerThread;
-import android.util.Base64;
 import android.util.Log;
 import android.view.Surface;
 
@@ -134,9 +133,11 @@ final class Encoder {
         final int seq;
         final boolean preview, probe;
         int status;
-        /** With preview: the encoded image, small, as JPEG in base64. */
-        String previewJpeg;
-        /** With probe (nothing is encoded): the image, small, RGBA with the rows from top to bottom. */
+        /**
+         * With preview or probe (a probe isn't encoded): the image, 480 pixels wide, RGBA with the rows from
+         * top to bottom. Only read back here; making a JPEG of it is the caller's job (on this thread it
+         * would delay the next image, and the virtual display doesn't wait: it replaces it).
+         */
         byte[] pixels;
         int pw, ph;
 
@@ -720,6 +721,8 @@ final class Encoder {
         /** Lo que espera la captura, en orden (lo agrega otro hilo: se protege con gpuLock). */
         final Object gpuLock = new Object();
         final ArrayDeque<Want> wants = new ArrayDeque<>();
+        /** Se perdió una imagen esperada y la captura todavía no se enteró (ver latch). */
+        boolean lostPending;
         Exception gpuError;
 
         Surface gpuSetup(int w, int h, int marker, final Executor exec) throws IOException {
@@ -792,6 +795,7 @@ final class Encoder {
             synchronized (gpuLock) {
                 for (Want w : wants) w.status = Want.LOST;
                 wants.clear();
+                lostPending = false;
                 gpuLock.notifyAll();
             }
         }
@@ -802,39 +806,47 @@ final class Encoder {
             return d != 0 && d < 0x800000;
         }
 
-        /** One image of the virtual display (on the encoder's thread, one call per image, in order). */
+        /**
+         * One image of the virtual display (on the encoder's thread, one call per image, in order). The
+         * display's queue doesn't wait for this side: an image not taken before the next one arrives is
+         * replaced, so nothing slow runs here.
+         */
         void latch(SurfaceTexture s) {
             if (s != st || cancelled) return;
             try {
                 s.updateTexImage();
                 s.getTransformMatrix(stMatrix);
+                synchronized (gpuLock) {
+                    // Después de una pérdida no entra nada hasta que la captura la vea (forget): lo que pidió por
+                    // adelantado mientras tanto quedaría fuera de orden.
+                    if (lostPending || wants.isEmpty()) return;
+                }
                 int m = readMarker();
                 Want w;
                 synchronized (gpuLock) {
                     w = wants.peekFirst();
-                    if (w == null || m == 0) return; // no se espera nada, o la página está cambiando de fotograma
+                    if (lostPending || w == null || m == 0) return; // o la página está cambiando de fotograma
                     if (m != w.seq) {
                         // Una imagen anterior se ignora. Una posterior quiere decir que la esperada nunca se mostró:
                         // se pierde con todo lo que venía detrás (el video no puede saltear ni desordenar fotogramas).
                         if (after(m, w.seq)) {
                             for (Want x : wants) x.status = Want.LOST;
                             wants.clear();
+                            lostPending = true;
                             gpuLock.notifyAll();
                         }
                         return;
                     }
                     wants.pollFirst();
                 }
-                if (w.probe) {
+                if (!w.probe) encodeOes();
+                if (w.probe || w.preview) {
                     ByteBuffer px = readSmall();
                     w.pixels = new byte[px.capacity()];
                     px.position(0);
                     px.get(w.pixels);
                     w.pw = prevW;
                     w.ph = prevH;
-                } else {
-                    encodeOes();
-                    if (w.preview) w.previewJpeg = previewJpeg();
                 }
                 synchronized (gpuLock) {
                     w.status = Want.DONE;
@@ -868,6 +880,7 @@ final class Encoder {
             synchronized (gpuLock) {
                 for (Want w : wants) w.status = Want.LOST;
                 wants.clear();
+                lostPending = false;
                 gpuError = null;
                 gpuLock.notifyAll();
             }
@@ -949,17 +962,6 @@ final class Encoder {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, width, height);
             return px;
-        }
-
-        private String previewJpeg() throws IOException {
-            ByteBuffer px = readSmall();
-            Bitmap b = Bitmap.createBitmap(prevW, prevH, Bitmap.Config.ARGB_8888);
-            px.position(0);
-            b.copyPixelsFromBuffer(px);
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            b.compress(Bitmap.CompressFormat.JPEG, 75, out);
-            b.recycle();
-            return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
         }
 
         private void gpuPrograms() throws IOException {

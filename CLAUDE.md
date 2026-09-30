@@ -134,10 +134,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   1. `gpu`: el WebView vive en una pantalla virtual privada (`Presentation`, 160 dpi) de W×(H+16) cuya Surface es
      una SurfaceTexture en el contexto EGL del codificador: la imagen nunca sale de la GPU. Con `marker=1` la página
      pinta el número del pedido en una franja de 8 celdas abajo (3 bits por celda; 0 = cambiando) y, antes del
-     siguiente, espera rAF + una tarea. `Encoder.latch` toma cada imagen apenas llega (en su hilo; si no, la
-     pantalla virtual se traba esperando), la codifica si es la esperada (`gpuExpect`), ignora las viejas y, si
-     llega una posterior, la esperada se perdió (se vuelve a pedir). Java pide 2 fotogramas por adelantado y sube
-     la pantalla a su máxima frecuencia (`preferFastDisplay`). Antes, `__oaCapTest` (patrón de 6 colores) comprueba
+     siguiente, espera rAF + una tarea. La cola de la pantalla virtual no espera (SurfaceFlinger la pone en modo
+     asíncrono: una imagen que no se tomó se reemplaza), así que `Encoder.latch` toma cada imagen apenas llega, en
+     el hilo del codificador y sin nada lento (la vista previa se lee chica y el JPEG se arma afuera): codifica la
+     esperada (`gpuExpect`), ignora las viejas y, si llega una posterior, la esperada se perdió: no entra nada más
+     hasta que Capture se entera (`gpuForget`) y la vuelve a pedir. Java pide hasta 2 fotogramas por adelantado
+     (baja con cada pérdida, sube tras 90 sin) y sube la pantalla a su máxima frecuencia (`preferFastDisplay`).
+     Antes de Android 11 la ventana necesita `TYPE_PRIVATE_PRESENTATION`. Antes, `__oaCapTest` (patrón de 6 colores) comprueba
      colores, orientación y recorte. Errores de la página: `__oaCapError` (queda aunque sigan pedidos).
   2. `draw`: un WebView del tamaño del video, detrás de la app; `postVisualStateCallback` y `WebView.draw` en un
      bitmap (dos que se turnan) → `Encoder.frameBitmap`. El motor dibuja por software (lento; los videos pueden salir

@@ -155,6 +155,9 @@ function safeName(s: string) {
 
 class Export {
   private cancelled = false
+  /** Terminó (bien o mal): una captura que se estaba abriendo en paralelo ya no sigue probando métodos. */
+  private over = false
+  private opening: Promise<unknown> | null = null
   private renderer: Renderer | null = null
   private t0 = performance.now()
 
@@ -181,6 +184,10 @@ class Export {
       if (e instanceof Cancelled || this.cancelled) this.emit({ phase: 'cancelado', message: 'Exportación cancelada.', done: 0, total: 1 })
       else this.emit({ phase: 'error', message: String(e?.message || e), done: 0, total: 1 })
     } finally {
+      this.over = true
+      // La captura se abre mientras se mezcla el audio: si eso falló o se canceló, se espera a que termine
+      // de abrirse para cerrarla (si no, quedaría una página del compositor abierta detrás de la app).
+      await this.opening?.catch(() => {})
       this.renderer?.destroy()
       this.renderer = null
       try { host().call('cap.close') } catch { /* ignore */ }
@@ -234,11 +241,12 @@ class Export {
     let method: Method = 'compat'
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
+        if (this.cancelled || this.over) break
         try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e) { console.warn(`Sin ${LABEL[m]} en este equipo:`, e) }
       }
       return 'compat' as const
     }
-    const opening = openCapture(['gpu', 'draw']).then((m) => { method = m })
+    const opening = this.opening = openCapture(['gpu', 'draw']).then((m) => { method = m })
 
     if (parts.length) {
       this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: 0, total: 1 })

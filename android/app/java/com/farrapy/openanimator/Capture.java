@@ -7,6 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.os.Build;
 import android.util.Base64;
 import android.view.Surface;
 import android.view.ViewGroup;
@@ -65,15 +66,23 @@ final class Capture {
     /** Some WebViews only draw into a bitmap in software mode: tried once if the first frame comes out empty. */
     private boolean softwareLayer;
     // gpu
-    private VirtualDisplay display;
-    private Presentation presentation;
+    private volatile VirtualDisplay display;
+    private volatile Presentation presentation;
     /** Where the virtual display draws (the encoder's texture). */
-    private Surface surface;
+    private volatile Surface surface;
     /** Frames already requested to the page, in order (the next ones the export will ask for). */
     private final ArrayDeque<Req> ahead = new ArrayDeque<>();
-    private int depth, drops;
+    /** Frames requested ahead; it goes down if the display skips images and back up after a while without. */
+    private int depth, clean;
     private boolean prepared;
     private long lastPreviewReq;
+    /**
+     * The views are created on the UI thread and close() can come from any thread (even while they are
+     * being created): with this lock and the generation, views created for a capture that was already
+     * closed are closed right there instead of being left open.
+     */
+    private final Object viewsLock = new Object();
+    private int generation;
 
     private static final class Req {
         final double t;
@@ -113,15 +122,31 @@ final class Capture {
         return o;
     }
 
+    private int generation() {
+        synchronized (viewsLock) {
+            return generation;
+        }
+    }
+
     private void startDraw(final String url, final int width, final int height) throws Exception {
+        final int gen = generation();
         final CountDownLatch made = new CountDownLatch(1);
         act.runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                WebView v = null;
                 try {
-                    web = act.newCaptureView(width, height);
-                    web.loadUrl(url);
+                    if (gen != generation()) return;
+                    v = act.newCaptureView(width, height);
+                    synchronized (viewsLock) {
+                        if (gen != generation) return;
+                        web = v;
+                    }
+                    WebView mine = v;
+                    v = null; // ya es de la captura: la cierra close()
+                    mine.loadUrl(url);
                 } finally {
+                    if (v != null) act.removeCaptureView(v); // la captura se cerró mientras se creaba
                     made.countDown();
                 }
             }
@@ -140,30 +165,56 @@ final class Capture {
     }
 
     private void startGpu(final String url, final int width, final int height) throws Exception {
-        final Surface surface = this.surface = encoder.gpuSurface(width, height, MARK);
+        final int gen = generation();
+        final Surface target = encoder.gpuSurface(width, height, MARK);
+        synchronized (viewsLock) {
+            if (gen != generation) {
+                encoder.gpuRelease(target);
+                throw new IOException("cancelado");
+            }
+            surface = target;
+        }
         final Exception[] err = new Exception[1];
         final CountDownLatch made = new CountDownLatch(1);
         act.runOnUiThread(new Runnable() {
             @Override
             public void run() {
+                VirtualDisplay vd = null;
+                Presentation pr = null;
+                WebView v = null;
                 try {
+                    if (gen != generation()) return;
                     // Pantalla privada de la app (sin permisos): sólo muestra lo que la app pone en ella.
                     DisplayManager dm = (DisplayManager) act.getSystemService(Context.DISPLAY_SERVICE);
-                    display = dm.createVirtualDisplay("OpenAnimator-exportar", width, height + MARK, 160, surface, 0);
-                    if (display == null) throw new IOException("No se pudo crear la pantalla virtual");
-                    presentation = new Presentation(act, display.getDisplay());
-                    Window win = presentation.getWindow();
-                    if (win != null) win.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+                    vd = dm.createVirtualDisplay("OpenAnimator-exportar", width, height + MARK, 160, target, 0);
+                    if (vd == null) throw new IOException("No se pudo crear la pantalla virtual");
+                    pr = new Presentation(act, vd.getDisplay());
+                    Window win = pr.getWindow();
+                    if (win != null) {
+                        // Antes de Android 11, Presentation usa el tipo de las pantallas públicas y una privada lo rechaza.
+                        if (Build.VERSION.SDK_INT < 30) win.setType(WindowManager.LayoutParams.TYPE_PRIVATE_PRESENTATION);
+                        win.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE);
+                    }
                     // Con el contexto de la pantalla virtual (160 dpi): un píxel de la página es un píxel del video.
-                    WebView v = act.captureWebView(presentation.getContext());
-                    presentation.setContentView(v, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                    presentation.show();
+                    v = act.captureWebView(pr.getContext());
+                    pr.setContentView(v, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                    pr.show();
+                    synchronized (viewsLock) {
+                        if (gen != generation) return; // se cerró mientras se creaba: se cierra acá abajo
+                        display = vd;
+                        presentation = pr;
+                        web = v;
+                    }
+                    WebView mine = v;
+                    vd = null; // ya son de la captura: los cierra close()
+                    pr = null;
+                    v = null;
                     act.preferFastDisplay(true);
-                    web = v;
-                    v.loadUrl(url + "&marker=1");
+                    mine.loadUrl(url + "&marker=1");
                 } catch (Exception e) {
                     err[0] = e;
                 } finally {
+                    if (vd != null || pr != null || v != null) closeViews(v, pr, vd, null);
                     made.countDown();
                 }
             }
@@ -182,7 +233,7 @@ final class Capture {
         if (bad != null) throw new IOException("La captura por GPU no coincide con la página (" + bad + ")");
         ahead.clear();
         depth = 2;
-        drops = 0;
+        clean = 0;
         prepared = false;
         lastPreviewReq = 0;
     }
@@ -217,15 +268,16 @@ final class Capture {
         int lost = 0;
         while (true) {
             Req r = ahead.peekFirst();
-            if (r != null && Math.abs(r.t - t) < 1e-9) ahead.pollFirst();
+            if (r != null && Math.abs(r.t - t) < 1e-9 && r.want.status != Encoder.Want.LOST) ahead.pollFirst();
             else {
                 // No es lo que se pidió por adelantado (el primero, o después de un fotograma perdido): de cero.
                 ahead.clear();
                 encoder.gpuForget();
                 r = request(t);
             }
-            // Los próximos se piden ya: la página prepara uno mientras el anterior viaja por la pantalla.
-            for (int i = 0; upcoming != null && i < upcoming.length() && ahead.size() < depth; i++) {
+            // Los próximos se piden ya: la página prepara uno mientras el anterior viaja por la pantalla (salvo
+            // que éste ya se haya perdido: entonces se vuelve a empezar desde acá).
+            for (int i = 0; upcoming != null && i < upcoming.length() && ahead.size() < depth && r.want.status != Encoder.Want.LOST; i++) {
                 double tn = upcoming.getDouble(i);
                 boolean asked = false;
                 for (Req q : ahead) if (Math.abs(q.t - tn) < 1e-9) asked = true;
@@ -245,17 +297,23 @@ final class Capture {
             }
             if (r.want.status == Encoder.Want.LOST) {
                 // La pantalla mostró uno posterior sin mostrar este (o la página no lo pudo dibujar): se vuelve a
-                // pedir y, si pasa seguido, con menos fotogramas por adelantado.
-                String err = eval("String(window.__oaCapError)", 5000);
-                if (err != null && err.startsWith("\"error")) throw new IOException(unquote(err));
-                if (++drops % 3 == 0 && depth > 0) depth--;
-                if (++lost > 5) throw new IOException("La pantalla virtual se saltea fotogramas");
+                // pedir, con un fotograma menos por adelantado.
                 ahead.clear();
                 encoder.gpuForget();
+                String err = eval("String(window.__oaCapError)", 5000);
+                if (err != null && err.startsWith("\"error")) throw new IOException(unquote(err));
+                if (depth > 0) depth--;
+                clean = 0;
+                if (++lost > 5) throw new IOException("La pantalla virtual se saltea fotogramas");
                 continue;
             }
+            // Un buen rato sin pérdidas: se vuelve a pedir más por adelantado.
+            if (++clean >= 90 && depth < 2) {
+                depth++;
+                clean = 0;
+            }
             JSONObject o = new JSONObject();
-            if (r.want.previewJpeg != null) o.put("preview", r.want.previewJpeg);
+            if (r.want.pixels != null) o.put("preview", jpeg(r.want.pixels, r.want.pw, r.want.ph));
             return o;
         }
     }
@@ -361,15 +419,22 @@ final class Capture {
      * UI thread: the latch (null if there was nothing to close) says when.
      */
     CountDownLatch close() {
-        final WebView w = web;
-        final Presentation p = presentation;
-        final VirtualDisplay d = display;
-        final Surface s = surface;
+        final WebView w;
+        final Presentation p;
+        final VirtualDisplay d;
+        final Surface s;
+        synchronized (viewsLock) {
+            generation++;
+            w = web;
+            p = presentation;
+            d = display;
+            s = surface;
+            web = null;
+            presentation = null;
+            display = null;
+            surface = null;
+        }
         final boolean wasGpu = s != null;
-        web = null;
-        presentation = null;
-        display = null;
-        surface = null;
         // Lo que se esperaba ya no llega: un frame() en curso termina (y ninguna imagen tardía entra al video).
         if (wasGpu) encoder.gpuForget();
         CountDownLatch closed = null;
@@ -526,6 +591,16 @@ final class Capture {
             }
         }
         return true;
+    }
+
+    /** A small RGBA image (rows top-down) as JPEG in base64, for the export dialog. */
+    private static String jpeg(byte[] rgba, int w, int h) {
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        b.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(rgba));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.JPEG, 75, out);
+        b.recycle();
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
     }
 
     private static String previewJpeg(Bitmap b) {
