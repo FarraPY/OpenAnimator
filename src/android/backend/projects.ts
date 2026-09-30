@@ -86,10 +86,9 @@ export function listProjects(): ProjectSummary[] {
   const out: ProjectSummary[] = []
   for (const e of fs.list(PROJECTS)) {
     if (!e.dir || e.name.startsWith('.')) continue
-    const f = join(PROJECTS, e.name, 'project.json')
-    if (!fs.exists(f)) continue
     try {
-      const p = fs.readJSON<Project>(f)
+      // Sin preguntar antes si existe: cada consulta cruza el puente con Java (una carpeta sin proyecto se ignora igual).
+      const p = fs.readJSON<Project>(join(PROJECTS, e.name, 'project.json'))
       let duration = 0
       for (const ref of p.timelines || []) {
         try { duration += fs.readJSON<Timeline>(join(PROJECTS, e.name, normalizeRel(ref.file))).duration || 0 } catch { /* ignore */ }
@@ -125,10 +124,16 @@ export function listTrash(): TrashItem[] {
   const out: TrashItem[] = []
   for (const [root, prefix] of [[TRASH, ''], [SD_TRASH, SD_ITEM]]) {
     for (const e of listMaybe(root)) {
-      try { out.push({ ...fs.readJSON<Omit<TrashItem, 'id' | 'size'>>(join(root, e.name, 'trash.json')), id: prefix + e.name, size: fs.du(join(root, e.name)), ...(prefix ? { sd: true } : {}) }) } catch { /* ignore */ }
+      try { out.push({ ...fs.readJSON<Omit<TrashItem, 'id' | 'size'>>(join(root, e.name, 'trash.json')), id: prefix + e.name, size: 0, ...(prefix ? { sd: true } : {}) }) } catch { /* ignore */ }
     }
   }
   return out.sort((a, b) => b.at.localeCompare(a.at))
+}
+/** La papelera con el tamaño de cada elemento (Java lo mide en segundo plano). */
+export async function listTrashSizes(): Promise<TrashItem[]> {
+  const items = listTrash()
+  const sizes = await Promise.all(items.map((t) => fs.duAsync(trashDir(t.id))))
+  return items.map((t, i) => ({ ...t, size: sizes[i] }))
 }
 export function restoreTrash(id: string) {
   const dir = trashDir(id)

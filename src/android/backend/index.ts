@@ -12,7 +12,7 @@ import * as M from './media'
 import * as F from './frames'
 import * as PL from './plugins'
 import { basename, dirname, fs, join, normalizeRel, uniqueName } from './fsx'
-import { copy, on as onEvent, projectChanged, send } from './events'
+import { copy, on as onEvent, projectChanged, send, touched } from './events'
 
 type Handler = (...args: any[]) => any
 const handlers: Record<string, Handler> = {}
@@ -133,24 +133,34 @@ h('projects:exportZip', async (id: string, o: { includeRenders?: boolean; action
 h('app:takePendingOpen', () => host().call('app.takePendingOpen'))
 
 // ── papelera ──────────────────────────────────────────────────────────────────
-h('trash:list', () => P.listTrash())
+h('trash:list', () => P.listTrashSizes())
 h('trash:restore', (id) => { const to = P.restoreTrash(id); send('projects:changed', null); return to })
 h('trash:empty', () => P.emptyTrash())
 h('trash:delete', (id: string) => fs.deleteAsync(P.trashDir(String(id))))
 
 // ── almacenamiento: la tablet y la tarjeta SD ─────────────────────────────────
 type RawStorage = { internal: { free: number; total: number }; sd?: { label: string; uuid: string; free: number; total: number }; newProjects: 'internal' | 'sd'; missing: number; cardLabel: string }
-const du = (p: string) => { try { return fs.du(p) } catch { return 0 } }
 h('storage:info', () => {
   const r = host().call<RawStorage>('storage.info')
   const count = { internal: 0, sd: 0 }
   for (const e of fs.list(P.PROJECTS)) if (e.dir && !e.name.startsWith('.')) count[e.vol === 'sd' ? 'sd' : 'internal']++
-  const sdProjects = r.sd ? du('@sd/projects') : 0
   return {
     newProjects: r.newProjects, missing: r.missing, cardLabel: r.cardLabel,
-    internal: { ...r.internal, projects: count.internal, used: { projects: du(P.PROJECTS) - sdProjects, exports: du('exports'), templates: du(P.USER_TEMPLATES), cache: du('cache'), trash: du('.trash') } },
-    sd: r.sd ? { ...r.sd, projects: count.sd, used: { projects: sdProjects, exports: du('@sd/exports'), trash: du('@sd/.trash') } } : null,
+    internal: { ...r.internal, projects: count.internal },
+    sd: r.sd ? { ...r.sd, projects: count.sd } : null,
   }
+})
+/**
+ * Qué ocupa OpenAnimator en cada lado. Va aparte de storage:info porque recorre carpetas enteras (en la
+ * tarjeta, lento): Java lo mide en segundo plano y sólo lo pide Ajustes › Almacenamiento.
+ */
+h('storage:usage', async () => {
+  const hasSd = !!host().call<RawStorage>('storage.info').sd
+  const [all, sdProjects, exports, templates, cache, trash, sdExports, sdTrash] = await Promise.all([
+    fs.duAsync(P.PROJECTS), hasSd ? fs.duAsync('@sd/projects') : 0, fs.duAsync('exports'), fs.duAsync(P.USER_TEMPLATES), fs.duAsync('cache'), fs.duAsync('.trash'),
+    hasSd ? fs.duAsync('@sd/exports') : 0, hasSd ? fs.duAsync('@sd/.trash') : 0,
+  ])
+  return { internal: { projects: all - sdProjects, exports, templates, cache, trash }, sd: hasSd ? { projects: sdProjects, exports: sdExports, trash: sdTrash } : null }
 })
 h('storage:setNew', (volume: 'internal' | 'sd') => { host().call('storage.setNew', { volume }); send('storage:changed', null); return true })
 /** Proyectos abiertos en el editor: no se mueven mientras tanto. */
@@ -175,7 +185,7 @@ h('storage:move', async (ids: string[], to: 'internal' | 'sd') => {
     host().call('storage.cancel', { on: false })
     // Las miniaturas se escriben dentro de los proyectos: se espera la que esté en curso (las demás paran).
     for (let i = 0; thumbJobs > 0 && i < 300; i++) await new Promise((r) => setTimeout(r, 100))
-    const sizes = todo.map((p) => du(join(P.PROJECTS, p.id)))
+    const sizes = await Promise.all(todo.map((p) => fs.duAsync(join(P.PROJECTS, p.id))))
     const total = sizes.reduce((a, b) => a + b, 0)
     let base = 0
     for (let i = 0; i < todo.length && !cur.cancel; i++) {
@@ -206,6 +216,18 @@ h('app:toast', (text: string) => { try { host().call('app.toast', { text: String
 
 // ── proyecto abierto ──────────────────────────────────────────────────────────
 h('project:open', (id) => { const p = P.readProject(id); openProjects.set(id, (openProjects.get(id) || 0) + 1); return p })
+/**
+ * ¿La miniatura quedó vieja? Si nada cambió desde que se hizo (abrir y cerrar sin tocar), no se rehace: hacerla
+ * dibuja el proyecto en el compositor y en la tablet frena ~0,5 s la pantalla de inicio justo al volver.
+ */
+function thumbStale(id: string) {
+  const dir = P.projectDir(id)
+  if (!dir || touched.has(id)) return true
+  const th = fs.stat(join(dir, 'thumbnail.jpg'))
+  if (!th) return true
+  const newest = Math.max(fs.stat(join(dir, 'project.json'))?.mtime || 0, ...P.listMaybe(join(dir, 'timelines')).map((e) => e.mtime || 0))
+  return newest > th.mtime
+}
 h('project:close', async (id) => {
   const n = (openProjects.get(id) || 1) - 1
   if (n > 0) openProjects.set(id, n)
@@ -213,6 +235,8 @@ h('project:close', async (id) => {
   // Si Claude sigue trabajando en el proyecto, el compositor no se cierra (se cierra solo cuando deja de usarse).
   const busy = await chatBusy(id)
   if (!busy) F.closeFramePool(id)
+  if (!thumbStale(id)) return
+  touched.delete(id)
   await makeThumb(id)
   if (!busy) F.closeFramePool(id)
   send('projects:changed', null)

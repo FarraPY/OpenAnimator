@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { call, on, fmtSize, fmtTime, ProjectSummary, Template } from '../api'
+import { afterPaint, call, on, fmtSize, fmtTime, ProjectSummary, Template } from '../api'
 import { isAndroid, isTouch, userTemplateUrl } from '../platform'
 import { useApp } from '../App'
 import Modal from '../components/Modal'
@@ -30,11 +30,15 @@ function ago(iso?: string) {
   return new Date(iso).toLocaleDateString()
 }
 
+/** Lo último que mostró el inicio: al volver se ve enseguida y se actualiza después de pintar. */
+let lastProjects: ProjectSummary[] | null = null
+let lastTemplates: Template[] = []
+
 export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const { toast, info, settings, updateSettings, go } = useApp()
   const android = isAndroid(), touch = isTouch()
-  const [projects, setProjects] = useState<ProjectSummary[] | null>(null)
-  const [templates, setTemplates] = useState<Template[]>([])
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(lastProjects)
+  const [templates, setTemplates] = useState<Template[]>(lastTemplates)
   const [section, setSection] = useState<'projects' | 'templates'>('projects')
   const [newTpl, setNewTpl] = useState<string | null>(null)
   const [q, setQ] = useState('')
@@ -50,8 +54,9 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const view = settings?.ui.homeView || 'grid'
   const sort = settings?.ui.homeSort || 'recent'
 
-  const refresh = () => call<ProjectSummary[]>('projects:list').then(setProjects).catch((e) => toast(e.message, true))
-  const loadTemplates = () => call<Template[]>('projects:templates').then(setTemplates).catch(() => {})
+  const listed = (l: ProjectSummary[]) => { lastProjects = l; setProjects(l) }
+  const refresh = () => call<ProjectSummary[]>('projects:list').then(listed).catch((e) => toast(e.message, true))
+  const loadTemplates = () => call<Template[]>('projects:templates').then((t) => { lastTemplates = t; setTemplates(t) }).catch(() => {})
   const delTpl = async (t: Template) => {
     if (!(await dlg.confirm({ title: `¿Borrar la plantilla «${t.name}»?`, message: android ? 'Se borra de la tablet. Los proyectos creados con ella no se tocan.' : 'Va a la papelera de Windows. Los proyectos creados con ella no se tocan.', ok: 'Borrar', danger: true }))) return
     try { await call('templates:delete', t.id); loadTemplates(); toast('Plantilla borrada') } catch (e: any) { toast(e.message, true) }
@@ -61,12 +66,11 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
     if (name) { await call('templates:update', t.id, { name }); loadTemplates() }
   }
   useEffect(() => {
-    refresh()
-    loadTemplates()
+    const cancel = afterPaint(() => { refresh(); loadTemplates() })
     const k = (e: KeyboardEvent) => { if (e.ctrlKey && e.key === ',') { e.preventDefault(); go({ page: 'settings', from: { page: 'home' } }) } else if (e.ctrlKey && (e.key === 'n' || e.key === 'N') && !document.querySelector('.modal')) { e.preventDefault(); setNewTpl('') } }
     window.addEventListener('keydown', k)
-    const off = on('projects:changed', () => call<ProjectSummary[]>('projects:list').then(setProjects).catch(() => {}))
-    return () => { off(); window.removeEventListener('keydown', k) }
+    const off = on('projects:changed', () => call<ProjectSummary[]>('projects:list').then(listed).catch(() => {}))
+    return () => { cancel(); off(); window.removeEventListener('keydown', k) }
   }, [])
 
   const importCoa = async () => {

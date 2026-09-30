@@ -23,8 +23,12 @@ export function on(ch: string, cb: (p: any) => void) {
   return () => { listeners.get(ch)?.delete(cb) }
 }
 
+/** Proyectos que Claude o un plugin cambiaron desde su última miniatura (al cerrarlos se hace una nueva). */
+export const touched = new Set<string>()
+
 /** Un archivo del proyecto cambió desde el backend (Claude, un plugin): el editor recarga. */
 export function projectChanged(id: string, file: string) {
+  touched.add(id)
   const f = file.replace(/\\/g, '/')
   const kind = f === 'project.json' ? 'project' : f.startsWith('timelines/') ? 'timeline' : 'files'
   send('project:changed', { id, kind, file: f })

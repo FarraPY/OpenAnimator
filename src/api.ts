@@ -80,6 +80,19 @@ declare global {
 
 export const call = <T = any>(ch: string, ...a: unknown[]): Promise<T> => window.oa.call(ch, ...a)
 export const on = (ch: string, cb: (p: any) => void) => window.oa.on(ch, cb)
+/**
+ * Corre fn después de que se pinte lo que ya está en pantalla; devuelve cómo cancelarlo. Para cargar los datos
+ * de una pantalla nueva sin demorarla: tras un toque, React corre los efectos antes de pintar y, en la tablet,
+ * cada llamada sincrónica a Java se sumaba a la espera (~1 s al entrar a un proyecto o a Ajustes).
+ */
+export function afterPaint(fn: () => void): () => void {
+  let done = false, t = 0
+  const run = () => { if (done) return; done = true; clearTimeout(backup); fn() }
+  const raf = requestAnimationFrame(() => { t = window.setTimeout(run, 0) })
+  // Con la página oculta (la app en segundo plano) no se pinta ni corre requestAnimationFrame: igual se carga.
+  const backup = window.setTimeout(run, 300)
+  return () => { done = true; cancelAnimationFrame(raf); clearTimeout(t); clearTimeout(backup) }
+}
 
 export const fileUrl = (projectId: string, rel: string) => projectUrl(projectId, rel)
 

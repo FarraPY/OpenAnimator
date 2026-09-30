@@ -4,13 +4,13 @@
  * tablet y la tarjeta SD, papelera, exportaciones) y los datos del equipo.
  */
 import { ReactNode, useEffect, useState } from 'react'
-import { call, EFFORTS, fmtSize, MODELS, on, ProjectSummary } from '../../api'
+import { afterPaint, call, EFFORTS, fmtSize, MODELS, on, ProjectSummary } from '../../api'
 import { useApp } from '../../App'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon, IconName, Logo } from '../../ui/icons'
 import { Badge, Button, Segmented, Select, Spinner, Switch, TextArea, TextInput } from '../../ui/kit'
 import { TermuxSetup } from './TermuxSetup'
-import { PLACE, StorageInfo, useMoveProjects, useStorage, Volume } from './Storage'
+import { PLACE, StorageInfo, StorageUsage, useMoveProjects, useStorage, useStorageUsage, Volume } from './Storage'
 
 export function Row({ label, desc, children, stack }: { label: ReactNode; desc?: ReactNode; children?: ReactNode; stack?: boolean }) {
   return (
@@ -185,9 +185,10 @@ type Trash = { id: string; from: string; name: string; label: string; at: string
 type Saved = { path: string; name: string; size: number; mtime: number; sd?: boolean }
 const USE_BAR: Array<[string, string, string]> = [['projects', 'Proyectos', 'var(--accent)'], ['exports', 'Videos exportados', 'var(--video)'], ['templates', 'Plantillas', 'var(--image)'], ['cache', 'Caché', 'var(--audio)'], ['trash', 'Papelera', 'var(--t4)']]
 
-/** Un lugar (la tablet o la tarjeta): cuánto queda libre y qué ocupa OpenAnimator ahí. */
-function Place({ icon, title, sub, p, chosen }: { icon: IconName; title: string; sub?: string; p: StorageInfo['internal']; chosen?: boolean }) {
-  const mine = Object.values(p.used).reduce((n, x) => n + x, 0)
+/** Un lugar (la tablet o la tarjeta): cuánto queda libre y qué ocupa OpenAnimator ahí (used: null mientras se mide). */
+function Place({ icon, title, sub, p, used: u, chosen }: { icon: IconName; title: string; sub?: string; p: StorageInfo['internal']; used: Record<string, number> | null; chosen?: boolean }) {
+  const used = u || {}
+  const mine = Object.values(used).reduce((n, x) => n + x, 0)
   const other = Math.max(0, p.total - p.free - mine)
   return (
     <div className={`vol-card ${chosen ? 'on' : ''}`}>
@@ -197,13 +198,14 @@ function Place({ icon, title, sub, p, chosen }: { icon: IconName; title: string;
         {chosen && <Badge tone="accent">proyectos nuevos</Badge>}
       </div>
       <div className="vol-bar">
-        {USE_BAR.map(([k, , c]) => <div key={k} style={{ flex: p.used[k] || 0, background: c }} />)}
+        {USE_BAR.map(([k, , c]) => <div key={k} style={{ flex: used[k] || 0, background: c }} />)}
         <div style={{ flex: other, background: 'var(--line-3)' }} /><div style={{ flex: p.free }} />
       </div>
       <div className="row t2" style={{ fontSize: 13 }}><span className="tabnum">{fmtSize(p.free)} libres de {fmtSize(p.total)}</span><div className="grow" /><span className="t3">{p.projects} {p.projects === 1 ? 'proyecto' : 'proyectos'}</span></div>
       <div className="row t3" style={{ flexWrap: 'wrap', gap: 12, fontSize: 12.5 }}>
-        {mine < 1024 ? <span>Todavía no hay nada de OpenAnimator acá.</span>
-          : USE_BAR.filter(([k]) => (p.used[k] || 0) >= 1024).map(([k, l, c]) => <span key={k} className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 3, background: c }} />{l} · {fmtSize(p.used[k])}</span>)}
+        {!u ? <span className="row" style={{ gap: 6 }}><Spinner size={12} />Midiendo lo que ocupa cada cosa…</span>
+          : mine < 1024 ? <span>Todavía no hay nada de OpenAnimator acá.</span>
+          : USE_BAR.filter(([k]) => (used[k] || 0) >= 1024).map(([k, l, c]) => <span key={k} className="row" style={{ gap: 6 }}><span style={{ width: 8, height: 8, borderRadius: 3, background: c }} />{l} · {fmtSize(used[k])}</span>)}
       </div>
     </div>
   )
@@ -213,6 +215,7 @@ export function StorageSection() {
   const { toast } = useApp()
   const dlg = useDialogs()
   const storage = useStorage()
+  const { usage, reload: reloadUsage } = useStorageUsage()
   const mover = useMoveProjects()
   const st = storage.info
   const [cache, setCache] = useState<{ export: number; peaks: number; thumbs: number } | null>(null)
@@ -223,8 +226,8 @@ export function StorageSection() {
     call<Trash[]>('trash:list').then(setTrash).catch(() => setTrash([]))
     call<Saved[]>('export:list').then(setExp).catch(() => {})
   }
-  const load = () => { storage.reload(); lists() }
-  useEffect(() => { lists(); return on('storage:changed', lists) }, [])
+  const load = () => { storage.reload(); reloadUsage(); lists() }
+  useEffect(() => { const cancel = afterPaint(lists); const off = on('storage:changed', lists); return () => { cancel(); off() } }, [])
   const clear = async (kind: 'export' | 'peaks' | 'thumbs', label: string) => {
     if (!(await dlg.confirm({ title: `¿Borrar ${label}?`, message: 'Se vuelve a generar cuando haga falta.', ok: 'Borrar', danger: true }))) return
     setCache(await call('cache:clear', kind)); toast('Listo'); load()
@@ -234,7 +237,8 @@ export function StorageSection() {
     if (!st) return
     const ids = (await call<ProjectSummary[]>('projects:list')).filter((p) => p.volume !== to).map((p) => p.id)
     if (!ids.length) return
-    const bytes = (to === 'sd' ? st.internal : st.sd!).used.projects
+    const u = usage || await call<StorageUsage>('storage:usage')
+    const bytes = (to === 'sd' ? u.internal : u.sd!).projects || 0
     const free = to === 'sd' ? st.sd!.free : st.internal.free
     if (bytes + (64 << 20) > free) { toast(`No entra: los proyectos ocupan ${fmtSize(bytes)} y en ${PLACE[to]} quedan ${fmtSize(free)} libres. Podés mover algunos desde el menú de cada proyecto.`, true); return }
     const n = ids.length === 1 ? 'el proyecto' : `los ${ids.length} proyectos`
@@ -245,8 +249,8 @@ export function StorageSection() {
     <Group title="Dónde se guardan los proyectos" icon="drive" desc="Un proyecto en la tarjeta SD se abre, se edita, trabaja con Claude y se exporta ahí mismo, como uno de la tablet; sus videos exportados también quedan en la tarjeta.">
       {!st ? <div className="row t3" style={{ padding: 18 }}><Spinner />Cargando…</div> : <>
         <div className="vol-grid">
-          <Place icon="tablet" title="Tablet" sub="Almacenamiento interno" p={st.internal} chosen={!!st.sd && st.newProjects === 'internal'} />
-          {st.sd ? <Place icon="sd" title="Tarjeta SD" sub={st.sd.label} p={st.sd} chosen={st.newProjects === 'sd'} />
+          <Place icon="tablet" title="Tablet" sub="Almacenamiento interno" p={st.internal} used={usage?.internal || null} chosen={!!st.sd && st.newProjects === 'internal'} />
+          {st.sd ? <Place icon="sd" title="Tarjeta SD" sub={st.sd.label} p={st.sd} used={usage?.sd || null} chosen={st.newProjects === 'sd'} />
             : <div className="vol-card empty-vol">
               <span className="vol-ico"><Icon name="sd" size={20} /></span>
               <div style={{ fontWeight: 600 }}>{st.missing ? `La tarjeta SD${st.cardLabel ? ` (${st.cardLabel})` : ''} no está puesta` : 'Sin tarjeta SD'}</div>
@@ -257,10 +261,10 @@ export function StorageSection() {
           <Row label="Proyectos nuevos" desc="Dónde se crean (también se puede elegir al crear cada uno).">
             <Segmented value={st.newProjects} onChange={setNew} options={[{ value: 'internal', icon: 'tablet', label: 'Tablet' }, { value: 'sd', icon: 'sd', label: 'Tarjeta SD' }]} />
           </Row>
-          {st.internal.projects > 0 && <Row label="Pasar todo a la tarjeta" desc={`${st.internal.projects} ${st.internal.projects === 1 ? 'proyecto' : 'proyectos'} de la tablet · ${fmtSize(st.internal.used.projects)}. Para uno solo: menú del proyecto › Mover a la tarjeta SD.`}>
+          {st.internal.projects > 0 && <Row label="Pasar todo a la tarjeta" desc={`${st.internal.projects} ${st.internal.projects === 1 ? 'proyecto' : 'proyectos'} de la tablet${usage ? ` · ${fmtSize(usage.internal.projects || 0)}` : ''}. Para uno solo: menú del proyecto › Mover a la tarjeta SD.`}>
             <Button icon="sd" onClick={() => moveAll('sd')} disabled={mover.moving}>Mover a la tarjeta</Button>
           </Row>}
-          {st.sd.projects > 0 && <Row label="Traer todo a la tablet" desc={`${st.sd.projects} ${st.sd.projects === 1 ? 'proyecto' : 'proyectos'} de la tarjeta · ${fmtSize(st.sd.used.projects)}.`}>
+          {st.sd.projects > 0 && <Row label="Traer todo a la tablet" desc={`${st.sd.projects} ${st.sd.projects === 1 ? 'proyecto' : 'proyectos'} de la tarjeta${usage?.sd ? ` · ${fmtSize(usage.sd.projects || 0)}` : ''}.`}>
             <Button icon="tablet" onClick={() => moveAll('internal')} disabled={mover.moving}>Mover a la tablet</Button>
           </Row>}
         </> : st.newProjects === 'sd' && <Row label="Proyectos nuevos" desc="Elegiste la tarjeta SD, pero no está: mientras tanto se guardan en la tablet.">

@@ -127,11 +127,11 @@ export function videoThumb(rel: string): Promise<string> {
   }))
 }
 
-/** Tamaño de cada caché (bytes). */
-export function cacheStats() {
-  let exportCache = 0
-  for (const e of fs.list('projects')) if (e.dir) exportCache += fs.du(join('projects', e.name, '.oa-cache'))
-  return { export: exportCache + fs.du(join(CACHE, 'frames')), peaks: fs.du(join(CACHE, 'peaks')), thumbs: fs.du(join(CACHE, 'thumbs')) }
+/** Tamaño de cada caché (bytes), medido en Java en segundo plano: recorrer las carpetas no frena la interfaz. */
+export async function cacheStats() {
+  const perProject = fs.list('projects').filter((e) => e.dir).map((e) => fs.duAsync(join('projects', e.name, '.oa-cache')))
+  const [frames, peaks, thumbs, ...caches] = await Promise.all([fs.duAsync(join(CACHE, 'frames')), fs.duAsync(join(CACHE, 'peaks')), fs.duAsync(join(CACHE, 'thumbs')), ...perProject])
+  return { export: caches.reduce((n, x) => n + x, frames), peaks, thumbs }
 }
 
 export async function clearCache(kind: 'export' | 'peaks' | 'thumbs') {
@@ -139,6 +139,6 @@ export async function clearCache(kind: 'export' | 'peaks' | 'thumbs') {
     for (const e of fs.list('projects')) if (e.dir && fs.exists(join('projects', e.name, '.oa-cache'))) await fs.deleteAsync(join('projects', e.name, '.oa-cache'))
     if (fs.exists(join(CACHE, 'frames'))) await fs.deleteAsync(join(CACHE, 'frames'))
   } else if (fs.exists(join(CACHE, kind))) await fs.deleteAsync(join(CACHE, kind))
-  return cacheStats()
+  return await cacheStats()
 }
 

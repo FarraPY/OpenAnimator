@@ -1,5 +1,5 @@
 import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
+import { afterPaint, Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
 import { isAndroid } from '../platform'
 import { useApp } from '../App'
 import { Icon, IconName } from '../ui/icons'
@@ -275,8 +275,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   busyRef.current = busy
 
   useEffect(() => {
-    if (windowMode && attachTo) reattach(attachTo)
-    else resumeOrStart()
+    // Después de pintar: retomar la conversación y dibujarla (puede ser larga) no demora la apertura del proyecto.
+    const cancel = afterPaint(() => { if (windowMode && attachTo) reattach(attachTo); else resumeOrStart() })
     const off = on('chat:event', (e: ChatEvent) => {
       if (e.session !== sid.current) return
       if (e.type === 'item') { seen.current.set(e.item!.id, Date.now()); setItems((xs) => [...xs, e.item as ChatItem]) }
@@ -296,7 +296,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     })
     if (!windowMode) call<boolean>('chat:isPopped', projectId).then(setPopped).catch(() => {})
     return () => {
-      off(); offPop()
+      cancel(); off(); offPop()
       if (windowMode || !sid.current) return
       // Salir del editor no corta a Claude: la conversación sigue y se retoma al volver al proyecto.
       call('chat:leave', sid.current); call('chat:popin', projectId)

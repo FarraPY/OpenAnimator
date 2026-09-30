@@ -3,7 +3,7 @@ import Home from './pages/Home'
 import Editor from './pages/Editor'
 import SettingsPage from './pages/Settings'
 import ChatPanel from './components/ChatPanel'
-import { AppInfo, call, Settings, SettingsPatch } from './api'
+import { afterPaint, AppInfo, call, Settings, SettingsPatch } from './api'
 import { Icon } from './ui/icons'
 import { TooltipLayer } from './ui/kit'
 import { isAndroid, recoveredBoot } from './platform'
@@ -79,7 +79,8 @@ export default function App() {
   const refreshInfo = useCallback(() => { call<AppInfo>('app:info').then(setInfo).catch(() => {}) }, [])
   const go = useCallback((r: Route) => {
     setRoute(r)
-    if (r.page === 'editor') call('settings:set', { lastProject: r.id }).catch(() => {})
+    // Después de pintar la pantalla nueva: guardar los ajustes escribe un archivo (en la tablet, sincrónico).
+    if (r.page === 'editor') afterPaint(() => { call('settings:set', { lastProject: r.id }).catch(() => {}) })
     // Para volver acá si Android reinicia la página (en Ajustes se sigue recordando el proyecto de antes).
     if (r.page !== 'settings') try { localStorage.setItem('oa.openProject', r.page === 'editor' ? r.id : '') } catch { /* sin almacenamiento */ }
   }, [])

@@ -133,6 +133,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `POST /__dev/sd {present}`; la lógica de Java se probó en la PC con el android-all de Robolectric.
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
+- Cambiar de pantalla rápido (había ~1 s al entrar a un proyecto, a Ajustes o al inicio): tras un toque React corre
+  los efectos antes de pintar y los canales del backend corren en microtareas, así que cada llamada sincrónica a Java
+  demoraba la pantalla nueva. Los datos de una pantalla se cargan con `afterPaint` (src/api.ts) y el inicio se
+  muestra con la última lista mientras tanto; el chat se retoma después de pintar. Recorrer carpetas (`fs.du`) va en
+  Java en segundo plano (`fs.duAsync`); `storage:info` ya no mide nada (lo que ocupa cada cosa es `storage:usage`,
+  sólo en Ajustes). Al cerrar un proyecto la miniatura se rehace sólo si cambió (`thumbStale`: `touched` por Claude o
+  un plugin, o project.json/timelines más nuevos). Medir con la CPU 4× más lenta (CDP) y Event Timing (toque → pintado).
 - Captura de la exportación (`Capture.java`, compositor con `capture=1`: el escenario se escala a la vista;
   `__oaCap(t, n)` → `__oaCapDone`, pedidos en orden, sin interfaz JS). Se prueba en orden y, si uno falla a mitad,
   se sigue con el siguiente desde `enc.frames` (lo que ya está en el video):

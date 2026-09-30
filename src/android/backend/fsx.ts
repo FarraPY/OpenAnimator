@@ -31,6 +31,8 @@ export const fs = {
   copy: (from: string, to: string) => { call('fs.copy', { from, to }) },
   copyAsync: (from: string, to: string) => host().callAsync('fs.copy', { from, to }),
   du: (path: string) => call<number>('fs.du', { path }),
+  /** Tamaño de una carpeta entera, calculado en Java en segundo plano (recorrerla puede tardar: no frena la interfaz). */
+  duAsync: (path: string) => host().callAsync<number>('fs.du', { path }).catch(() => 0),
   readJSON<T = any>(path: string): T { return JSON.parse(fs.readText(path).replace(/^﻿/, '')) },
   writeJSON(path: string, obj: unknown) { fs.writeText(path, JSON.stringify(obj, null, 2) + '\n') },
   url: (path: string) => host().fsUrl(path),

@@ -788,6 +788,7 @@ async function async(method, a, id, emit) {
     case 'http.request': return await httpRequest(a, id, emit)
     case 'fs.copy': return sync('fs.copy', a)
     case 'fs.delete': return sync('fs.delete', a)
+    case 'fs.du': return sync('fs.du', a)
     case 'zip.export': { py(ZIP_EXPORT, resolve(a.dir), resolve(a.out), a.prefix || '', a.skip || ''); emit({ event: 'progress', done: 1, total: 1 }); return { path: a.out, size: fs.statSync(resolve(a.out)).size } }
     case 'zip.import': { const n = +py(ZIP_IMPORT, resolve(a.zip), resolve(a.dest)); emit({ event: 'progress', done: n, total: n }); return { files: n } }
     case 'pick.files': return pickFiles()

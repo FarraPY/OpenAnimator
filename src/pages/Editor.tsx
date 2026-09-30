@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Asset, call, Clip, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../api'
+import { afterPaint, Asset, call, Clip, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../api'
 import { useApp } from '../App'
 import Stage, { StageHandle } from '../components/Stage'
 import Timeline, { TYPE_COLOR, TYPE_ICON } from '../components/Timeline'
@@ -116,9 +116,14 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const refreshAssets = useCallback(() => call<Asset[]>('assets:list', projectId).then(setAssets).catch(() => {}), [projectId])
 
   useEffect(() => {
-    call<Project>('project:open', projectId).then(async (p) => { setProject(p); setTlId(p.activeTimeline); await loadTimeline(p.activeTimeline) }).catch((e) => { toast(e.message, true); onClose() })
-    refreshAssets()
-    return () => { call('project:close', projectId) }
+    // Después de pintar: el toque responde al instante («Abriendo proyecto…») y el editor se completa enseguida.
+    let opened = false
+    const cancel = afterPaint(() => {
+      opened = true
+      call<Project>('project:open', projectId).then(async (p) => { setProject(p); setTlId(p.activeTimeline); await loadTimeline(p.activeTimeline) }).catch((e) => { toast(e.message, true); onClose() })
+      refreshAssets()
+    })
+    return () => { cancel(); if (opened) call('project:close', projectId) }
   }, [projectId])
 
   // Cambios de archivos (Claude guarda la escena, el timeline, un audio…): llegan en ráfagas, así que se
@@ -367,7 +372,9 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
 
   if (!project || !tl || !settings) return (
     <>
-      <div className="titlebar"><Button variant="ghost" size="sm" icon="arrow-left" onClick={onClose} /><div className="brand"><Logo size={20} /></div></div>
+      {touch
+        ? <div className="titlebar tb-touch"><Button variant="ghost" icon="arrow-left" tip="Proyectos" onClick={onClose} /><Logo size={28} /></div>
+        : <div className="titlebar"><Button variant="ghost" size="sm" icon="arrow-left" onClick={onClose} /><div className="brand"><Logo size={20} /></div></div>}
       <div className="editor" style={{ display: 'grid', placeItems: 'center' }}><div className="row t3"><Spinner />Abriendo proyecto…</div></div>
     </>
   )

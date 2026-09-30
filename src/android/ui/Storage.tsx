@@ -4,14 +4,14 @@
  * se abre, se edita y se exporta ahí mismo; los videos que exporta también quedan en la tarjeta.
  */
 import { useEffect, useState } from 'react'
-import { call, fmtSize, on } from '../../api'
+import { afterPaint, call, fmtSize, on } from '../../api'
 import { useApp } from '../../App'
 import Modal from '../../components/Modal'
 import { isAndroid } from '../../platform'
 import { Button, Progress } from '../../ui/kit'
 
 export type Volume = 'internal' | 'sd'
-type Place = { free: number; total: number; projects: number; used: Record<string, number> }
+type Place = { free: number; total: number; projects: number }
 export type StorageInfo = {
   newProjects: Volume
   /** Proyectos que quedaron en una tarjeta que ahora no está. */
@@ -22,12 +22,26 @@ export type StorageInfo = {
 }
 export const PLACE: Record<Volume, string> = { internal: 'la tablet', sd: 'la tarjeta SD' }
 
+/** Qué ocupa OpenAnimator en cada lado (bytes por tipo: projects, exports, templates, cache, trash). */
+export type StorageUsage = { internal: Record<string, number>; sd: Record<string, number> | null }
+
+/** El último estado: al volver a una pantalla se muestra enseguida y se actualiza después de pintar. */
+let lastInfo: StorageInfo | null = null
+
 /** Estado del almacenamiento (sólo en Android); se actualiza al poner o sacar la tarjeta. */
 export function useStorage() {
-  const [info, setInfo] = useState<StorageInfo | null>(null)
-  const load = () => { if (isAndroid()) call<StorageInfo>('storage:info').then(setInfo).catch(() => {}) }
-  useEffect(() => { load(); return on('storage:changed', load) }, [])
+  const [info, setInfo] = useState<StorageInfo | null>(lastInfo)
+  const load = () => { if (isAndroid()) call<StorageInfo>('storage:info').then((i) => { lastInfo = i; setInfo(i) }).catch(() => {}) }
+  useEffect(() => { const cancel = afterPaint(load); const off = on('storage:changed', load); return () => { cancel(); off() } }, [])
   return { info, reload: load }
+}
+
+/** Qué ocupa cada cosa: Java recorre las carpetas en segundo plano (tarda; sólo lo muestra Ajustes). */
+export function useStorageUsage() {
+  const [usage, setUsage] = useState<StorageUsage | null>(null)
+  const load = () => { if (isAndroid()) call<StorageUsage>('storage:usage').then(setUsage).catch(() => {}) }
+  useEffect(() => { const cancel = afterPaint(load); const off = on('storage:changed', load); return () => { cancel(); off() } }, [])
+  return { usage, reload: load }
 }
 
 type Prog = { to: Volume; id: string; name: string; index: number; count: number; done: number; total: number }

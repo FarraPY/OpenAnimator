@@ -355,6 +355,10 @@ public final class Bridge {
             case "fs.delete":
                 resolve(id, ok(fs.delete(a.getString("path"))));
                 return;
+            case "fs.du":
+                // Recorre la carpeta entera (en la tarjeta SD, lento): en segundo plano, sin frenar la interfaz.
+                resolve(id, ok(fs.du(a.getString("path"))));
+                return;
             case "zip.export": {
                 String skip = a.optString("skip", "");
                 Zip.zipDir(fs.resolve(a.getString("dir")), fs.resolve(a.getString("out")), a.getString("prefix"),
