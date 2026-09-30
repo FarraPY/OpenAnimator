@@ -504,11 +504,18 @@
   // éste). Sin esperar a que pinte: Java espera con postVisualStateCallback, que asegura que el próximo
   // dibujo ya tiene este estado, o mira la franja de marca en la imagen.
   var capChain = Promise.resolve();
-  function capStep(work, n) {
+  // Cuánto tarda la página en dejar listo cada fotograma (para los detalles de la exportación).
+  var capStats = window.__oaCapStats = { n: 0, ms: 0, max: 0 };
+  function capStep(work, n, measure) {
     capChain = capChain.then(function () {
       // Mientras cambia, la franja dice 0: ninguna imagen a medio cambiar lleva el número de otro fotograma.
       setMark(0);
-      return work();
+      var t = performance.now();
+      return Promise.resolve(work()).then(function () {
+        if (!measure) return;
+        var d = performance.now() - t;
+        capStats.n++; capStats.ms += d; if (d > capStats.max) capStats.max = d;
+      });
     }).then(function () {
       setMark(n);
       window.__oaCapDone = n;
@@ -532,7 +539,7 @@
   }
   if (capture) {
     window.__oaCap = function (t, n) {
-      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n);
+      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n, true);
     };
     window.__oaCapTest = function (n) { return capStep(function () { showTest(true); }, n); };
   }

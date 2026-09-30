@@ -83,6 +83,8 @@ final class Capture {
      */
     private final Object viewsLock = new Object();
     private int generation;
+    // para los detalles de la exportación
+    private long statFrames, statNs, statLost;
 
     private static final class Req {
         final double t;
@@ -108,6 +110,7 @@ final class Capture {
         if (url == null || !url.startsWith(PREFIX) || !url.contains("capture=1")) throw new IOException("Dirección de captura inválida");
         if (width < 16 || height < 16 || width > 4096 || height > 4096) throw new IOException("Tamaño de captura inválido");
         gpu = "gpu".equals(mode);
+        statFrames = statNs = statLost = 0;
         try {
             if (gpu) startGpu(url, width, height);
             else startDraw(url, width, height);
@@ -255,7 +258,33 @@ final class Capture {
      * export dialog comes back about once a second (with {@code preview}, in draw mode).
      */
     synchronized JSONObject frame(double t, JSONArray upcoming, boolean preview) throws Exception {
-        return gpu ? frameGpu(t, upcoming) : frameDraw(t, preview);
+        long t0 = System.nanoTime();
+        JSONObject o = gpu ? frameGpu(t, upcoming) : frameDraw(t, preview);
+        statNs += System.nanoTime() - t0;
+        statFrames++;
+        return o;
+    }
+
+    /**
+     * How the capture went (for the export details): frames, average time per frame here, frames the
+     * display skipped, frames requested ahead at the end and the page's own time per frame.
+     */
+    synchronized JSONObject stats() throws JSONException {
+        JSONObject o = new JSONObject();
+        o.put("mode", gpu ? "gpu" : "draw");
+        o.put("frames", statFrames);
+        o.put("msPerFrame", statFrames > 0 ? statNs / 1e6 / statFrames : 0);
+        if (gpu) {
+            o.put("lost", statLost);
+            o.put("ahead", depth);
+        }
+        try {
+            String page = eval("JSON.stringify(window.__oaCapStats || null)", 3000);
+            if (page != null && page.startsWith("\"")) o.put("page", new JSONObject(unquote(page)));
+        } catch (Exception ignored) {
+            // la página ya no está
+        }
+        return o;
     }
 
     private JSONObject frameGpu(double t, JSONArray upcoming) throws Exception {
@@ -298,6 +327,7 @@ final class Capture {
             if (r.want.status == Encoder.Want.LOST) {
                 // La pantalla mostró uno posterior sin mostrar este (o la página no lo pudo dibujar): se vuelve a
                 // pedir, con un fotograma menos por adelantado.
+                statLost++;
                 ahead.clear();
                 encoder.gpuForget();
                 String err = eval("String(window.__oaCapError)", 5000);

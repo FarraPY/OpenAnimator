@@ -99,7 +99,8 @@ puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo 
   audio. Lo que dibuja el motor web con la GPU va directo al codificador de video (*captura GPU*: el
   compositor se abre en una pantalla virtual de la app, sin copiar las imágenes a la memoria); si en algún
   equipo no funciona, la exportación sigue sola con la *captura directa* o con el método compatible (más
-  lentos), y el diálogo dice cuál usa. El video se guarda en *Galería › Movies/OpenAnimator* (en la galería de la tarjeta si el
+  lentos), y el diálogo dice cuál usa. El audio lo mezcla la parte nativa, directo al codificador. Al
+  terminar, «Detalles» muestra cuánto tardó cada etapa (y *Copiar detalles* los copia para mandarlos). El video se guarda en *Galería › Movies/OpenAnimator* (en la galería de la tarjeta si el
   proyecto está en la tarjeta SD) y se puede compartir o abrir.
 - **Tarjeta SD**: cada proyecto puede estar en la tablet o en la tarjeta y se trabaja igual en los dos
   lugares (abrir, editar, Claude, exportar). En *Ajustes › Almacenamiento* se ve el espacio de cada lado,

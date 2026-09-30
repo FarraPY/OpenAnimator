@@ -148,7 +148,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   3. compatible: modern-screenshot (era ~90 % del tiempo). La vista de captura nunca carga la página de la app
      (AppServer le daría otro token al puente). En la PC (server.mjs) el modo gpu se imita con capturas de pantalla.
 - Fotogramas (miniaturas, Claude y el método compatible): el compositor rasteriza el DOM con modern-screenshot
-  (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL); el audio, mezclado con Web Audio, a `enc.audio`.
+  (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL). El audio de la exportación lo mezcla Java
+  (`AudioMix.java`, `enc.mix`: ventanas de 30 s, sinc a 48 kHz, volumen y fundidos lineales en el tiempo del clip)
+  directo al codificador; con JS (ida y vuelta por el puente) tardaba ~30 s por minuto. Se probó en la PC contra una
+  mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. Al terminar, el diálogo muestra «Detalles»
+  (tiempos por etapa, método, ms por fotograma, `__oaCapStats` de la página) para copiar y pegar.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
   nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles

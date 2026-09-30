@@ -464,10 +464,17 @@ public final class Bridge {
             case "enc.frames":
                 resolve(id, ok(encoder.frames()));
                 return;
-            case "cap.stop":
-                capture.stop();
-                resolve(id, ok(true));
+            case "enc.mix":
+                // La mezcla del audio de la exportación, directo al codificador (ver AudioMix).
+                resolve(id, ok(AudioMix.mix(AudioMix.parts(a.optJSONArray("parts"), fs), a.getDouble("start"), a.getDouble("end"),
+                        Math.max(8000, Math.min(96000, a.optInt("sampleRate", 48000))), encoder, progress(id))));
                 return;
+            case "cap.stop": {
+                JSONObject st = capture.stats();
+                capture.stop();
+                resolve(id, ok(st));
+                return;
+            }
             default:
                 throw new IllegalArgumentException("Método desconocido: " + method);
         }

@@ -12,7 +12,7 @@ import { Badge, Button, Field, NumberInput, Progress, Segmented, Select, Switch,
 import { autoBitrate, type ExportQuality as Quality } from '../bitrate'
 
 type Codec = 'avc' | 'hevc'
-type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; gallery?: string; size?: number; encoder?: string; preview?: string; note?: string }
+type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; gallery?: string; size?: number; encoder?: string; preview?: string; note?: string; details?: string }
 type Saved = { path: string; name: string; size: number; mtime: number }
 
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
@@ -122,6 +122,7 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
             {prog.gallery ? <Badge tone="ok" icon="gallery">Guardado en la galería · {prog.gallery}</Badge> : <Badge tone="neutral" icon="drive">Guardado en la app (Ajustes › Almacenamiento)</Badge>}
             {prog.encoder && <div className="t3" style={{ fontSize: 12.5 }}>Codificador: {prog.encoder}{prog.fps ? ` · ${prog.fps.toFixed(1).replace('.', ',')} fps` : ''}</div>}
             {prog.note && <div className="t3" style={{ fontSize: 12.5, maxWidth: 560, textAlign: 'center' }}>{prog.note}</div>}
+            {prog.details && <Details text={prog.details} />}
           </div>
         ) : (
           <div className="xp-run">
@@ -129,6 +130,7 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
             <div>
               <div className="xp-big tabnum">{Math.floor(pct)}<span className="t3" style={{ fontSize: 24 }}> %</span></div>
               <div className="xp-phase">{failed ? prog.message : `${PHASE[prog.phase] || prog.phase}${prog.phase === 'render' ? ` · ${prog.message}` : ''}`}</div>
+              {failed && prog.details && <Details text={prog.details} />}
               <div style={{ marginTop: 16 }}><Progress value={pct} indeterminate={prog.phase === 'preparando' || prog.phase === 'final'} tone={failed ? 'err' : undefined} /></div>
               {!failed && <div className="xp-meta">
                 <div><div className="k">Velocidad</div><div className="v tabnum">{prog.fps ? `${prog.fps.toFixed(1)} fps` : '—'}</div></div>
@@ -204,5 +206,18 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
       </>}
       {dlg.element}
     </Modal>
+  )
+}
+
+/** Tiempos y métodos de la exportación, para copiarlos y mandarlos (sirven para ver dónde se va el tiempo). */
+function Details({ text }: { text: string }) {
+  const { toast } = useApp()
+  const copy = () => call('clipboard:text', text).then(() => toast('Detalles copiados'), (e) => toast(e.message, true))
+  return (
+    <details className="xp-details">
+      <summary><Icon name="info" size={13} />Detalles</summary>
+      <pre>{text}</pre>
+      <Button size="sm" icon="copy" onClick={copy}>Copiar detalles</Button>
+    </details>
   )
 }

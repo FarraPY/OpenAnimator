@@ -216,6 +216,38 @@ function encFrame(b64) {
   fs.writeFileSync(path.join(enc.tmp, `f${String(enc.frames++).padStart(6, '0')}.jpg`), Buffer.from(b64, 'base64'))
   return true
 }
+/**
+ * La mezcla del audio (AudioMix.java en la tablet), con ffmpeg: cada tramo cortado por muestra, a 48 kHz,
+ * mono a los dos lados, volumen y fundidos lineales en el tiempo propio del clip, en su lugar y sumados.
+ */
+async function encMix(a, emit) {
+  if (!enc?.pcm) throw new Error('Esta exportación no tiene audio')
+  const SR = a.sampleRate || 48000, t0 = a.start, t1 = a.end, total = Math.max(1, Math.round((t1 - t0) * SR))
+  const args = ['-v', 'error', '-y'], filt = [], failed = []
+  let k = 0
+  for (const p of a.parts || []) {
+    const file = resolve(p.path)
+    const s0 = Math.max(p.start, t0), s1 = Math.min(p.start + p.duration, t1)
+    if (s1 - s0 < 0.0005 || !fs.existsSync(file)) continue
+    let info
+    try { info = execFileSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate,channels', '-of', 'csv=p=0', file]).toString().trim().split(',').map(Number) } catch { info = [] }
+    if (!info[0]) { failed.push(`${path.basename(file)}: sin audio`); continue }
+    const [rate, ch] = info, la = s0 - p.start
+    const g = `${p.volume ?? 1}` + (p.fadeIn > 0 ? `*min(1,max(0,(t+${la})/${p.fadeIn}))` : '') + (p.fadeOut > 0 ? `*min(1,max(0,(${p.duration}-(t+${la}))/${p.fadeOut}))` : '')
+    const from = Math.round(((p.in || 0) + la) * rate), n = Math.round((s1 - s0) * rate)
+    args.push('-i', file)
+    filt.push(`[${k}:a]atrim=start_sample=${from}:end_sample=${from + n},asetpts=PTS-STARTPTS,aresample=${SR},pan=stereo|c0=c0|c1=${ch > 1 ? 'c1' : 'c0'},aeval='val(0)*${g}|val(1)*${g}':c=stereo,adelay=delays=${Math.round((s0 - t0) * SR)}S:all=1,apad=whole_len=${total},atrim=end_sample=${total}[p${k}]`)
+    k++
+  }
+  if (!k) args.push('-f', 'lavfi', '-i', `anullsrc=r=${SR}:cl=stereo`), filt.push(`[0:a]atrim=end_sample=${total}[out]`)
+  else filt.push(`${Array.from({ length: k }, (_, i) => `[p${i}]`).join('')}amix=inputs=${k}:normalize=0:dropout_transition=0,atrim=end_sample=${total}[out]`)
+  const tmp = path.join(enc.tmp, 'mix.s16')
+  await new Promise((res, rej) => execFile('ffmpeg', [...args, '-filter_complex', filt.join(';'), '-map', '[out]', '-f', 's16le', '-acodec', 'pcm_s16le', '-ar', String(SR), '-ac', '2', tmp], (e, _o, err) => (e ? rej(new Error('ffmpeg: ' + String(err).trim().split('\n').pop())) : res())))
+  fs.appendFileSync(enc.pcm, fs.readFileSync(tmp))
+  fs.rmSync(tmp, { force: true })
+  emit({ event: 'progress', done: total, total })
+  return { parts: k, failed }
+}
 function encFinish() {
   const e = enc
   if (!e) throw new Error('No hay una exportación en curso')
@@ -555,8 +587,18 @@ async function capStart(a) {
     return { width: a.width, height: a.height, mode: gpu ? 'gpu' : 'draw' }
   } catch (e) { cap = null; await browser.close().catch(() => {}); throw e }
 }
+/** Como Capture.stats(): fotogramas, tiempo por fotograma y lo que tardó la página en dibujar cada uno. */
+async function capStats() {
+  if (!cap) return null
+  const page = await cap.page.evaluate(() => window.__oaCapStats || null).catch(() => null)
+  return { mode: cap.gpu ? 'gpu' : 'draw', frames: cap.frames, msPerFrame: cap.frames ? cap.ms / cap.frames : 0, ...(cap.gpu ? { lost: 0, ahead: 0 } : {}), page }
+}
 async function capFrame(a) {
   if (!cap) throw new Error('La captura no está abierta')
+  const t0 = Date.now()
+  try { return await capFrameOne(a) } finally { cap && (cap.ms = (cap.ms || 0) + Date.now() - t0) }
+}
+async function capFrameOne(a) {
   if (cap.gpu) return capFrameGpu(a)
   if (+process.env.OA_DEV_CAPTURE_FAIL_AT === enc?.frames) throw new Error('captura vacía (simulada)')
   const n = ++cap.seq
@@ -740,8 +782,9 @@ async function async(method, a, id, emit) {
     case 'enc.finish': return await encFinish()
     case 'cap.start': return await capStart(a)
     case 'cap.frame': return await capFrame(a)
-    case 'cap.stop': await capClose(); return true
+    case 'cap.stop': { const st = await capStats(); await capClose(); return st }
     case 'enc.frames': if (!enc) throw new Error('No hay una exportación en curso'); return enc.frames
+    case 'enc.mix': return await encMix(a, emit)
   }
   throw new Error('Método desconocido: ' + method)
 }

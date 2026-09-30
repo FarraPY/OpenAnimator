@@ -3,8 +3,8 @@
  * resolución de salida (las escenas son vectoriales: 4K nítido), y el codificador de hardware de la
  * tablet (MediaCodec, ver Encoder.java) lo convierte en H.264/HEVC + AAC dentro de un MP4.
  *
- *  1. Mezcla del audio del timeline con Web Audio (por ventanas de 30 s; Java decodifica sólo el
- *     tramo de cada archivo que suena en la ventana) → PCM → Java.
+ *  1. Mezcla del audio del timeline en Java (AudioMix.java, por ventanas de 30 s: decodifica sólo el
+ *     tramo de cada archivo que suena), directo al codificador.
  *  2. Fotograma a fotograma, con el primer método que ande en el equipo (Capture.java):
  *     - captura GPU: el compositor abre en una pantalla virtual cuyas imágenes van a una textura del
  *       codificador (nunca pasan por la memoria); Java pide los próximos fotogramas por adelantado.
@@ -20,8 +20,7 @@ import { autoBitrate, type ExportQuality } from '../bitrate'
 import { host } from '../host'
 import { compositorUrl } from '../../platform'
 import { Renderer } from './frames'
-import { decodeRange } from './media'
-import { basename, blobToBase64, fs, join, normalizeRel, uniqueName } from './fsx'
+import { basename, fs, join, normalizeRel, uniqueName } from './fsx'
 import { exportsDir, listMaybe, projectDir, readProject, readTimeline } from './projects'
 import { getSettings } from './settings'
 import { holdAwake } from './wake'
@@ -50,7 +49,22 @@ export type AndroidExportProgress = {
   file?: string; gallery?: string; size?: number; encoder?: string; preview?: string
   /** Al terminar: por qué no se usó la captura GPU (si no anduvo en el equipo). */
   note?: string
+  /** Al terminar (o al fallar): tiempos y métodos, en texto para copiar y mandar. */
+  details?: string
 }
+
+/** Lo que se mide de una exportación (ver details). */
+type Diag = {
+  marks: Record<string, number>
+  why: Partial<Record<Method, string>>
+  used: Method[]
+  video?: string; fps?: number
+  cap?: { mode?: string; frames?: number; msPerFrame?: number; lost?: number; ahead?: number; page?: { n: number; ms: number; max: number } }
+  compat?: { n: number; ms: number }
+  audio?: { parts: number; failed: string[] }
+}
+const secs = (ms?: number) => (ms == null ? '—' : `${(ms / 1000).toFixed(1).replace('.', ',')} s`)
+const msf = (ms?: number) => (ms == null || !isFinite(ms) ? '—' : `${Math.round(ms)} ms`)
 
 class Cancelled extends Error {}
 type Method = 'gpu' | 'draw' | 'compat'
@@ -59,21 +73,15 @@ const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 const IMG = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const SR = 48000
 
-
-function fadeGain(c: Clip, lt: number) {
-  let g = 1
-  if (c.fadeIn && lt < c.fadeIn) g = Math.min(g, Math.max(0, lt / c.fadeIn))
-  if (c.fadeOut && lt > c.duration - c.fadeOut) g = Math.min(g, Math.max(0, (c.duration - lt) / c.fadeOut))
-  return g
-}
-
 type Part = { file: string; clip: Clip; vol: number }
 
-/** Los audios que suenan en [t0, t1] (pistas de audio y el sonido de los videos) y se pueden leer. */
-async function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Promise<Part[]> {
+/**
+ * Los audios que suenan en [t0, t1] (pistas de audio y el sonido de los videos). Si un archivo no se
+ * puede leer (o un video no tiene audio), la mezcla lo saltea y sigue con los demás.
+ */
+function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Part[] {
   const root = projectDir(projectId)!
   const solo = tl.tracks.some((t) => t.type === 'audio' && t.solo)
-  const readable = new Map<string, Promise<boolean>>()
   const parts: Part[] = []
   for (const tr of tl.tracks) {
     if (tr.type !== 'audio' && tr.type !== 'video') continue
@@ -86,69 +94,24 @@ async function audioParts(projectId: string, tl: Timeline, t0: number, t1: numbe
       if (vol <= 0) continue
       let file: string
       try { file = join(root, normalizeRel(c.src)) } catch { continue }
-      if (!fs.exists(file)) continue
-      // Un video sin pista de audio (o un formato que la tablet no lee) simplemente no suma nada.
-      if (!readable.has(file)) readable.set(file, decodeRange(file, 0, 0.1, SR).then(() => true, () => false))
-      if (await readable.get(file)) parts.push({ file, clip: c, vol })
+      if (fs.exists(file)) parts.push({ file, clip: c, vol })
     }
   }
   return parts
 }
 
-/** PCM 16 bits estéreo intercalado (lo que espera el codificador AAC). */
-function pcm16(buf: AudioBuffer) {
-  const n = buf.length
-  const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L
-  const out = new Int16Array(n * 2)
-  for (let i = 0; i < n; i++) {
-    const l = Math.max(-1, Math.min(1, L[i])), r = Math.max(-1, Math.min(1, R[i]))
-    out[i * 2] = l < 0 ? l * 0x8000 : l * 0x7fff
-    out[i * 2 + 1] = r < 0 ? r * 0x8000 : r * 0x7fff
-  }
-  return out
-}
-
-/** Mezcla por ventanas de 30 s (poca memoria aunque el video sea largo) y la manda a Java. */
-async function mixAudio(parts: Part[], t0: number, t1: number, check: () => void, onProgress: (p: number) => void) {
-  const total = Math.max(1, Math.round((t1 - t0) * SR))
-  const WIN = SR * 30
-  for (let w0 = 0; w0 < total; w0 += WIN) {
-    check()
-    const n = Math.min(WIN, total - w0)
-    const ctx = new OfflineAudioContext(2, n, SR)
-    const ws = t0 + w0 / SR, we = ws + n / SR
-    for (const p of parts) {
-      const c = p.clip
-      const a = Math.max(c.start, ws), b = Math.min(c.start + c.duration, we)
-      if (b - a < 0.0005) continue
-      const la = a - c.start, lb = b - c.start
-      let buf: AudioBuffer | null = null
-      try { buf = await decodeRange(p.file, (c.in || 0) + la, b - a, SR) } catch (e) { console.warn('No se pudo leer el audio', p.file, e) }
-      check()
-      if (!buf) continue
-      const src = ctx.createBufferSource()
-      src.buffer = buf
-      const g = ctx.createGain()
-      const fading = (c.fadeIn && la < c.fadeIn) || (c.fadeOut && lb > c.duration - c.fadeOut)
-      if (fading) {
-        // Curva de volumen cada 10 ms (fundidos lineales, como afade de FFmpeg en la PC).
-        const steps = Math.max(2, Math.ceil((lb - la) * 100) + 1)
-        const curve = new Float32Array(steps)
-        for (let i = 0; i < steps; i++) curve[i] = p.vol * fadeGain(c, la + ((lb - la) * i) / (steps - 1))
-        g.gain.setValueCurveAtTime(curve, a - ws, b - a)
-      } else g.gain.value = p.vol
-      src.connect(g).connect(ctx.destination)
-      src.start(a - ws, 0, b - a)
-    }
-    const mixed = await ctx.startRendering()
-    const bytes = new Uint8Array(pcm16(mixed).buffer)
-    const CHUNK = 3 * 512 * 1024
-    for (let off = 0; off < bytes.length; off += CHUNK) {
-      check()
-      host().call('enc.audio', { data: await blobToBase64(new Blob([bytes.subarray(off, off + CHUNK)])) })
-    }
-    onProgress(Math.min(1, (w0 + n) / total))
-  }
+/**
+ * La mezcla la hace Java (AudioMix.java) y va directo al codificador: decodifica cada clip, lo lleva a
+ * 48 kHz y le aplica volumen y fundidos (lineales, como afade en la PC). Antes se hacía acá y cada tramo
+ * iba y volvía por el puente: ~30 s para un minuto de video en la tablet.
+ */
+async function mixAudio(parts: Part[], t0: number, t1: number, onProgress: (p: number) => void) {
+  const r = await host().callAsync<{ parts: number; failed: string[] }>('enc.mix', {
+    start: t0, end: t1, sampleRate: SR,
+    parts: parts.map((p) => ({ path: p.file, start: p.clip.start, duration: p.clip.duration, in: p.clip.in || 0, volume: p.vol, fadeIn: p.clip.fadeIn || 0, fadeOut: p.clip.fadeOut || 0 })),
+  }, { onEvent: (e: any) => { if (e?.event === 'progress' && e.total) onProgress(Math.min(1, e.done / e.total)) } })
+  for (const f of r?.failed || []) console.warn('No se pudo leer el audio', f)
+  return r
 }
 
 function safeName(s: string) {
@@ -162,6 +125,7 @@ class Export {
   private opening: Promise<unknown> | null = null
   private renderer: Renderer | null = null
   private t0 = performance.now()
+  private diag: Diag = { marks: {}, why: {}, used: [] }
 
   constructor(readonly id: string, private job: AndroidExportJob, private onProgress: (p: AndroidExportProgress) => void) {}
 
@@ -180,11 +144,11 @@ class Export {
     let started = false
     try {
       const r = await this.inner(() => { started = true })
-      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note })
+      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note, details: this.details() })
     } catch (e: any) {
       if (started) try { host().call('enc.cancel') } catch { /* ignore */ }
       if (e instanceof Cancelled || this.cancelled) this.emit({ phase: 'cancelado', message: 'Exportación cancelada.', done: 0, total: 1 })
-      else this.emit({ phase: 'error', message: String(e?.message || e), done: 0, total: 1 })
+      else this.emit({ phase: 'error', message: String(e?.message || e), done: 0, total: 1, details: this.details(String(e?.message || e)) })
     } finally {
       this.over = true
       // La captura se abre mientras se mezcla el audio: si eso falló o se canceló, se espera a que termine
@@ -197,6 +161,25 @@ class Export {
     }
   }
 
+  /** Tiempos, métodos y motivos, en texto: para ver dónde se va el tiempo en un equipo que no está acá. */
+  private details(error?: string) {
+    const d = this.diag, m = d.marks, lines: string[] = []
+    try {
+      const a = host().call<Record<string, any>>('app.info')
+      lines.push(`OpenAnimator ${a.versionName} (${a.versionCode}) · ${a.manufacturer || ''} ${a.model || ''} · Android ${a.release || '?'} · ${a.webview || 'WebView ?'}`.replace(/\s+/g, ' '))
+    } catch { /* ignore */ }
+    if (d.video) lines.push(`Video: ${d.video}`)
+    if (d.used.length) lines.push(`Captura: ${d.used.map((x) => LABEL[x]).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
+    lines.push(`Tiempos: preparar ${secs(m.preparar)} · audio ${secs(m.audio)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · terminar ${secs(m.terminar)}`)
+    const c = d.cap, pg = c?.page
+    if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · por adelantado ${c.ahead ?? '—'}` : ''}`)
+    if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
+    if (d.audio) lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
+    for (const [k, v] of Object.entries(d.why)) lines.push(`Sin ${LABEL[k as Method]}: ${v}`)
+    if (error) lines.push(`Error: ${error}`)
+    return lines.join('\n')
+  }
+
   /** El compositor oculto que redibuja el DOM (cuando la captura directa no anda en el equipo). */
   private async compatible(projectId: string, tlId: string, width: number, height: number) {
     if (this.renderer) return
@@ -205,7 +188,7 @@ class Export {
   }
 
   private async inner(markStarted: () => void) {
-    const job = this.job
+    const job = this.job, d = this.diag, T = performance.now()
     this.emit({ phase: 'preparando', message: 'Preparando…', done: 0, total: 1 })
     const p = readProject(job.projectId)
     const tlId = job.timeline || p.activeTimeline
@@ -228,7 +211,7 @@ class Export {
     const out = join(ex, uniqueName(ex, `${safeName(job.name || p.name + tlName)}.mp4`))
 
     // Audio: primero se ve qué suena y se puede leer, para saber si el MP4 lleva pista de audio
-    const parts = job.audio ? await audioParts(job.projectId, tl, start, end) : []
+    const parts = job.audio ? audioParts(job.projectId, tl, start, end) : []
     this.check()
 
     const info = host().call<{ codec: string; profile: string }>('enc.start', {
@@ -236,12 +219,14 @@ class Export {
       audio: parts.length ? { sampleRate: SR, channels: 2, bitrate: Math.max(64, Math.min(320, job.audioBitrate || 192)) * 1000 } : undefined,
     })
     markStarted()
+    d.video = `${W}×${H} · ${fps} fps · ${frames} fotogramas · ${info.codec}${info.profile ? ` ${info.profile}` : ''}`
+    d.marks.preparar = performance.now() - T
 
     // La captura (ver arriba) se abre mientras se mezcla el audio: la de GPU dibuja en el codificador,
     // así que va después de enc.start.
     const capUrl = compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' })
     let method: Method = 'compat'
-    const why: Partial<Record<Method, string>> = {} // por qué no anduvo cada método (se muestra al terminar)
+    const why = d.why // por qué no anduvo cada método (se muestra al terminar)
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break
@@ -249,15 +234,22 @@ class Export {
       }
       return 'compat' as const
     }
-    const opening = this.opening = openCapture(['gpu', 'draw']).then((m) => { method = m })
+    const tOpen = performance.now()
+    const opening = this.opening = openCapture(['gpu', 'draw']).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
 
     if (parts.length) {
       this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: 0, total: 1 })
-      await mixAudio(parts, start, end, () => this.check(), (x) => this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: x, total: 1 }))
+      const tA = performance.now()
+      const r = await mixAudio(parts, start, end, (x) => this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: x, total: 1 }))
+      d.marks.audio = performance.now() - tA
+      d.audio = { parts: r?.parts ?? parts.length, failed: r?.failed || [] }
+      this.check()
     }
+    const tWait = performance.now()
     await opening
     this.check()
     if (method === 'compat') await this.compatible(job.projectId, tlId, p.width, p.height)
+    d.marks.espera = performance.now() - tWait
     this.check()
     const used = new Set<Method>([method])
 
@@ -292,7 +284,9 @@ class Export {
           continue
         }
       } else {
+        const tf = performance.now()
         const f = await this.renderer!.frame(t, W, H, 'jpeg', quality)
+        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + performance.now() - tf }
         this.check()
         if (inflight) await inflight
         inflight = host().callAsync('enc.frame', { data: f.data })
@@ -311,8 +305,12 @@ class Export {
       }
     }
     if (inflight) await inflight
+    d.marks.fotogramas = performance.now() - tr0
+    d.used = [...used]
+    d.fps = rate
+    const tEnd = performance.now()
     // Los últimos fotogramas capturados terminan de codificarse y se cierra la vista de captura.
-    if (method !== 'compat') await host().callAsync('cap.stop')
+    if (method !== 'compat') d.cap = await host().callAsync('cap.stop')
     this.check()
     const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => LABEL[m]).join(' + ')}`
 
@@ -325,6 +323,7 @@ class Export {
     if (getSettings().android?.saveToGallery !== false) {
       try { gallery = (await host().callAsync<{ folder: string }>('gallery.save', { path: out, name: basename(out), mime: 'video/mp4' })).folder } catch (e) { console.warn('No se pudo copiar a la galería', e) }
     }
+    d.marks.terminar = performance.now() - tEnd
     const note = why.gpu ? `La captura GPU no anduvo en este equipo (${why.gpu.slice(0, 300)}).` : undefined
     return { file: out, gallery, size: res?.size || fs.stat(out)?.size || 0, encoder, fps: rate, note }
   }

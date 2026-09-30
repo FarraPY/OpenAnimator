@@ -424,6 +424,10 @@ html.touch .hist-row { min-height: 64px; }
 .xp-item:first-child { border-top: 0; }
 .xp-done { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 10px 0 4px; }
 .xp-done-ico { width: 64px; height: 64px; border-radius: 20px; display: grid; place-items: center; background: var(--ok-soft); color: var(--ok); }
+.xp-details { width: min(640px, 100%); text-align: left; margin-top: 4px; }
+.xp-details summary { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--t3); font-size: 12.5px; list-style: none; }
+.xp-details summary::-webkit-details-marker { display: none; }
+.xp-details pre { margin: 8px 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-2); border: 1px solid var(--line); font: 11.5px/1.5 var(--font-mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; color: var(--t2); max-height: 220px; overflow: auto; }
 
 /* ── Retrato (tablet vertical): todo en una columna ──────────────────── */
 @media (orientation: portrait) {
