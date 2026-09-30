@@ -69,9 +69,10 @@ type Diag = {
     timeline?: Record<string, number[]>; timelineN?: number; frameIntervalMs?: number; sample?: number[][]; timelineError?: string
     stateStart?: DeviceState; stateEnd?: DeviceState
   }
-  calls?: { n: number; ms: number; max: number; gap: number; gapMax: number }
+  calls?: { n: number; ms: number; max: number; gap: number; gapMax: number; first?: number }
   compat?: { n: number; ms: number }
-  audio?: { parts: number; failed: string[] }
+  /** encodeMs: el codificador AAC mientras llegaba la mezcla; closeMs: al cerrarlo, antes del primer fotograma. */
+  audio?: { parts: number; failed: string[]; encodeMs?: number; closeMs?: number }
 }
 type DeviceState = { thermal?: number; powerSave?: boolean; availMB?: number; lowMemory?: boolean; screenHz?: number }
 const THERMAL = ['normal', 'leve', 'moderada', 'alta', 'crítica', 'emergencia', 'apagado']
@@ -115,10 +116,11 @@ function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Pa
 /**
  * La mezcla la hace Java (AudioMix.java) y va directo al codificador: decodifica cada clip, lo lleva a
  * 48 kHz y le aplica volumen y fundidos (lineales, como afade en la PC). Antes se hacía acá y cada tramo
- * iba y volvía por el puente: ~30 s para un minuto de video en la tablet.
+ * iba y volvía por el puente: ~30 s para un minuto de video en la tablet. El codificador la pasa a AAC a
+ * medida que llega (así ese tiempo se ve en el progreso del audio y no congela el primer fotograma).
  */
 async function mixAudio(parts: Part[], t0: number, t1: number, onProgress: (p: number) => void) {
-  const r = await host().callAsync<{ parts: number; failed: string[] }>('enc.mix', {
+  const r = await host().callAsync<{ parts: number; failed: string[]; encodeMs?: number }>('enc.mix', {
     start: t0, end: t1, sampleRate: SR,
     parts: parts.map((p) => ({ path: p.file, start: p.clip.start, duration: p.clip.duration, in: p.clip.in || 0, volume: p.vol, fadeIn: p.clip.fadeIn || 0, fadeOut: p.clip.fadeOut || 0 })),
   }, { onEvent: (e: any) => { if (e?.event === 'progress' && e.total) onProgress(Math.min(1, e.done / e.total)) } })
@@ -217,9 +219,12 @@ class Export {
     }
     const st = (x?: DeviceState) => (x ? `temperatura ${x.thermal != null ? THERMAL[x.thermal] || x.thermal : '—'} · ahorro de energía ${x.powerSave ? 'sí' : 'no'} · memoria libre ${x.availMB ?? '—'} MB${x.lowMemory ? ' (poca)' : ''} · pantalla ${x.screenHz ? Math.round(x.screenHz) : '—'} Hz` : '—')
     if (c?.stateStart || c?.stateEnd) lines.push(`Equipo al empezar: ${st(c.stateStart)}; al terminar: ${st(c.stateEnd)}`)
-    if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
+    if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}; la primera ${msf(d.calls.first)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
     if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
-    if (d.audio) lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
+    if (d.audio) {
+      const aac = d.audio.encodeMs != null ? ` · codificar a AAC ${secs(d.audio.encodeMs)} (dentro de la mezcla) + ${msf(d.audio.closeMs)} al cerrar` : ''
+      lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${aac}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
+    }
     for (const [k, v] of Object.entries(d.why)) lines.push(`Sin ${LABEL[k as Method]}: ${v}`)
     if (error) lines.push(`Error: ${error}`)
     return lines.join('\n')
@@ -287,7 +292,7 @@ class Export {
       const tA = performance.now()
       const r = await mixAudio(parts, start, end, (x) => this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: x, total: 1 }))
       d.marks.audio = performance.now() - tA
-      d.audio = { parts: r?.parts ?? parts.length, failed: r?.failed || [] }
+      d.audio = { parts: r?.parts ?? parts.length, failed: r?.failed || [], encodeMs: r?.encodeMs }
       this.check()
     }
     const tWait = performance.now()
@@ -303,6 +308,7 @@ class Export {
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
     let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0
+    this.emit({ phase: 'render', message: `Fotograma 1 de ${frames} · ${LABEL[method]}`, done: 0, total: frames })
     for (let i = 0; i < frames; i++) {
       this.check()
       const t = start + i / fps
@@ -316,6 +322,7 @@ class Export {
           if (lastCall) { const g = c0 - lastCall; calls.gap += g; if (g > calls.gapMax) calls.gapMax = g }
           const r = await host().callAsync<{ preview?: string }>('cap.frame', { t, next, preview: performance.now() - lastPreview > 1200 })
           lastCall = performance.now()
+          if (!calls.n) calls.first = lastCall - c0
           calls.n++; calls.ms += lastCall - c0; if (lastCall - c0 > calls.max) calls.max = lastCall - c0
           shot = r?.preview
         } catch (e: any) {
@@ -365,7 +372,8 @@ class Export {
     const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => LABEL[m]).join(' + ')}`
 
     this.emit({ phase: 'final', message: 'Escribiendo el archivo…', done: 1, total: 1 })
-    const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number }>('enc.finish')
+    const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number; audioCloseMs?: number }>('enc.finish')
+    if (d.audio && res?.audioCloseMs != null) d.audio.closeMs = res.audioCloseMs
     this.renderer?.destroy()
     this.renderer = null
 

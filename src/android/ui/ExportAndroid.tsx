@@ -25,7 +25,11 @@ const PRESETS: Array<{ id: string; name: string; sub: string; icon: IconName; re
   { id: 'master', name: 'Para editar', sub: '1080p · H.264 · máxima', icon: 'scissors', res: 1080, codec: 'avc', quality: 'max' },
 ]
 
-const secs = (s?: number) => (s == null || !isFinite(s) ? '—' : s < 60 ? `${Math.max(1, Math.round(s))} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`)
+const secs = (s?: number) => {
+  if (s == null || !isFinite(s)) return '—'
+  const r = Math.max(1, Math.round(s)) // redondeado antes de partirlo: nunca «1 min 60 s»
+  return r < 60 ? `${r} s` : `${Math.floor(r / 60)} min ${r % 60} s`
+}
 
 export default function ExportAndroid({ project, currentTl, onClose }: { project: Project; currentTl: string; onClose: () => void }) {
   const { toast, settings, updateSettings, info } = useApp()
@@ -58,11 +62,20 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
   // export:start devuelva su id. La vista previa llega cada tanto: se conserva la última.
   const latest = useRef(new Map<string, Prog>())
   const jobRef = useRef<string | null>(null)
+  // El tiempo transcurrido sigue corriendo entre avisos (un paso largo no parece la app trabada).
+  const got = useRef(0)
+  const [, tick] = useState(0)
   useEffect(() => on('export:progress', (p: Prog) => {
     const next = { ...p, preview: p.preview || latest.current.get(p.id)?.preview }
     latest.current.set(p.id, next)
-    if (p.id === jobRef.current) setProg(next)
+    if (p.id === jobRef.current) { got.current = performance.now(); setProg(next) }
   }), [])
+  const running = !!job && !!prog && !['listo', 'error', 'cancelado'].includes(prog.phase)
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [running])
 
   const { w, h } = sizeFor(res)
   const dur = tl ? (useRange ? Math.max(0, range.end - range.start) : tl.duration) : 0
@@ -80,7 +93,8 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
         name: name.trim() || project.name,
       })
       jobRef.current = id
-      setJob(id); setProg(latest.current.get(id) || { id, phase: 'preparando', message: 'Preparando…', done: 0, total: 1 })
+      got.current = performance.now()
+      setJob(id); setProg(latest.current.get(id) || { id, phase: 'preparando', message: 'Preparando…', done: 0, total: 1, elapsed: 0 })
     } catch (e: any) { toast(e.message, true) }
   }
   const cancel = async () => {
@@ -104,7 +118,9 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
   // ── progreso ──
   if (job && prog) {
     const done = prog.phase === 'listo', failed = prog.phase === 'error' || prog.phase === 'cancelado'
-    const pct = done ? 100 : prog.phase === 'render' && prog.total ? (prog.done / prog.total) * 100 : prog.phase === 'final' ? 99 : prog.phase === 'audio' ? 2 : 0
+    const pct = done ? 100 : prog.phase === 'render' && prog.total ? (prog.done / prog.total) * 100 : prog.phase === 'final' ? 99 : 0
+    const elapsed = running && prog.elapsed != null ? prog.elapsed + (performance.now() - got.current) / 1000 : prog.elapsed
+    const step = prog.phase === 'render' ? ` · ${prog.message}` : prog.phase === 'audio' && prog.total ? ` · ${Math.floor((prog.done / prog.total) * 100)} %` : ''
     const file = prog.file || ''
     return (
       <Modal size="wide" icon={done ? 'check-circle' : failed ? 'x-circle' : 'export'} title={done ? 'Video listo' : failed ? PHASE[prog.phase] : 'Exportando'} subtitle={`${name}.mp4 · ${w}×${h} · ${fps} fps · ${codec === 'hevc' ? 'HEVC' : 'H.264'}`}
@@ -131,13 +147,13 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
             <div className="xp-preview">{prog.preview ? <img src={prog.preview} alt="" /> : <Icon name="film" size={34} className="t4" />}</div>
             <div>
               <div className="xp-big tabnum">{Math.floor(pct)}<span className="t3" style={{ fontSize: 24 }}> %</span></div>
-              <div className="xp-phase">{failed ? prog.message : `${PHASE[prog.phase] || prog.phase}${prog.phase === 'render' ? ` · ${prog.message}` : ''}`}</div>
+              <div className="xp-phase">{failed ? prog.message : `${PHASE[prog.phase] || prog.phase}${step}`}</div>
               {failed && prog.details && <Details text={prog.details} />}
-              <div style={{ marginTop: 16 }}><Progress value={pct} indeterminate={prog.phase === 'preparando' || prog.phase === 'final'} tone={failed ? 'err' : undefined} /></div>
+              <div style={{ marginTop: 16 }}><Progress value={pct} indeterminate={prog.phase === 'preparando' || prog.phase === 'audio' || prog.phase === 'final' || (prog.phase === 'render' && !prog.done)} tone={failed ? 'err' : undefined} /></div>
               {!failed && <div className="xp-meta">
                 <div><div className="k">Velocidad</div><div className="v tabnum">{prog.fps ? `${prog.fps.toFixed(1)} fps` : '—'}</div></div>
                 <div><div className="k">Falta</div><div className="v tabnum">{prog.phase === 'render' ? secs(prog.eta) : '—'}</div></div>
-                <div><div className="k">Transcurrido</div><div className="v tabnum">{secs(prog.elapsed)}</div></div>
+                <div><div className="k">Transcurrido</div><div className="v tabnum">{secs(elapsed)}</div></div>
                 <div><div className="k">Tamaño estimado</div><div className="v tabnum">~{fmtSize(estimate)}</div></div>
               </div>}
             </div>

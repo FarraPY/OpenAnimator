@@ -66,12 +66,18 @@ final class AudioMix {
     private AudioMix() {
     }
 
-    /** Mixes [t0, t1] at rate (stereo) into the encoder; returns how many parts sounded and which failed. */
+    /**
+     * Mixes [t0, t1] at rate (stereo) into the encoder; returns how many parts sounded, which failed and
+     * how long the encoder took with the mix (encodeMs: it encodes to AAC as each window arrives).
+     */
     static JSONObject mix(List<Part> parts, double t0, double t1, int rate, final Encoder encoder, Zip.Progress progress) throws Exception {
-        return mix(parts, t0, t1, rate, new Out() {
+        final long[] encodeNs = {0};
+        JSONObject o = mix(parts, t0, t1, rate, new Out() {
             @Override
             public void write(byte[] pcm) throws IOException {
+                long a = System.nanoTime();
                 encoder.audio(pcm);
+                encodeNs[0] += System.nanoTime() - a;
             }
         }, progress, new Decoder() {
             @Override
@@ -79,6 +85,8 @@ final class AudioMix {
                 return decodeFile(f, start, dur);
             }
         });
+        o.put("encodeMs", encodeNs[0] / 1e6);
+        return o;
     }
 
     static JSONObject mix(List<Part> parts, double t0, double t1, int rate, Out out, Zip.Progress progress, Decoder decoder) throws Exception {

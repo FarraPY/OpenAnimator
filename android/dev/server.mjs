@@ -246,7 +246,7 @@ async function encMix(a, emit) {
   fs.appendFileSync(enc.pcm, fs.readFileSync(tmp))
   fs.rmSync(tmp, { force: true })
   emit({ event: 'progress', done: total, total })
-  return { parts: k, failed }
+  return { parts: k, failed, encodeMs: 0 } // acá el AAC lo hace ffmpeg al final (en la tablet, mientras llega la mezcla)
 }
 function encFinish() {
   const e = enc
@@ -265,7 +265,7 @@ function encFinish() {
     p.on('close', (code) => {
       fs.rmSync(e.tmp, { recursive: true, force: true })
       if (code !== 0) return rej(new Error('ffmpeg: ' + err.trim().split('\n').slice(-2).join(' ')))
-      res({ path: relOf(e.out), size: fs.statSync(e.out).size, frames: e.frames, duration: e.frames / (e.a.fps || 30) })
+      res({ path: relOf(e.out), size: fs.statSync(e.out).size, frames: e.frames, duration: e.frames / (e.a.fps || 30), ...(e.pcm ? { audioMs: 0, audioCloseMs: 0 } : {}) })
     })
   })
 }

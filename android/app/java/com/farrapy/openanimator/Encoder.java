@@ -24,13 +24,8 @@ import android.view.Surface;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.BufferedInputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
@@ -50,8 +45,8 @@ import java.util.concurrent.RejectedExecutionException;
  *
  * Each frame arrives as a bitmap captured natively by Capture (or, as a fallback, a JPEG rendered by
  * JavaScript) and this class draws it with OpenGL onto the encoder's input surface (with an exact
- * timestamp). The timeline audio arrives first as 16-bit PCM, is encoded to AAC and interleaved with
- * the video in an MP4 (MediaMuxer).
+ * timestamp). The timeline audio arrives first as 16-bit PCM, is encoded to AAC as it arrives (on the
+ * thread that mixes it) and is interleaved with the video in an MP4 (MediaMuxer).
  *
  *   start({out, width, height, fps, bitrate, codec: avc|hevc, keyframeSec, audio: {sampleRate, channels, bitrate}})
  *   audio(pcm16le)   (all the audio, before the first frame)
@@ -171,14 +166,14 @@ final class Encoder {
         });
     }
 
-    /** Before the first frame: the audio is encoded now, not while images from the virtual display arrive. */
+    /** Before the first frame: the audio is closed now, not while images from the virtual display arrive. */
     void gpuPrepare() throws Exception {
         final Job j = job;
         if (j == null) throw new IOException("No hay una exportación en curso");
         run(new Callable<Object>() {
             @Override
             public Object call() throws Exception {
-                if (j.hasAudio && !j.audioEncoded) j.encodeAudio();
+                if (j.hasAudio && !j.audioEncoded) j.closeAudio();
                 return null;
             }
         });
@@ -309,7 +304,7 @@ final class Encoder {
     /** One export: codecs, EGL and muxer. Everything runs on the encoder thread. */
     private static final class Job {
         final Fs fs;
-        final File out, tmp, pcm;
+        final File out, tmp;
         final int width, height, videoBitrate, keyframeSec;
         final double fps;
         final String videoMime;
@@ -331,8 +326,16 @@ final class Encoder {
         final List<Long> audioPts = new ArrayList<>();
         final List<Integer> audioFlags = new ArrayList<>();
         int audioNext;
+        /** Closed: the AAC encoder got the end of the stream and gave back everything (no more audio is accepted). */
         boolean audioEncoded;
-        OutputStream pcmOut;
+        /** The AAC encoder, fed as the PCM arrives (appendAudio, on the thread that mixes). Guarded by audioLock. */
+        MediaCodec aac;
+        final Object audioLock = new Object();
+        final MediaCodec.BufferInfo aacInfo = new MediaCodec.BufferInfo();
+        long aacBytes;
+        boolean aacDone;
+        /** For the export details: time spent in the AAC encoder while the audio arrived, and closing it. */
+        long aacNs, aacCloseNs;
 
         EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
         EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
@@ -344,7 +347,6 @@ final class Encoder {
             this.fs = fs;
             out = fs.resolve(a.getString("out"));
             tmp = new File(out.getParentFile(), "." + out.getName() + ".part");
-            pcm = new File(out.getParentFile(), "." + out.getName() + ".pcm");
             width = a.getInt("width") / 2 * 2;
             height = a.getInt("height") / 2 * 2;
             fps = a.optDouble("fps", 30);
@@ -393,7 +395,7 @@ final class Encoder {
             video.start();
             setupEgl();
             muxer = new MediaMuxer(tmp.getPath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
-            if (hasAudio) pcmOut = new FileOutputStream(pcm);
+            if (hasAudio) startAac();
             JSONObject o = new JSONObject();
             o.put("codec", video.getName());
             o.put("mime", videoMime);
@@ -421,9 +423,20 @@ final class Encoder {
             return MediaCodecInfo.CodecProfileLevel.AVCLevel52;
         }
 
-        synchronized void appendAudio(byte[] data) throws IOException {
-            if (pcmOut == null) throw new IOException("Esta exportación no tiene audio");
-            pcmOut.write(data);
+        /** PCM (16-bit, interleaved) straight into the AAC encoder; what it has ready comes out meanwhile. */
+        void appendAudio(byte[] data) throws IOException {
+            if (!hasAudio) throw new IOException("Esta exportación no tiene audio");
+            if (data.length % (2 * channels) != 0) throw new IOException("Audio incompleto: " + data.length + " bytes");
+            synchronized (audioLock) {
+                if (audioEncoded) throw new IOException("El audio ya se cerró (llegó después del primer fotograma)");
+                if (aac == null) throw new IOException("cancelado");
+                long t0 = System.nanoTime();
+                try {
+                    feedAac(data, false);
+                } finally {
+                    aacNs += System.nanoTime() - t0;
+                }
+            }
         }
 
         // ── video ────────────────────────────────────────────────────────────────
@@ -442,7 +455,7 @@ final class Encoder {
 
         void frame(Bitmap bmp) throws Exception {
             if (cancelled) throw new IOException("cancelado");
-            if (hasAudio && !audioEncoded) encodeAudio();
+            if (hasAudio && !audioEncoded) closeAudio();
             drain(false);
             GLES20.glViewport(0, 0, width, height);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
@@ -579,89 +592,115 @@ final class Encoder {
 
         // ── audio ────────────────────────────────────────────────────────────────
 
-        /** Encodes all the PCM received so far to AAC (kept in memory, ~24 KB per second). */
-        private void encodeAudio() throws IOException {
-            audioEncoded = true;
-            synchronized (this) {
-                if (pcmOut != null) {
-                    pcmOut.close();
-                    pcmOut = null;
-                }
-            }
+        private void startAac() throws IOException {
             MediaFormat f = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, sampleRate, channels);
             f.setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC);
             f.setInteger(MediaFormat.KEY_BIT_RATE, audioBitrate);
             f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 65536);
-            MediaCodec aac = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
-            try {
+            synchronized (audioLock) {
+                aac = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC);
                 aac.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                 aac.start();
-                MediaCodec.BufferInfo ai = new MediaCodec.BufferInfo();
-                int frameBytes = 2 * channels;
-                long samples = 0;
-                boolean inputDone = false, outputDone = false;
-                byte[] chunk = new byte[65536];
-                long deadline = System.currentTimeMillis() + 600000;
-                try (InputStream in = new BufferedInputStream(new FileInputStream(pcm), 1 << 20)) {
-                    while (!outputDone) {
-                        if (cancelled) throw new IOException("cancelado");
-                        if (System.currentTimeMillis() > deadline) throw new IOException("El codificador de audio no terminó a tiempo");
-                        if (!inputDone) {
-                            int ii = aac.dequeueInputBuffer(10000);
-                            if (ii >= 0) {
-                                ByteBuffer ib = aac.getInputBuffer(ii);
-                                int want = Math.min(chunk.length, ib.capacity()) / frameBytes * frameBytes;
-                                int got = readFully(in, chunk, want);
-                                long pts = samples * 1000000L / sampleRate;
-                                if (got <= 0) {
-                                    aac.queueInputBuffer(ii, 0, 0, pts, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                                    inputDone = true;
-                                } else {
-                                    ib.clear();
-                                    ib.put(chunk, 0, got);
-                                    aac.queueInputBuffer(ii, 0, got, pts, 0);
-                                    samples += got / frameBytes;
-                                }
-                            }
-                        }
-                        int oi = aac.dequeueOutputBuffer(ai, 10000);
-                        if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                            audioFormat = aac.getOutputFormat();
-                        } else if (oi >= 0) {
-                            ByteBuffer ob = aac.getOutputBuffer(oi);
-                            if ((ai.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && ai.size > 0 && ob != null) {
-                                byte[] d = new byte[ai.size];
-                                ob.position(ai.offset);
-                                ob.get(d, 0, ai.size);
-                                audioData.add(d);
-                                audioPts.add(ai.presentationTimeUs);
-                                audioFlags.add(ai.flags & ~MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                            }
-                            aac.releaseOutputBuffer(oi, false);
-                            if ((ai.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) outputDone = true;
-                        }
+            }
+        }
+
+        /**
+         * Queues data (and, with eos, the end of the stream) into the AAC encoder. Everything it has ready is
+         * taken out on every turn: it only frees an input buffer once its output was taken, and taking a
+         * single output per wait (as before) left ~10 ms per AAC frame: 40 s for a minute of audio.
+         */
+        private void feedAac(byte[] data, boolean eos) throws IOException {
+            int off = 0, len = data == null ? 0 : data.length;
+            int frameBytes = 2 * channels;
+            long idle = System.nanoTime();
+            while (len > 0 || eos) {
+                if (cancelled) throw new IOException("cancelado");
+                int ii = aac.dequeueInputBuffer(0);
+                if (ii >= 0) {
+                    ByteBuffer ib = aac.getInputBuffer(ii);
+                    if (ib == null) throw new IOException("El codificador de audio no dio dónde escribir");
+                    ib.clear();
+                    int n = Math.min(len, ib.remaining() / frameBytes * frameBytes);
+                    if (n == 0 && len > 0) throw new IOException("El codificador de audio dio un búfer de " + ib.remaining() + " bytes");
+                    long pts = aacBytes / frameBytes * 1000000L / sampleRate;
+                    if (n > 0) {
+                        ib.put(data, off, n);
+                        off += n;
+                        len -= n;
+                        aacBytes += n;
                     }
+                    boolean last = eos && len == 0;
+                    aac.queueInputBuffer(ii, 0, n, pts, last ? MediaCodec.BUFFER_FLAG_END_OF_STREAM : 0);
+                    if (last) eos = false;
+                    idle = System.nanoTime();
+                    drainAac(0);
+                } else if (drainAac(10000)) {
+                    idle = System.nanoTime();
+                } else if (System.nanoTime() - idle > 20_000_000_000L) {
+                    throw new IOException("El codificador de audio no responde");
                 }
-            } finally {
+            }
+        }
+
+        /** Takes out what the AAC encoder has ready (waiting up to timeoutUs for the first); true if something came out. */
+        private boolean drainAac(long timeoutUs) {
+            boolean got = false;
+            while (!aacDone) {
+                int oi = aac.dequeueOutputBuffer(aacInfo, got ? 0 : timeoutUs);
+                if (oi == MediaCodec.INFO_TRY_AGAIN_LATER) break;
+                got = true;
+                if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    audioFormat = aac.getOutputFormat();
+                } else if (oi >= 0) {
+                    ByteBuffer ob = aac.getOutputBuffer(oi);
+                    if ((aacInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && aacInfo.size > 0 && ob != null) {
+                        byte[] d = new byte[aacInfo.size];
+                        ob.position(aacInfo.offset);
+                        ob.get(d, 0, aacInfo.size);
+                        audioData.add(d);
+                        audioPts.add(aacInfo.presentationTimeUs);
+                        audioFlags.add(aacInfo.flags & ~MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                    }
+                    aac.releaseOutputBuffer(oi, false);
+                    if ((aacInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) aacDone = true;
+                }
+            }
+            return got;
+        }
+
+        /** Closes the audio (all of it arrives before the first frame): end of the stream and what the encoder still had. */
+        void closeAudio() throws IOException {
+            synchronized (audioLock) {
+                if (audioEncoded) return;
+                audioEncoded = true;
+                if (aac == null) throw new IOException("cancelado");
+                long t0 = System.nanoTime();
+                try {
+                    feedAac(null, true);
+                    long idle = System.nanoTime();
+                    while (!aacDone) {
+                        if (cancelled) throw new IOException("cancelado");
+                        if (drainAac(10000)) idle = System.nanoTime();
+                        else if (System.nanoTime() - idle > 20_000_000_000L) throw new IOException("El codificador de audio no terminó");
+                    }
+                } finally {
+                    aacCloseNs = System.nanoTime() - t0;
+                    releaseAac();
+                }
+                if (audioFormat == null) throw new IOException("El codificador de audio no devolvió formato");
+            }
+        }
+
+        private void releaseAac() {
+            synchronized (audioLock) {
+                if (aac == null) return;
                 try {
                     aac.stop();
                 } catch (Exception ignored) {
                 }
                 aac.release();
-                //noinspection ResultOfMethodCallIgnored
-                pcm.delete();
+                aac = null;
             }
-            if (audioFormat == null) throw new IOException("El codificador de audio no devolvió formato");
-        }
-
-        private static int readFully(InputStream in, byte[] b, int len) throws IOException {
-            int got = 0;
-            while (got < len) {
-                int n = in.read(b, got, len - got);
-                if (n < 0) break;
-                got += n;
-            }
-            return got;
         }
 
         private void writeAudioUpTo(long ptsUs) {
@@ -679,7 +718,7 @@ final class Encoder {
         // ── cierre ───────────────────────────────────────────────────────────────
 
         JSONObject finish() throws Exception {
-            if (hasAudio && !audioEncoded) encodeAudio();
+            if (hasAudio && !audioEncoded) closeAudio();
             if (frames == 0) throw new IOException("No se recibió ningún fotograma");
             drain(true);
             if (!muxing) throw new IOException("El codificador no produjo video");
@@ -701,15 +740,16 @@ final class Encoder {
             o.put("size", out.length());
             o.put("frames", frames);
             o.put("duration", frames / fps);
+            if (hasAudio) {
+                o.put("audioMs", aacNs / 1e6);
+                o.put("audioCloseMs", aacCloseNs / 1e6);
+            }
             return o;
         }
 
         void release(boolean deleteOutput) {
-            try {
-                if (pcmOut != null) pcmOut.close();
-            } catch (IOException ignored) {
-            }
-            pcmOut = null;
+            // Una mezcla que sigue en otro hilo ve cancelled y suelta audioLock enseguida.
+            releaseAac();
             gpuRelease();
             if (frameThread != null) {
                 frameThread.quitSafely();
@@ -760,8 +800,6 @@ final class Encoder {
                 //noinspection ResultOfMethodCallIgnored
                 tmp.delete();
             }
-            //noinspection ResultOfMethodCallIgnored
-            pcm.delete();
         }
 
         // ── OpenGL ES sobre la superficie del codificador ────────────────────────
@@ -1035,7 +1073,7 @@ final class Encoder {
 
         /** The current image of the virtual display (without its marker strip) goes to the encoder. */
         private void encodeOes() throws IOException {
-            if (hasAudio && !audioEncoded) encodeAudio();
+            if (hasAudio && !audioEncoded) closeAudio();
             drain(false);
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, width, height);

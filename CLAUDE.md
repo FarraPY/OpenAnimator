@@ -154,7 +154,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL). El audio de la exportación lo mezcla Java
   (`AudioMix.java`, `enc.mix`: ventanas de 30 s, sinc a 48 kHz, volumen y fundidos lineales en el tiempo del clip)
   directo al codificador; con JS (ida y vuelta por el puente) tardaba ~30 s por minuto. Se probó en la PC contra una
-  mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. Al terminar, el diálogo muestra «Detalles»
+  mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. El AAC se codifica a medida que llega la mezcla
+  (`appendAudio` → `feedAac`, en el hilo que mezcla) y el primer fotograma sólo lo cierra (`closeAudio`). Trampa:
+  sacar en cada vuelta todas las salidas listas del codificador AAC (sólo libera una entrada cuando se tomaron sus
+  salidas); una por espera de 10 ms dejaba el primer fotograma ~40 s congelado en un video de 1:15. Al terminar, el diálogo muestra «Detalles»
   para copiar y pegar (queda en `logs/ultima-exportacion.txt` y en el diálogo de exportar): tiempos por etapa,
   método, estado del equipo (temperatura, ahorro, memoria, Hz) y, con la GPU, la línea de tiempo de cada fotograma
   uniendo `__oaCapLog` de la página (llegó, empezó, listo, entregado + rAF, en ms de reloj) con Java (`Want`: pedido,
