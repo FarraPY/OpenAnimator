@@ -22,7 +22,6 @@ import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -35,9 +34,9 @@ import java.util.concurrent.TimeUnit;
  * "gpu": the WebView lives on a private virtual display (a Presentation) whose images go to a texture of
  * the encoder (Encoder.gpuSurface): what the web engine draws with the GPU reaches the video without ever
  * being copied to memory. The page paints the frame's number in a strip under the video (marker=1; the
- * strip is cropped), so the encoder knows which image is which; the next frames are requested ahead, so
- * the page prepares one while the previous one travels through the display. A frame the display skipped
- * is requested again. Before starting, a test pattern checks colors, orientation and cropping.
+ * strip is cropped), so the encoder knows which image is which. Which frames are requested and when (ahead,
+ * and again if the display skipped one) is GpuFrames. Before starting, a test pattern checks colors,
+ * orientation and cropping.
  *
  * "draw": the WebView, hidden behind the app and exactly the size of the video, is drawn into a bitmap
  * after postVisualStateCallback (two bitmaps take turns, so the next frame is captured while the
@@ -72,17 +71,27 @@ final class Capture {
     private volatile Presentation presentation;
     /** Where the virtual display draws (the encoder's texture). */
     private volatile Surface surface;
-    /** Frames already requested to the page, in order (the next ones the export will ask for). */
-    private final ArrayDeque<Req> ahead = new ArrayDeque<>();
-    /**
-     * Frames requested ahead: in blocks of 60 frames it goes down if the display skipped many (10 % or more)
-     * and up if it skipped almost none. A lone lost frame costs a few frames of work; going one at a time
-     * costs about three times as long (each frame waits for the whole trip through the display).
-     */
-    private int depth, blockFrames, blockDrops;
-    private static final int MAX_DEPTH = 4;
-    private final long[] framesAt = new long[MAX_DEPTH + 1], dropsAt = new long[MAX_DEPTH + 1];
-    private long lastPreviewReq;
+    /** Which frames are asked for and when (after the test pattern). */
+    private volatile GpuFrames gpuFrames;
+    /** The capture page as GpuFrames sees it: requests go in order, and its state is read when something's late. */
+    private final GpuFrames.Page page = new GpuFrames.Page() {
+        @Override
+        public void request(double t, int n) throws Exception {
+            post("window.__oaCap(" + t + "," + n + ");0");
+        }
+
+        @Override
+        public String status() throws Exception {
+            String s = eval("String(window.__oaCapError || window.__oaCapDone)", 5000);
+            return s == null ? null : unquote(s);
+        }
+
+        @Override
+        public String error() throws Exception {
+            String s = eval("String(window.__oaCapError)", 5000);
+            return s == null ? null : unquote(s);
+        }
+    };
     /**
      * The views are created on the UI thread and close() can come from any thread (even while they are
      * being created): with this lock and the generation, views created for a capture that was already
@@ -91,20 +100,8 @@ final class Capture {
     private final Object viewsLock = new Object();
     private int generation;
     // para los detalles de la exportación
-    private long statFrames, statNs, statLost;
-    /** Every frame requested to the page (GPU), with its times: the details show where the time goes. */
-    private final ArrayList<Encoder.Want> history = new ArrayList<>();
+    private long statFrames, statNs;
     private JSONObject stateAtStart;
-
-    private static final class Req {
-        final double t;
-        final Encoder.Want want;
-
-        Req(double t, Encoder.Want want) {
-            this.t = t;
-            this.want = want;
-        }
-    }
 
     Capture(MainActivity act, Encoder encoder) {
         this.act = act;
@@ -120,8 +117,8 @@ final class Capture {
         if (url == null || !url.startsWith(PREFIX) || !url.contains("capture=1")) throw new IOException("Dirección de captura inválida");
         if (width < 16 || height < 16 || width > 4096 || height > 4096) throw new IOException("Tamaño de captura inválido");
         gpu = "gpu".equals(mode);
-        statFrames = statNs = statLost = 0;
-        history.clear();
+        statFrames = statNs = 0;
+        gpuFrames = null;
         try {
             stateAtStart = deviceState();
         } catch (Exception e) {
@@ -253,17 +250,11 @@ final class Capture {
         waitReady();
         // Prueba: la página muestra un patrón conocido. Si lo que llega al codificador no es eso (colores,
         // orientación, recorte de la franja), este equipo usa el otro método.
-        seq = TEST_SEQ;
         String bad = probe(false);
         // El patrón pasa por el anillo del codificador (la copia de cada imagen): si no coincide, se prueba sin él.
         if (bad != null && encoder.gpuRingOff("la prueba del patrón no coincidió: " + bad)) bad = probe(true);
         if (bad != null) throw new IOException(bad);
-        ahead.clear();
-        depth = 2;
-        blockFrames = blockDrops = 0;
-        java.util.Arrays.fill(framesAt, 0);
-        java.util.Arrays.fill(dropsAt, 0);
-        lastPreviewReq = 0;
+        gpuFrames = new GpuFrames(encoder, page, TEST_SEQ);
     }
 
     /**
@@ -313,13 +304,14 @@ final class Capture {
         o.put("mode", gpu ? "gpu" : "draw");
         o.put("frames", statFrames);
         o.put("msPerFrame", statFrames > 0 ? statNs / 1e6 / statFrames : 0);
-        if (gpu) {
-            o.put("lost", statLost);
-            o.put("ahead", depth);
+        GpuFrames f = gpuFrames;
+        if (gpu && f != null) {
+            o.put("lost", f.lost);
+            o.put("ahead", f.depth);
             JSONArray fa = new JSONArray(), da = new JSONArray();
-            for (int i = 0; i <= MAX_DEPTH; i++) {
-                fa.put(framesAt[i]);
-                da.put(dropsAt[i]);
+            for (int i = 0; i <= GpuFrames.MAX_DEPTH; i++) {
+                fa.put(f.framesAt[i]);
+                da.put(f.dropsAt[i]);
             }
             o.put("framesAt", fa);
             o.put("dropsAt", da);
@@ -333,7 +325,7 @@ final class Capture {
                     JSONObject pg = new JSONObject(unquote(raw));
                     o.put("view", pg.optDouble("w") + "×" + pg.optDouble("h") + " @" + pg.optDouble("dpr"));
                     JSONObject log = pg.optJSONObject("log");
-                    if (log != null) timeline(log.optJSONArray("rows"), o);
+                    if (log != null) timeline(log.optJSONArray("rows"), f.history, o);
                 }
             } catch (Exception e) {
                 o.put("timelineError", String.valueOf(e.getMessage()));
@@ -355,62 +347,17 @@ final class Capture {
     }
 
     private JSONObject frameGpu(double t, JSONArray upcoming) throws Exception {
-        if (web == null) throw new IOException("La captura no está abierta");
-        long deadline = System.currentTimeMillis() + 60000;
-        int lost = 0;
-        while (true) {
-            Req r = ahead.peekFirst();
-            if (r != null && Math.abs(r.t - t) < 1e-9 && r.want.status != Encoder.Want.LOST) ahead.pollFirst();
-            else {
-                // No es lo que se pidió por adelantado (el primero, o después de un fotograma perdido): de cero.
-                ahead.clear();
-                encoder.gpuForget();
-                r = request(t);
-            }
-            // Los próximos se piden ya: la página prepara uno mientras el anterior viaja por la pantalla (salvo
-            // que éste ya se haya perdido, o que se haya perdido dos veces: solo, sin otros detrás, no se puede
-            // perder, porque no llega ninguna imagen más nueva que lo reemplace).
-            int want = lost >= 2 ? 0 : depth;
-            for (int i = 0; upcoming != null && i < upcoming.length() && ahead.size() < want && r.want.status != Encoder.Want.LOST; i++) {
-                double tn = upcoming.getDouble(i);
-                boolean asked = false;
-                for (Req q : ahead) if (Math.abs(q.t - tn) < 1e-9) asked = true;
-                if (!asked) ahead.addLast(request(tn));
-            }
-            long doneSince = 0;
-            while (!encoder.gpuAwait(r.want, 1000)) {
-                // Todavía no llegó: ¿la página falló, sigue cargando o ya lo mostró y la pantalla no lo entrega?
-                String st = eval("String(window.__oaCapError || window.__oaCapDone)", 5000);
-                if (st != null && st.startsWith("\"error")) throw new IOException(unquote(st));
-                long now = System.currentTimeMillis();
-                if (shown(unquote(String.valueOf(st)), r.want.seq)) {
-                    if (doneSince == 0) doneSince = now;
-                    else if (now - doneSince > 6000) throw new IOException("La pantalla virtual dejó de entregar imágenes");
-                }
-                if (now > deadline) throw new IOException("La escena tardó demasiado en dibujarse (" + t + " s)");
-            }
-            if (r.want.status == Encoder.Want.LOST) {
-                // La pantalla mostró uno posterior sin mostrar este (o la página no lo pudo dibujar): se vuelve a pedir.
-                statLost++;
-                dropsAt[depth]++;
-                blockDrops++;
-                ahead.clear();
-                encoder.gpuForget();
-                String err = eval("String(window.__oaCapError)", 5000);
-                if (err != null && err.startsWith("\"error")) throw new IOException(unquote(err));
-                if (++lost > 5) throw new IOException("La pantalla virtual se saltea fotogramas");
-                continue;
-            }
-            framesAt[depth]++;
-            if (++blockFrames >= 60) {
-                if (blockDrops >= 6 && depth > 0) depth--;
-                else if (blockDrops <= 1 && depth < MAX_DEPTH) depth++;
-                blockFrames = blockDrops = 0;
-            }
-            JSONObject o = new JSONObject();
-            if (r.want.pixels != null) o.put("preview", jpeg(r.want.pixels, r.want.pw, r.want.ph));
-            return o;
+        GpuFrames f = gpuFrames;
+        if (web == null || f == null) throw new IOException("La captura no está abierta");
+        double[] next = new double[upcoming == null ? 0 : upcoming.length()];
+        for (int i = 0; i < next.length; i++) next[i] = upcoming.getDouble(i);
+        Encoder.Want w = f.frame(t, next);
+        JSONObject o = new JSONObject();
+        if (w.pixels != null) {
+            o.put("preview", jpeg(w.pixels, w.pw, w.ph));
+            w.pixels = null; // la lista de pedidos queda para los detalles, sin las imágenes (medio MB cada una)
         }
+        return o;
     }
 
     /**
@@ -420,7 +367,7 @@ final class Capture {
      * engine + virtual display until the image reaches the encoder · encoding · total. Also the time between
      * consecutive encoded frames, the page's frame interval and some frames in full.
      */
-    private void timeline(JSONArray rows, JSONObject o) throws JSONException {
+    private void timeline(JSONArray rows, java.util.List<Encoder.Want> history, JSONObject o) throws JSONException {
         if (rows == null) return;
         java.util.Map<Integer, double[]> bySeq = new java.util.HashMap<>();
         double[] rafs = new double[rows.length()];
@@ -510,30 +457,6 @@ final class Capture {
         }
         st.put("screenHz", act.currentRefreshRate());
         return st;
-    }
-
-    /** Asks the page for the frame at t with a new number; the encoder will take the image with that number. */
-    private Req request(double t) throws Exception {
-        seq = seq % 0xFFFFFF + 1;
-        long now = System.currentTimeMillis();
-        boolean preview = now - lastPreviewReq > 1000;
-        if (preview) lastPreviewReq = now;
-        Encoder.Want w = encoder.gpuExpect(seq, preview, false);
-        w.requestedAt = Encoder.wallMs();
-        w.depth = depth;
-        history.add(w);
-        post("window.__oaCap(" + t + "," + seq + ");0");
-        return new Req(t, w);
-    }
-
-    /** The page already finished the frame numbered n (its last one is n or a later one). */
-    private static boolean shown(String done, int n) {
-        try {
-            int d = (Integer.parseInt(done) - n) & 0xFFFFFF;
-            return d < 0x800000;
-        } catch (NumberFormatException e) {
-            return false;
-        }
     }
 
     private JSONObject frameDraw(double t, boolean preview) throws Exception {

@@ -66,7 +66,8 @@ type Diag = {
       images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
       texMs?: number; markMs?: number; drawMs?: number; swapMs?: number; swapMsMax?: number; drainMs?: number
       ring?: boolean; es3?: boolean; ringError?: string; copyMs?: number; waits?: number; waitMs?: number; ringMax?: number; gaps?: number[]
-      lostBusy?: number; lostIdle?: number; imageMs?: number
+      lostBusy?: number; lostIdle?: number; imageMs?: number; copyParts?: number[]
+      reorder?: boolean; slots?: number; storedMax?: number; evicted?: number; noSlot?: number
       matched?: number; busy?: number; old?: number; newer?: number; idle?: number; queueMs?: number; queueMsMax?: number
     }
     timeline?: Record<string, number[]>; timelineN?: number; frameIntervalMs?: number; sample?: number[][]; timelineError?: string
@@ -204,9 +205,11 @@ class Export {
       if (e && e.images) {
         lines.push(`Hilo de la GPU: ${e.images} imágenes, ${msf(e.msPerImage)} cada una (máx ${msf(e.msMax)}) · codificar máx ${msf(e.encodeMsMax)} · escrituras pendientes máx ${e.writesPendingMax ?? 0}`)
         const ms1 = (x?: number) => (x == null ? '—' : `${x.toFixed(1).replace('.', ',')} ms`)
-        if (e.texMs != null) lines.push(`  por imagen: tomarla ${ms1(e.texMs)}${e.copyMs ? ` · copiarla al anillo ${ms1(e.copyMs)}` : ''} · leer su marca ${ms1(e.markMs)}; por fotograma: dibujarlo ${ms1(e.drawMs)} · entregarlo al codificador ${ms1(e.swapMs)} (máx ${ms1(e.swapMsMax)}) · sacar lo codificado ${ms1(e.drainMs)}`)
+        const parts = e.copyParts && e.copyParts.length === 4 ? ` (la imagen ${ms1(e.copyParts[0])} · su marca ${ms1(e.copyParts[1])} · leerla ${ms1(e.copyParts[2])} · fence ${ms1(e.copyParts[3])})` : ''
+        if (e.texMs != null) lines.push(`  por imagen: tomarla ${ms1(e.texMs)}${e.copyMs ? ` · copiarla al anillo ${ms1(e.copyMs)}${parts}` : ''} · leer su marca ${ms1(e.markMs)}; por fotograma: dibujarlo ${ms1(e.drawMs)} · entregarlo al codificador ${ms1(e.swapMs)} (máx ${ms1(e.swapMsMax)}) · sacar lo codificado ${ms1(e.drainMs)}`)
         if (e.ring != null || e.ringError) {
-          const how = e.ring ? `sí · hasta ${e.ringMax ?? 0} imágenes esperando a la GPU · hubo que esperarla ${e.waits ?? 0} veces${e.waits ? ` (${ms1(e.waitMs)})` : ''}`
+          const keep = e.reorder ? ` · reordenar: sí, ${e.slots ?? 0} lugares (hasta ${e.storedMax ?? 0} imágenes guardadas esperando una anterior${e.evicted ? `; ${e.evicted} descartadas por falta de lugar` : ''}${e.noSlot ? `; ${e.noSlot} sin copiar` : ''})` : ''
+          const how = e.ring ? `sí · hasta ${e.ringMax ?? 0} imágenes esperando a la GPU · hubo que esperarla ${e.waits ?? 0} veces${e.waits ? ` (${ms1(e.waitMs)})` : ''}${keep}`
             : e.ringError ? `se apagó (${e.ringError})` : e.es3 === false ? 'no (sin OpenGL ES 3)' : 'no'
           lines.push(`Anillo (tomar cada imagen sin esperar a la GPU): ${how}`)
         }
@@ -337,7 +340,7 @@ class Export {
       if (method !== 'compat') {
         try {
           // Con la GPU, los que siguen se piden ya (la página los prepara mientras éste se codifica).
-          const next = method === 'gpu' ? [1, 2, 3, 4, 5].map((k) => i + k).filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          const next = method === 'gpu' ? [1, 2, 3, 4, 5, 6, 7, 8].map((k) => i + k).filter((k) => k < frames).map((k) => start + k / fps) : undefined
           const c0 = performance.now()
           const calls = d.calls || (d.calls = { n: 0, ms: 0, max: 0, gap: 0, gapMax: 0 })
           if (lastCall) { const g = c0 - lastCall; calls.gap += g; if (g > calls.gapMax) calls.gapMax = g }
