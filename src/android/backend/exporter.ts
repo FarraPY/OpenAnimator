@@ -64,6 +64,7 @@ type Diag = {
     framesAt?: number[]; dropsAt?: number[]; screenHz?: number; displayHz?: number; view?: string
     encoder?: {
       images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
+      texMs?: number; markMs?: number; drawMs?: number; swapMs?: number; swapMsMax?: number; drainMs?: number
       matched?: number; busy?: number; old?: number; newer?: number; idle?: number; queueMs?: number; queueMsMax?: number
     }
     timeline?: Record<string, number[]>; timelineN?: number; frameIntervalMs?: number; sample?: number[][]; timelineError?: string
@@ -117,7 +118,7 @@ function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Pa
  * La mezcla la hace Java (AudioMix.java) y va directo al codificador: decodifica cada clip, lo lleva a
  * 48 kHz y le aplica volumen y fundidos (lineales, como afade en la PC). Antes se hacía acá y cada tramo
  * iba y volvía por el puente: ~30 s para un minuto de video en la tablet. El codificador la pasa a AAC a
- * medida que llega (así ese tiempo se ve en el progreso del audio y no congela el primer fotograma).
+ * medida que llega, y todo eso corre en paralelo con la captura de los fotogramas.
  */
 async function mixAudio(parts: Part[], t0: number, t1: number, onProgress: (p: number) => void) {
   const r = await host().callAsync<{ parts: number; failed: string[]; encodeMs?: number }>('enc.mix', {
@@ -190,7 +191,7 @@ class Export {
     } catch { /* ignore */ }
     if (d.video) lines.push(`Video: ${d.video}`)
     if (d.used.length) lines.push(`Captura: ${d.used.map((x) => LABEL[x]).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
-    lines.push(`Tiempos: preparar ${secs(m.preparar)} · audio ${secs(m.audio)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · terminar ${secs(m.terminar)}`)
+    lines.push(`Tiempos: preparar ${secs(m.preparar)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · audio en paralelo ${secs(m.audio)}${m.esperaAudio != null && m.esperaAudio >= 50 ? ` (al final se esperó ${secs(m.esperaAudio)})` : ''} · terminar ${secs(m.terminar)}`)
     const c = d.cap, pg = c?.page
     if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · por adelantado ${c.ahead ?? '—'}` : ''}`)
     if (c?.mode === 'gpu') {
@@ -200,6 +201,8 @@ class Export {
       const e = c.encoder
       if (e && e.images) {
         lines.push(`Hilo de la GPU: ${e.images} imágenes, ${msf(e.msPerImage)} cada una (máx ${msf(e.msMax)}) · codificar máx ${msf(e.encodeMsMax)} · escrituras pendientes máx ${e.writesPendingMax ?? 0}`)
+        const ms1 = (x?: number) => (x == null ? '—' : `${x.toFixed(1).replace('.', ',')} ms`)
+        if (e.texMs != null) lines.push(`  por imagen: tomarla ${ms1(e.texMs)} · leer su marca ${ms1(e.markMs)}; por fotograma: dibujarlo ${ms1(e.drawMs)} · entregarlo al codificador ${ms1(e.swapMs)} (máx ${ms1(e.swapMsMax)}) · sacar lo codificado ${ms1(e.drainMs)}`)
         lines.push(`Imágenes: la esperada ${e.matched ?? '—'} · la página cambiando ${e.busy ?? '—'} · viejas ${e.old ?? '—'} · posteriores (pérdida) ${e.newer ?? '—'} · sin pedido ${e.idle ?? '—'} · esperaron para tomarse ${msf(e.queueMs)} (máx ${msf(e.queueMsMax)})`)
       }
       if (c.view || c.frameIntervalMs) lines.push(`Página de captura: vista ${c.view || '—'} · un cuadro cada ${c.frameIntervalMs ? `${c.frameIntervalMs.toFixed(1).replace('.', ',')} ms` : '—'}`)
@@ -264,12 +267,13 @@ class Export {
     const parts = job.audio ? audioParts(job.projectId, tl, start, end) : []
     this.check()
 
-    const info = host().call<{ codec: string; profile: string }>('enc.start', {
+    const info = host().call<{ codec: string; profile: string; operatingRate?: number; maxFps?: number }>('enc.start', {
       out, width: W, height: H, fps, bitrate, keyframeSec: 2, codec,
       audio: parts.length ? { sampleRate: SR, channels: 2, bitrate: Math.max(64, Math.min(320, job.audioBitrate || 192)) * 1000 } : undefined,
     })
     markStarted()
-    d.video = `${W}×${H} · ${fps} fps · ${frames} fotogramas · ${info.codec}${info.profile ? ` ${info.profile}` : ''}`
+    const speed = info.operatingRate ? ` · trabajando a ${info.operatingRate} fps` : info.maxFps ? ' · sin aviso de velocidad' : ''
+    d.video = `${W}×${H} · ${fps} fps · ${frames} fotogramas · ${info.codec}${info.profile ? ` ${info.profile}` : ''}${speed}${info.maxFps ? ` (admite hasta ${Math.round(info.maxFps)} fps)` : ''}`
     d.marks.preparar = performance.now() - T
 
     // La captura (ver arriba) se abre mientras se mezcla el audio: la de GPU dibuja en el codificador,
@@ -287,13 +291,16 @@ class Export {
     const tOpen = performance.now()
     const opening = this.opening = openCapture(['gpu', 'draw']).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
 
+    // El audio se mezcla (en Java, en otro núcleo) mientras se capturan los fotogramas: el MP4 espera su formato
+    // en el hilo que escribe, nunca la captura. Si falla, la exportación se corta enseguida.
+    let mixing: Promise<void> | null = null
+    let mixError: unknown = null
     if (parts.length) {
-      this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: 0, total: 1 })
       const tA = performance.now()
-      const r = await mixAudio(parts, start, end, (x) => this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: x, total: 1 }))
-      d.marks.audio = performance.now() - tA
-      d.audio = { parts: r?.parts ?? parts.length, failed: r?.failed || [], encodeMs: r?.encodeMs }
-      this.check()
+      mixing = mixAudio(parts, start, end, () => {}).then(
+        (r) => { d.marks.audio = performance.now() - tA; d.audio = { parts: r?.parts ?? parts.length, failed: r?.failed || [], encodeMs: r?.encodeMs } },
+        (e) => { mixError = e },
+      )
     }
     const tWait = performance.now()
     await opening
@@ -311,12 +318,13 @@ class Export {
     this.emit({ phase: 'render', message: `Fotograma 1 de ${frames} · ${LABEL[method]}`, done: 0, total: frames })
     for (let i = 0; i < frames; i++) {
       this.check()
+      if (mixError) throw mixError
       const t = start + i / fps
       let shot: string | undefined
       if (method !== 'compat') {
         try {
           // Con la GPU, los que siguen se piden ya (la página los prepara mientras éste se codifica).
-          const next = method === 'gpu' ? [i + 1, i + 2, i + 3].filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          const next = method === 'gpu' ? [1, 2, 3, 4, 5].map((k) => i + k).filter((k) => k < frames).map((k) => start + k / fps) : undefined
           const c0 = performance.now()
           const calls = d.calls || (d.calls = { n: 0, ms: 0, max: 0, gap: 0, gapMax: 0 })
           if (lastCall) { const g = c0 - lastCall; calls.gap += g; if (g > calls.gapMax) calls.gapMax = g }
@@ -365,6 +373,14 @@ class Export {
     d.marks.fotogramas = performance.now() - tr0
     d.used = [...used]
     d.fps = rate
+    if (mixing) {
+      const tM = performance.now()
+      if (!d.marks.audio) this.emit({ phase: 'render', message: 'Terminando el audio…', done: frames, total: frames, fps: rate })
+      await mixing
+      if (mixError) throw mixError
+      d.marks.esperaAudio = performance.now() - tM
+      this.check()
+    }
     const tEnd = performance.now()
     // Los últimos fotogramas capturados terminan de codificarse y se cierra la vista de captura.
     if (method !== 'compat') d.cap = await host().callAsync('cap.stop')

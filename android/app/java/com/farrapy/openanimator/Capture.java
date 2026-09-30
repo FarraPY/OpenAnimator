@@ -80,9 +80,8 @@ final class Capture {
      * costs about three times as long (each frame waits for the whole trip through the display).
      */
     private int depth, blockFrames, blockDrops;
-    private static final int MAX_DEPTH = 3;
+    private static final int MAX_DEPTH = 4;
     private final long[] framesAt = new long[MAX_DEPTH + 1], dropsAt = new long[MAX_DEPTH + 1];
-    private boolean prepared;
     private long lastPreviewReq;
     /**
      * The views are created on the UI thread and close() can come from any thread (even while they are
@@ -265,7 +264,6 @@ final class Capture {
         blockFrames = blockDrops = 0;
         java.util.Arrays.fill(framesAt, 0);
         java.util.Arrays.fill(dropsAt, 0);
-        prepared = false;
         lastPreviewReq = 0;
     }
 
@@ -345,10 +343,6 @@ final class Capture {
 
     private JSONObject frameGpu(double t, JSONArray upcoming) throws Exception {
         if (web == null) throw new IOException("La captura no está abierta");
-        if (!prepared) {
-            encoder.gpuPrepare();
-            prepared = true;
-        }
         long deadline = System.currentTimeMillis() + 60000;
         int lost = 0;
         while (true) {

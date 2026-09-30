@@ -49,7 +49,7 @@ import java.util.concurrent.RejectedExecutionException;
  * thread that mixes it) and is interleaved with the video in an MP4 (MediaMuxer).
  *
  *   start({out, width, height, fps, bitrate, codec: avc|hevc, keyframeSec, audio: {sampleRate, channels, bitrate}})
- *   audio(pcm16le)   (all the audio, before the first frame)
+ *   audio(pcm16le)   (while the frames arrive: the mix runs in parallel; all of it before finish)
  *   frame(jpeg) | frameBitmap(bitmap) …    finish() → {path, size, frames}     cancel()
  *
  * GPU capture (Capture, mode "gpu"): gpuSurface() gives the Surface of a SurfaceTexture that a virtual
@@ -162,19 +162,6 @@ final class Encoder {
             @Override
             public Surface call() throws Exception {
                 return j.gpuSetup(width, height, marker, t);
-            }
-        });
-    }
-
-    /** Before the first frame: the audio is closed now, not while images from the virtual display arrive. */
-    void gpuPrepare() throws Exception {
-        final Job j = job;
-        if (j == null) throw new IOException("No hay una exportación en curso");
-        run(new Callable<Object>() {
-            @Override
-            public Object call() throws Exception {
-                if (j.hasAudio && !j.audioEncoded) j.closeAudio();
-                return null;
             }
         });
     }
@@ -295,6 +282,9 @@ final class Encoder {
         }
     }
 
+    /** Frames per second asked of the encoder when exporting (it would prepare itself for the video's fps). */
+    private static final int FAST_RATE = 240;
+
     /**
      * Texture coordinates in high precision where the GPU has it: with mediump (10 bits) a coordinate
      * near 1.0 on a 1080-row image can be off by about a pixel.
@@ -314,6 +304,9 @@ final class Encoder {
 
         MediaCodec video;
         Surface input;
+        /** The fast-export hint the encoder took (0: none) and the fps it says it can take at this size. */
+        int operatingRate;
+        double maxFps;
         MediaMuxer muxer;
         int videoTrack = -1, audioTrack = -1;
         boolean muxing;
@@ -327,10 +320,12 @@ final class Encoder {
         final List<Integer> audioFlags = new ArrayList<>();
         int audioNext;
         /** Closed: the AAC encoder got the end of the stream and gave back everything (no more audio is accepted). */
-        boolean audioEncoded;
+        volatile boolean audioEncoded;
         /** The AAC encoder, fed as the PCM arrives (appendAudio, on the thread that mixes). Guarded by audioLock. */
         MediaCodec aac;
         final Object audioLock = new Object();
+        /** audioFormat arrives here (the writer waits for it to start the MP4); audioData guards the three lists. */
+        final Object audioReady = new Object();
         final MediaCodec.BufferInfo aacInfo = new MediaCodec.BufferInfo();
         long aacBytes;
         boolean aacDone;
@@ -363,36 +358,45 @@ final class Encoder {
         JSONObject init() throws Exception {
             File dir = out.getParentFile();
             if (dir != null && !dir.isDirectory() && !dir.mkdirs()) throw new IOException("No se pudo crear " + dir);
-            video = MediaCodec.createEncoderByType(videoMime);
-            MediaFormat f = MediaFormat.createVideoFormat(videoMime, width, height);
-            f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-            f.setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate);
-            f.setInteger(MediaFormat.KEY_FRAME_RATE, (int) Math.max(1, Math.round(fps)));
-            f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyframeSec);
-            String profile = "baseline";
-            if (videoMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC) && supportsProfile(video, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh)) {
-                MediaFormat hi = MediaFormat.createVideoFormat(videoMime, width, height);
-                hi.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                hi.setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate);
-                hi.setInteger(MediaFormat.KEY_FRAME_RATE, (int) Math.max(1, Math.round(fps)));
-                hi.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyframeSec);
-                hi.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
-                hi.setInteger(MediaFormat.KEY_LEVEL, levelFor(width, height, fps));
+            MediaCodec first = MediaCodec.createEncoderByType(videoMime);
+            MediaCodecInfo codecInfo = first.getCodecInfo();
+            boolean avc = videoMime.equals(MediaFormat.MIMETYPE_VIDEO_AVC);
+            boolean high = avc && supportsProfile(codecInfo, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+            maxFps = maxFrameRate(codecInfo, videoMime, width, height);
+            int fast = maxFps > fps + 1 ? (int) Math.min(FAST_RATE, maxFps) : 0;
+            // Lo más rápido y de mejor calidad primero; lo que el codificador no acepte (al configurarlo o al
+            // arrancarlo) se deja de lado. Con fast se le avisa que exportar no es tiempo real: por defecto se
+            // prepara para los fps del video y tarda más de lo necesario en cada fotograma.
+            int[][] tries = high ? new int[][]{{1, fast}, {1, 0}, {0, fast}, {0, 0}} : new int[][]{{0, fast}, {0, 0}};
+            String profile = null;
+            Exception failed = null;
+            for (int[] t : tries) {
+                if (t[1] == 0 && fast != 0 && failed == null) continue; // sin avisar, sólo si avisando falló
+                if (t[1] != 0 && fast == 0) continue;
+                MediaCodec c = first != null ? first : MediaCodec.createEncoderByType(videoMime);
+                first = null;
+                Surface s = null;
                 try {
-                    video.configure(hi, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                    profile = "high";
+                    c.configure(videoFormat(t[0] == 1, t[1]), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                    s = c.createInputSurface();
+                    c.start();
+                    video = c;
+                    input = s;
+                    operatingRate = t[1];
+                    profile = t[0] == 1 ? "high" : avc ? "baseline" : "main";
+                    break;
                 } catch (Exception e) {
-                    Log.w(TAG, "perfil High no aceptado; se usa el predeterminado", e);
-                    video.release();
-                    video = MediaCodec.createEncoderByType(videoMime);
-                    video.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                    Log.w(TAG, "el codificador no aceptó " + (t[0] == 1 ? "el perfil High" : "el perfil base") + (t[1] > 0 ? " a " + t[1] + " fps de trabajo" : ""), e);
+                    failed = e;
+                    if (s != null) s.release();
+                    try {
+                        c.release();
+                    } catch (Exception ignored) {
+                    }
                 }
-            } else {
-                video.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                profile = videoMime.equals(MediaFormat.MIMETYPE_VIDEO_HEVC) ? "main" : "baseline";
             }
-            input = video.createInputSurface();
-            video.start();
+            if (first != null) first.release();
+            if (video == null) throw failed != null ? failed : new IOException("No se pudo abrir el codificador de video");
             setupEgl();
             muxer = new MediaMuxer(tmp.getPath(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             if (hasAudio) startAac();
@@ -400,18 +404,51 @@ final class Encoder {
             o.put("codec", video.getName());
             o.put("mime", videoMime);
             o.put("profile", profile);
+            o.put("operatingRate", operatingRate);
+            o.put("maxFps", maxFps);
             o.put("width", width);
             o.put("height", height);
             return o;
         }
 
-        private static boolean supportsProfile(MediaCodec codec, int profile) {
+        private static boolean supportsProfile(MediaCodecInfo info, int profile) {
             try {
-                MediaCodecInfo.CodecCapabilities caps = codec.getCodecInfo().getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC);
+                MediaCodecInfo.CodecCapabilities caps = info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC);
                 for (MediaCodecInfo.CodecProfileLevel pl : caps.profileLevels) if (pl.profile == profile) return true;
             } catch (Exception ignored) {
             }
             return false;
+        }
+
+        /**
+         * Frames per second the encoder says it can take at this size (0 if it doesn't say). The fast-export hint
+         * asks for up to FAST_RATE, never more than that: asking for "as fast as possible" (Integer.MAX_VALUE, as
+         * Media3 does) made c2.qti.avc.encoder refuse to start on a Galaxy Tab A9+ (androidx/media#2362).
+         */
+        private static double maxFrameRate(MediaCodecInfo info, String mime, int w, int h) {
+            try {
+                return info.getCapabilitiesForType(mime).getVideoCapabilities().getSupportedFrameRatesFor(w, h).getUpper();
+            } catch (Exception e) {
+                return 0;
+            }
+        }
+
+        private MediaFormat videoFormat(boolean high, int rate) {
+            MediaFormat f = MediaFormat.createVideoFormat(videoMime, width, height);
+            f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+            f.setInteger(MediaFormat.KEY_BIT_RATE, videoBitrate);
+            f.setInteger(MediaFormat.KEY_FRAME_RATE, (int) Math.max(1, Math.round(fps)));
+            f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyframeSec);
+            if (high) {
+                f.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+                f.setInteger(MediaFormat.KEY_LEVEL, levelFor(width, height, fps));
+            }
+            if (rate > 0) {
+                // Como la cámara lenta: el video es de fps, pero el codificador tiene que poder con rate por segundo.
+                f.setInteger(MediaFormat.KEY_OPERATING_RATE, rate);
+                f.setInteger(MediaFormat.KEY_PRIORITY, 1); // sin plazos de tiempo real: lo más rápido que pueda
+            }
+            return f;
         }
 
         private static int levelFor(int w, int h, double fps) {
@@ -428,11 +465,14 @@ final class Encoder {
             if (!hasAudio) throw new IOException("Esta exportación no tiene audio");
             if (data.length % (2 * channels) != 0) throw new IOException("Audio incompleto: " + data.length + " bytes");
             synchronized (audioLock) {
-                if (audioEncoded) throw new IOException("El audio ya se cerró (llegó después del primer fotograma)");
+                if (audioEncoded) throw new IOException("El audio ya se cerró");
                 if (aac == null) throw new IOException("cancelado");
                 long t0 = System.nanoTime();
                 try {
                     feedAac(data, false);
+                    // El formato llega con la primera salida y el MP4 lo espera para empezar: que no quede adentro
+                    // del codificador hasta el próximo pedazo (hasta ~1 s).
+                    for (int i = 0; audioFormat == null && i < 100 && !cancelled; i++) drainAac(10000);
                 } finally {
                     aacNs += System.nanoTime() - t0;
                 }
@@ -455,7 +495,6 @@ final class Encoder {
 
         void frame(Bitmap bmp) throws Exception {
             if (cancelled) throw new IOException("cancelado");
-            if (hasAudio && !audioEncoded) closeAudio();
             drain(false);
             GLES20.glViewport(0, 0, width, height);
             GLES20.glClearColor(0f, 0f, 0f, 1f);
@@ -496,7 +535,7 @@ final class Encoder {
                         @Override
                         public void run() {
                             videoTrack = muxer.addTrack(vf);
-                            if (hasAudio && audioFormat != null) audioTrack = muxer.addTrack(audioFormat);
+                            if (hasAudio) audioTrack = muxer.addTrack(awaitAudioFormat());
                             muxer.start();
                         }
                     });
@@ -650,16 +689,21 @@ final class Encoder {
                 if (oi == MediaCodec.INFO_TRY_AGAIN_LATER) break;
                 got = true;
                 if (oi == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    audioFormat = aac.getOutputFormat();
+                    synchronized (audioReady) {
+                        audioFormat = aac.getOutputFormat();
+                        audioReady.notifyAll();
+                    }
                 } else if (oi >= 0) {
                     ByteBuffer ob = aac.getOutputBuffer(oi);
                     if ((aacInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && aacInfo.size > 0 && ob != null) {
                         byte[] d = new byte[aacInfo.size];
                         ob.position(aacInfo.offset);
                         ob.get(d, 0, aacInfo.size);
-                        audioData.add(d);
-                        audioPts.add(aacInfo.presentationTimeUs);
-                        audioFlags.add(aacInfo.flags & ~MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        synchronized (audioData) {
+                            audioData.add(d);
+                            audioPts.add(aacInfo.presentationTimeUs);
+                            audioFlags.add(aacInfo.flags & ~MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        }
                     }
                     aac.releaseOutputBuffer(oi, false);
                     if ((aacInfo.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) aacDone = true;
@@ -668,7 +712,7 @@ final class Encoder {
             return got;
         }
 
-        /** Closes the audio (all of it arrives before the first frame): end of the stream and what the encoder still had. */
+        /** Closes the audio when the export ends (the mix already finished): end of the stream and what the encoder still had. */
         void closeAudio() throws IOException {
             synchronized (audioLock) {
                 if (audioEncoded) return;
@@ -686,6 +730,9 @@ final class Encoder {
                 } finally {
                     aacCloseNs = System.nanoTime() - t0;
                     releaseAac();
+                    synchronized (audioReady) {
+                        audioReady.notifyAll(); // si el formato nunca llegó, el que escribe deja de esperarlo
+                    }
                 }
                 if (audioFormat == null) throw new IOException("El codificador de audio no devolvió formato");
             }
@@ -703,15 +750,43 @@ final class Encoder {
             }
         }
 
+        /** On the writer thread: the audio that's already encoded, up to ptsUs (the rest goes with later frames). */
         private void writeAudioUpTo(long ptsUs) {
             if (audioTrack < 0) return;
             MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
-            while (audioNext < audioData.size() && audioPts.get(audioNext) <= ptsUs) {
-                byte[] d = audioData.get(audioNext);
-                bi.set(0, d.length, audioPts.get(audioNext), audioFlags.get(audioNext));
+            while (true) {
+                byte[] d;
+                synchronized (audioData) {
+                    if (audioNext >= audioData.size() || audioPts.get(audioNext) > ptsUs) return;
+                    d = audioData.get(audioNext);
+                    bi.set(0, d.length, audioPts.get(audioNext), audioFlags.get(audioNext));
+                    audioData.set(audioNext, null);
+                    audioNext++;
+                }
                 muxer.writeSampleData(audioTrack, ByteBuffer.wrap(d), bi);
-                audioData.set(audioNext, null);
-                audioNext++;
+            }
+        }
+
+        /**
+         * On the writer thread, before starting the MP4 (both tracks go in first): the AAC encoder's format.
+         * The audio is mixed while the frames are captured and the format comes with its first piece; the video
+         * written meanwhile waits in the writer's queue, never the capture.
+         */
+        private MediaFormat awaitAudioFormat() {
+            long deadline = System.currentTimeMillis() + 180000;
+            synchronized (audioReady) {
+                while (audioFormat == null) {
+                    if (cancelled) throw new IllegalStateException("cancelado");
+                    if (audioEncoded) throw new IllegalStateException("El codificador de audio no devolvió formato");
+                    long left = deadline - System.currentTimeMillis();
+                    if (left <= 0) throw new IllegalStateException("El audio no empezó a tiempo");
+                    try {
+                        audioReady.wait(Math.min(left, 200));
+                    } catch (InterruptedException e) {
+                        throw new IllegalStateException("cancelado");
+                    }
+                }
+                return audioFormat;
             }
         }
 
@@ -969,6 +1044,7 @@ final class Encoder {
             try {
                 s.updateTexImage();
                 s.getTransformMatrix(stMatrix);
+                statTexNs += System.nanoTime() - t0;
                 // Cuánto esperó esta imagen desde que la pantalla virtual la compuso hasta que se tomó.
                 long ts = s.getTimestamp();
                 if (ts > 0 && t0 > ts) {
@@ -987,7 +1063,10 @@ final class Encoder {
                         return;
                     }
                 }
+                long m0 = System.nanoTime();
                 int m = readMarker();
+                statMarkNs += System.nanoTime() - m0;
+                statMarkN++;
                 Want w;
                 synchronized (gpuLock) {
                     w = wants.peekFirst();
@@ -1050,6 +1129,7 @@ final class Encoder {
 
         // para los detalles de la exportación (se leen desde otro hilo: son aproximados)
         volatile long statLatches, statLatchNs, statLatchMaxNs, statEncodeMaxNs;
+        volatile long statTexNs, statMarkNs, statMarkN, statDrainNs, statDrawNs, statSwapNs, statSwapMaxNs, statEncN;
         volatile long statImgMatched, statImgBusy, statImgOld, statImgNewer, statImgIdle, statQueueN;
         volatile double statQueueMs, statQueueMaxMs;
 
@@ -1068,22 +1148,39 @@ final class Encoder {
             o.put("idle", statImgIdle);
             o.put("queueMs", statQueueN > 0 ? statQueueMs / statQueueN : 0);
             o.put("queueMsMax", statQueueMaxMs);
+            // cada paso, en ms por imagen (tomarla, leer su marca) o por fotograma codificado (el resto)
+            o.put("texMs", statLatches > 0 ? statTexNs / 1e6 / statLatches : 0);
+            o.put("markMs", statMarkN > 0 ? statMarkNs / 1e6 / statMarkN : 0);
+            o.put("drawMs", statEncN > 0 ? statDrawNs / 1e6 / statEncN : 0);
+            o.put("swapMs", statEncN > 0 ? statSwapNs / 1e6 / statEncN : 0);
+            o.put("swapMsMax", statSwapMaxNs / 1e6);
+            o.put("drainMs", statEncN > 0 ? statDrainNs / 1e6 / statEncN : 0);
             return o;
         }
 
         /** The current image of the virtual display (without its marker strip) goes to the encoder. */
         private void encodeOes() throws IOException {
-            if (hasAudio && !audioEncoded) closeAudio();
+            long a = System.nanoTime();
             drain(false);
+            long b = System.nanoTime();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, width, height);
             drawOes(false);
             checkGl("gpu draw");
             long ptsNs = Math.round(frames * 1e9 / fps);
             EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
+            long c = System.nanoTime();
             if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) throw new IOException("eglSwapBuffers falló: 0x" + Integer.toHexString(EGL14.eglGetError()));
+            long d = System.nanoTime();
             frames++;
             drain(false);
+            long e = System.nanoTime();
+            // Dónde se va el tiempo de cada imagen: si el codificador no da abasto, espera en el swap (no le quedan búferes).
+            statDrainNs += (b - a) + (e - d);
+            statDrawNs += c - b;
+            statSwapNs += d - c;
+            if (d - c > statSwapMaxNs) statSwapMaxNs = d - c;
+            statEncN++;
         }
 
         void gpuRelease() {

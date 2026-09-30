@@ -151,7 +151,7 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
      el hilo del codificador y sin nada lento (la vista previa se lee chica y el JPEG se arma afuera): codifica la
      esperada (`gpuExpect`), ignora las viejas y, si llega una posterior, la esperada se perdió: no entra nada más
      hasta que Capture se entera (`gpuForget`) y la vuelve a pedir (la segunda vez, solo: así no se puede perder).
-     Java pide hasta 3 fotogramas por adelantado (por tandas de 60: baja si se pierde el 10 %, sube si casi nada;
+     Java pide hasta 4 fotogramas por adelantado (por tandas de 60: baja si se pierde el 10 %, sube si casi nada;
      en la Tab S8+ de a uno daba 20 fps: cada fotograma tarda ~3 refrescos en dar la vuelta), sube la pantalla a su
      máxima frecuencia (`preferFastDisplay`, y `VirtualDisplayConfig.setRequestedRefreshRate` desde Android 14) y el
      MP4 se escribe en otro hilo (`writer`): una escritura lenta en la tarjeta SD no puede demorar al que toma imágenes.
@@ -166,10 +166,15 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL). El audio de la exportación lo mezcla Java
   (`AudioMix.java`, `enc.mix`: ventanas de 30 s, sinc a 48 kHz, volumen y fundidos lineales en el tiempo del clip)
   directo al codificador; con JS (ida y vuelta por el puente) tardaba ~30 s por minuto. Se probó en la PC contra una
-  mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. El AAC se codifica a medida que llega la mezcla
-  (`appendAudio` → `feedAac`, en el hilo que mezcla) y el primer fotograma sólo lo cierra (`closeAudio`). Trampa:
+  mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. La mezcla corre en paralelo con la captura de los
+  fotogramas; el AAC se codifica a medida que llega (`appendAudio` → `feedAac`, en el hilo que mezcla), el MP4 espera
+  su formato en el hilo que escribe (`awaitAudioFormat`: la captura nunca espera) y se cierra al terminar. Trampa:
   sacar en cada vuelta todas las salidas listas del codificador AAC (sólo libera una entrada cuando se tomaron sus
-  salidas); una por espera de 10 ms dejaba el primer fotograma ~40 s congelado en un video de 1:15. Al terminar, el diálogo muestra «Detalles»
+  salidas); una por espera de 10 ms dejaba el primer fotograma ~40 s congelado en un video de 1:15. El codificador de
+  video se abre con `KEY_OPERATING_RATE` (lo que admita a ese tamaño, hasta 240) y `KEY_PRIORITY` 1: sin eso se prepara
+  para los fps del video (FFmpeg agregó lo mismo en 2024); pedir `Integer.MAX_VALUE`, como Media3, hizo que
+  c2.qti.avc.encoder no arranque en una Galaxy Tab A9+ (androidx/media#2362). Si no lo acepta al configurarlo o al
+  arrancarlo, sigue sin el aviso (y sin el perfil High, si hace falta). Al terminar, el diálogo muestra «Detalles»
   para copiar y pegar (queda en `logs/ultima-exportacion.txt` y en el diálogo de exportar): tiempos por etapa,
   método, estado del equipo (temperatura, ahorro, memoria, Hz) y, con la GPU, la línea de tiempo de cada fotograma
   uniendo `__oaCapLog` de la página (llegó, empezó, listo, entregado + rAF, en ms de reloj) con Java (`Want`: pedido,
