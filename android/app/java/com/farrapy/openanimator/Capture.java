@@ -7,6 +7,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.hardware.display.VirtualDisplayConfig;
 import android.os.Build;
 import android.util.Base64;
 import android.view.Surface;
@@ -22,6 +23,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -72,8 +74,14 @@ final class Capture {
     private volatile Surface surface;
     /** Frames already requested to the page, in order (the next ones the export will ask for). */
     private final ArrayDeque<Req> ahead = new ArrayDeque<>();
-    /** Frames requested ahead; it goes down if the display skips images and back up after a while without. */
-    private int depth, clean;
+    /**
+     * Frames requested ahead: in blocks of 60 frames it goes down if the display skipped many (10 % or more)
+     * and up if it skipped almost none. A lone lost frame costs a few frames of work; going one at a time
+     * costs about three times as long (each frame waits for the whole trip through the display).
+     */
+    private int depth, blockFrames, blockDrops;
+    private static final int MAX_DEPTH = 3;
+    private final long[] framesAt = new long[MAX_DEPTH + 1], dropsAt = new long[MAX_DEPTH + 1];
     private boolean prepared;
     private long lastPreviewReq;
     /**
@@ -85,6 +93,9 @@ final class Capture {
     private int generation;
     // para los detalles de la exportación
     private long statFrames, statNs, statLost;
+    /** Every frame requested to the page (GPU), with its times: the details show where the time goes. */
+    private final ArrayList<Encoder.Want> history = new ArrayList<>();
+    private JSONObject stateAtStart;
 
     private static final class Req {
         final double t;
@@ -111,6 +122,12 @@ final class Capture {
         if (width < 16 || height < 16 || width > 4096 || height > 4096) throw new IOException("Tamaño de captura inválido");
         gpu = "gpu".equals(mode);
         statFrames = statNs = statLost = 0;
+        history.clear();
+        try {
+            stateAtStart = deviceState();
+        } catch (Exception e) {
+            stateAtStart = null;
+        }
         try {
             if (gpu) startGpu(url, width, height);
             else startDraw(url, width, height);
@@ -189,7 +206,16 @@ final class Capture {
                     if (gen != generation()) return;
                     // Pantalla privada de la app (sin permisos): sólo muestra lo que la app pone en ella.
                     DisplayManager dm = (DisplayManager) act.getSystemService(Context.DISPLAY_SERVICE);
-                    vd = dm.createVirtualDisplay("OpenAnimator-exportar", width, height + MARK, 160, target, 0);
+                    if (Build.VERSION.SDK_INT >= 34) {
+                        // Con la frecuencia más alta de la pantalla: cada imagen tarda un par de refrescos en llegar.
+                        try {
+                            vd = dm.createVirtualDisplay(new VirtualDisplayConfig.Builder("OpenAnimator-exportar", width, height + MARK, 160)
+                                    .setSurface(target).setRequestedRefreshRate(act.fastestRefreshRate()).build());
+                        } catch (RuntimeException e) {
+                            vd = null;
+                        }
+                    }
+                    if (vd == null) vd = dm.createVirtualDisplay("OpenAnimator-exportar", width, height + MARK, 160, target, 0);
                     if (vd == null) throw new IOException("No se pudo crear la pantalla virtual");
                     pr = new Presentation(act, vd.getDisplay());
                     Window win = pr.getWindow();
@@ -236,7 +262,9 @@ final class Capture {
         if (bad != null) throw new IOException("La captura por GPU no coincide con la página (" + bad + ")");
         ahead.clear();
         depth = 2;
-        clean = 0;
+        blockFrames = blockDrops = 0;
+        java.util.Arrays.fill(framesAt, 0);
+        java.util.Arrays.fill(dropsAt, 0);
         prepared = false;
         lastPreviewReq = 0;
     }
@@ -277,6 +305,34 @@ final class Capture {
         if (gpu) {
             o.put("lost", statLost);
             o.put("ahead", depth);
+            JSONArray fa = new JSONArray(), da = new JSONArray();
+            for (int i = 0; i <= MAX_DEPTH; i++) {
+                fa.put(framesAt[i]);
+                da.put(dropsAt[i]);
+            }
+            o.put("framesAt", fa);
+            o.put("dropsAt", da);
+            o.put("encoder", encoder.gpuStats());
+            o.put("screenHz", act.currentRefreshRate());
+            VirtualDisplay d = display;
+            if (d != null) o.put("displayHz", d.getDisplay().getRefreshRate());
+            try {
+                String raw = eval("JSON.stringify({log: window.__oaCapLog || null, dpr: window.devicePixelRatio, w: innerWidth, h: innerHeight})", 10000);
+                if (raw != null && raw.startsWith("\"")) {
+                    JSONObject pg = new JSONObject(unquote(raw));
+                    o.put("view", pg.optDouble("w") + "×" + pg.optDouble("h") + " @" + pg.optDouble("dpr"));
+                    JSONObject log = pg.optJSONObject("log");
+                    if (log != null) timeline(log.optJSONArray("rows"), o);
+                }
+            } catch (Exception e) {
+                o.put("timelineError", String.valueOf(e.getMessage()));
+            }
+        }
+        if (stateAtStart != null) o.put("stateStart", stateAtStart);
+        try {
+            o.put("stateEnd", deviceState());
+        } catch (Exception ignored) {
+            // sin datos del equipo
         }
         try {
             String page = eval("JSON.stringify(window.__oaCapStats || null)", 3000);
@@ -305,8 +361,10 @@ final class Capture {
                 r = request(t);
             }
             // Los próximos se piden ya: la página prepara uno mientras el anterior viaja por la pantalla (salvo
-            // que éste ya se haya perdido: entonces se vuelve a empezar desde acá).
-            for (int i = 0; upcoming != null && i < upcoming.length() && ahead.size() < depth && r.want.status != Encoder.Want.LOST; i++) {
+            // que éste ya se haya perdido, o que se haya perdido dos veces: solo, sin otros detrás, no se puede
+            // perder, porque no llega ninguna imagen más nueva que lo reemplace).
+            int want = lost >= 2 ? 0 : depth;
+            for (int i = 0; upcoming != null && i < upcoming.length() && ahead.size() < want && r.want.status != Encoder.Want.LOST; i++) {
                 double tn = upcoming.getDouble(i);
                 boolean asked = false;
                 for (Req q : ahead) if (Math.abs(q.t - tn) < 1e-9) asked = true;
@@ -325,27 +383,126 @@ final class Capture {
                 if (now > deadline) throw new IOException("La escena tardó demasiado en dibujarse (" + t + " s)");
             }
             if (r.want.status == Encoder.Want.LOST) {
-                // La pantalla mostró uno posterior sin mostrar este (o la página no lo pudo dibujar): se vuelve a
-                // pedir, con un fotograma menos por adelantado.
+                // La pantalla mostró uno posterior sin mostrar este (o la página no lo pudo dibujar): se vuelve a pedir.
                 statLost++;
+                dropsAt[depth]++;
+                blockDrops++;
                 ahead.clear();
                 encoder.gpuForget();
                 String err = eval("String(window.__oaCapError)", 5000);
                 if (err != null && err.startsWith("\"error")) throw new IOException(unquote(err));
-                if (depth > 0) depth--;
-                clean = 0;
                 if (++lost > 5) throw new IOException("La pantalla virtual se saltea fotogramas");
                 continue;
             }
-            // Un buen rato sin pérdidas: se vuelve a pedir más por adelantado.
-            if (++clean >= 90 && depth < 2) {
-                depth++;
-                clean = 0;
+            framesAt[depth]++;
+            if (++blockFrames >= 60) {
+                if (blockDrops >= 6 && depth > 0) depth--;
+                else if (blockDrops <= 1 && depth < MAX_DEPTH) depth++;
+                blockFrames = blockDrops = 0;
             }
             JSONObject o = new JSONObject();
             if (r.want.pixels != null) o.put("preview", jpeg(r.want.pixels, r.want.pw, r.want.ph));
             return o;
         }
+    }
+
+    /**
+     * Where each frame's time goes (median, p90, max in ms), joining the page's log (when the request
+     * arrived, started, was ready, was handed over to be drawn) with Java's (requested, image arrived,
+     * encoded): to the page · waiting in the page's queue · page's JavaScript · until handed over (rAF) ·
+     * engine + virtual display until the image reaches the encoder · encoding · total. Also the time between
+     * consecutive encoded frames, the page's frame interval and some frames in full.
+     */
+    private void timeline(JSONArray rows, JSONObject o) throws JSONException {
+        if (rows == null) return;
+        java.util.Map<Integer, double[]> bySeq = new java.util.HashMap<>();
+        double[] rafs = new double[rows.length()];
+        int nr = 0;
+        for (int i = 0; i < rows.length(); i++) {
+            JSONArray r = rows.optJSONArray(i);
+            if (r == null || r.length() < 4) continue;
+            double[] v = new double[5];
+            for (int k = 0; k < 5; k++) v[k] = r.optDouble(k + 1, Double.NaN);
+            bySeq.put(r.optInt(0), v);
+            if (!Double.isNaN(v[4])) rafs[nr++] = v[4];
+        }
+        String[] names = {"toPage", "queue", "js", "commit", "display", "encode", "total"};
+        ArrayList<double[]> segs = new ArrayList<>();
+        ArrayList<Encoder.Want> done = new ArrayList<>();
+        for (Encoder.Want w : history) {
+            if (w.status != Encoder.Want.DONE || w.encodedAt == 0) continue;
+            double[] v = bySeq.get(w.seq);
+            if (v == null) continue;
+            segs.add(new double[]{v[0] - w.requestedAt, v[1] - v[0], v[2] - v[1], v[3] - v[2], w.imageAt - v[3], w.encodedAt - w.imageAt, w.encodedAt - w.requestedAt});
+            done.add(w);
+        }
+        JSONObject agg = new JSONObject();
+        for (int k = 0; k < names.length && !segs.isEmpty(); k++) {
+            double[] col = new double[segs.size()];
+            for (int i = 0; i < col.length; i++) col[i] = segs.get(i)[k];
+            agg.put(names[k], spread(col));
+        }
+        // ritmo: tiempo entre fotogramas codificados seguidos
+        if (done.size() > 1) {
+            double[] gaps = new double[done.size() - 1];
+            for (int i = 1; i < done.size(); i++) gaps[i - 1] = done.get(i).encodedAt - done.get(i - 1).encodedAt;
+            agg.put("cadence", spread(gaps));
+        }
+        o.put("timeline", agg);
+        o.put("timelineN", segs.size());
+        // intervalo de cuadros de la página: diferencias entre los rAF de entregas seguidas (el 10 % más chico)
+        if (nr > 2) {
+            double[] d = new double[nr - 1];
+            int nd = 0;
+            for (int i = 1; i < nr; i++) if (rafs[i] - rafs[i - 1] > 0.5) d[nd++] = rafs[i] - rafs[i - 1];
+            if (nd > 0) {
+                double[] dd = java.util.Arrays.copyOf(d, nd);
+                java.util.Arrays.sort(dd);
+                o.put("frameIntervalMs", dd[(int) (nd * 0.1)]);
+            }
+        }
+        // unos fotogramas completos, del medio: ms desde el pedido hasta cada paso
+        JSONArray sample = new JSONArray();
+        int from = Math.max(0, done.size() / 2 - 6);
+        for (int i = from; i < Math.min(done.size(), from + 12); i++) {
+            Encoder.Want w = done.get(i);
+            double[] v = bySeq.get(w.seq);
+            JSONArray r = new JSONArray();
+            r.put(w.depth);
+            for (double x : new double[]{v[1], v[2], v[3], w.imageAt, w.encodedAt}) r.put(Math.round((x - w.requestedAt) * 10) / 10.0);
+            sample.put(r);
+        }
+        o.put("sample", sample);
+    }
+
+    /** Median, 90th percentile and maximum. */
+    private static JSONArray spread(double[] col) throws JSONException {
+        double[] c = col.clone();
+        java.util.Arrays.sort(c);
+        JSONArray a = new JSONArray();
+        a.put(Math.round(c[c.length / 2] * 10) / 10.0);
+        a.put(Math.round(c[Math.min(c.length - 1, (int) (c.length * 0.9))] * 10) / 10.0);
+        a.put(Math.round(c[c.length - 1] * 10) / 10.0);
+        return a;
+    }
+
+    /** Heat (0 none … 6), power saving, free memory and the screen's refresh rate. */
+    private JSONObject deviceState() throws JSONException {
+        JSONObject st = new JSONObject();
+        android.os.PowerManager pm = (android.os.PowerManager) act.getSystemService(Context.POWER_SERVICE);
+        if (pm != null) {
+            if (Build.VERSION.SDK_INT >= 29) st.put("thermal", pm.getCurrentThermalStatus());
+            st.put("powerSave", pm.isPowerSaveMode());
+        }
+        android.app.ActivityManager am = (android.app.ActivityManager) act.getSystemService(Context.ACTIVITY_SERVICE);
+        if (am != null) {
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            st.put("availMB", mi.availMem >> 20);
+            st.put("lowMemory", mi.lowMemory);
+        }
+        st.put("screenHz", act.currentRefreshRate());
+        return st;
     }
 
     /** Asks the page for the frame at t with a new number; the encoder will take the image with that number. */
@@ -355,6 +512,9 @@ final class Capture {
         boolean preview = now - lastPreviewReq > 1000;
         if (preview) lastPreviewReq = now;
         Encoder.Want w = encoder.gpuExpect(seq, preview, false);
+        w.requestedAt = Encoder.wallMs();
+        w.depth = depth;
+        history.add(w);
         post("window.__oaCap(" + t + "," + seq + ");0");
         return new Req(t, w);
     }

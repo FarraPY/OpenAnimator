@@ -138,8 +138,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
      asíncrono: una imagen que no se tomó se reemplaza), así que `Encoder.latch` toma cada imagen apenas llega, en
      el hilo del codificador y sin nada lento (la vista previa se lee chica y el JPEG se arma afuera): codifica la
      esperada (`gpuExpect`), ignora las viejas y, si llega una posterior, la esperada se perdió: no entra nada más
-     hasta que Capture se entera (`gpuForget`) y la vuelve a pedir. Java pide hasta 2 fotogramas por adelantado
-     (baja con cada pérdida, sube tras 90 sin) y sube la pantalla a su máxima frecuencia (`preferFastDisplay`).
+     hasta que Capture se entera (`gpuForget`) y la vuelve a pedir (la segunda vez, solo: así no se puede perder).
+     Java pide hasta 3 fotogramas por adelantado (por tandas de 60: baja si se pierde el 10 %, sube si casi nada;
+     en la Tab S8+ de a uno daba 20 fps: cada fotograma tarda ~3 refrescos en dar la vuelta), sube la pantalla a su
+     máxima frecuencia (`preferFastDisplay`, y `VirtualDisplayConfig.setRequestedRefreshRate` desde Android 14) y el
+     MP4 se escribe en otro hilo (`writer`): una escritura lenta en la tarjeta SD no puede demorar al que toma imágenes.
      Antes de Android 11 la ventana necesita `TYPE_PRIVATE_PRESENTATION`. Antes, `__oaCapTest` (patrón de 6 colores) comprueba
      colores, orientación y recorte. Errores de la página: `__oaCapError` (queda aunque sigan pedidos).
   2. `draw`: un WebView del tamaño del video, detrás de la app; `postVisualStateCallback` y `WebView.draw` en un
@@ -152,7 +155,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`AudioMix.java`, `enc.mix`: ventanas de 30 s, sinc a 48 kHz, volumen y fundidos lineales en el tiempo del clip)
   directo al codificador; con JS (ida y vuelta por el puente) tardaba ~30 s por minuto. Se probó en la PC contra una
   mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. Al terminar, el diálogo muestra «Detalles»
-  (tiempos por etapa, método, ms por fotograma, `__oaCapStats` de la página) para copiar y pegar.
+  para copiar y pegar (queda en `logs/ultima-exportacion.txt` y en el diálogo de exportar): tiempos por etapa,
+  método, estado del equipo (temperatura, ahorro, memoria, Hz) y, con la GPU, la línea de tiempo de cada fotograma
+  uniendo `__oaCapLog` de la página (llegó, empezó, listo, entregado + rAF, en ms de reloj) con Java (`Want`: pedido,
+  imagen, codificado; `Encoder.wallMs`), qué era cada imagen (la esperada, cambiando, vieja, posterior) y una muestra.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
   nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles

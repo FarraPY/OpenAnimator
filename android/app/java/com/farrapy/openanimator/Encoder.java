@@ -133,6 +133,9 @@ final class Encoder {
         final int seq;
         final boolean preview, probe;
         int status;
+        /** For the export details (ms of wall clock, see wallMs): requested, its image arrived, encoded; depth then. */
+        double requestedAt, imageAt, encodedAt;
+        int depth;
         /**
          * With preview or probe (a probe isn't encoded): the image, 480 pixels wide, RGBA with the rows from
          * top to bottom. Only read back here; making a JPEG of it is the caller's job (on this thread it
@@ -146,6 +149,13 @@ final class Encoder {
             this.preview = preview;
             this.probe = probe;
         }
+    }
+
+    private static final long WALL0 = System.currentTimeMillis(), NANO0 = System.nanoTime();
+
+    /** Wall-clock ms with fractions (comparable with the page's performance.timeOrigin + now()). */
+    static double wallMs() {
+        return WALL0 + (System.nanoTime() - NANO0) / 1e6;
     }
 
     /** Surface for a virtual display of width×(height+marker) pixels (GPU capture). */
@@ -189,6 +199,12 @@ final class Encoder {
         Job j = job;
         if (j == null) throw new IOException("La exportación se canceló");
         return j.await(w, timeoutMs);
+    }
+
+    /** How the encoder's thread did with the virtual display's images (for the export details). */
+    JSONObject gpuStats() throws JSONException {
+        Job j = job;
+        return j == null ? new JSONObject() : j.gpuStats();
     }
 
     /** Forgets the images still expected (the capture starts over from another frame). */
@@ -461,23 +477,104 @@ final class Encoder {
                     if (System.currentTimeMillis() > deadline) throw new IOException("El codificador no terminó a tiempo");
                 } else if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     if (muxing) throw new IOException("El formato del video cambió durante la exportación");
-                    videoTrack = muxer.addTrack(video.getOutputFormat());
-                    if (hasAudio && audioFormat != null) audioTrack = muxer.addTrack(audioFormat);
-                    muxer.start();
+                    final MediaFormat vf = video.getOutputFormat();
                     muxing = true;
+                    write(new Runnable() {
+                        @Override
+                        public void run() {
+                            videoTrack = muxer.addTrack(vf);
+                            if (hasAudio && audioFormat != null) audioTrack = muxer.addTrack(audioFormat);
+                            muxer.start();
+                        }
+                    });
                 } else if (idx >= 0) {
                     ByteBuffer buf = video.getOutputBuffer(idx);
                     if ((info.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) info.size = 0;
                     if (info.size > 0 && muxing && buf != null) {
                         buf.position(info.offset);
                         buf.limit(info.offset + info.size);
-                        muxer.writeSampleData(videoTrack, buf, info);
-                        writeAudioUpTo(info.presentationTimeUs);
+                        final byte[] data = take(info.size);
+                        buf.get(data, 0, info.size);
+                        final MediaCodec.BufferInfo bi = new MediaCodec.BufferInfo();
+                        bi.set(0, info.size, info.presentationTimeUs, info.flags);
+                        write(new Runnable() {
+                            @Override
+                            public void run() {
+                                try {
+                                    muxer.writeSampleData(videoTrack, ByteBuffer.wrap(data), bi);
+                                    writeAudioUpTo(bi.presentationTimeUs);
+                                } finally {
+                                    give(data);
+                                }
+                            }
+                        });
                     }
                     video.releaseOutputBuffer(idx, false);
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) return;
                 }
             }
+        }
+
+        // ── el MP4 se escribe en su propio hilo ─────────────────────────────────────
+        // El hilo del codificador (que además toma las imágenes de la pantalla virtual) nunca espera al disco:
+        // una tarjeta SD a veces tarda decenas de ms en una escritura y, mientras tanto, la pantalla virtual
+        // reemplaza la imagen que no se alcanzó a tomar.
+
+        final ExecutorService writer = Executors.newSingleThreadExecutor();
+        volatile Exception writeError;
+        final ArrayDeque<byte[]> pool = new ArrayDeque<>();
+        final java.util.concurrent.atomic.AtomicInteger writesPending = new java.util.concurrent.atomic.AtomicInteger();
+        volatile int writesPendingMax;
+
+        private void write(final Runnable r) throws IOException {
+            Exception e0 = writeError;
+            if (e0 != null) throw new IOException("No se pudo escribir el video: " + e0.getMessage(), e0);
+            int n = writesPending.incrementAndGet();
+            if (n > writesPendingMax) writesPendingMax = n;
+            try {
+                writer.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            if (writeError == null) r.run();
+                        } catch (Exception e) {
+                            Log.w(TAG, "escritura del video", e);
+                            writeError = e;
+                        } finally {
+                            writesPending.decrementAndGet();
+                        }
+                    }
+                });
+            } catch (RejectedExecutionException e) {
+                writesPending.decrementAndGet();
+                throw new IOException("cancelado");
+            }
+        }
+
+        /** A buffer for an encoded frame (they are reused: ~60 per second would keep the GC busy). */
+        private byte[] take(int size) {
+            synchronized (pool) {
+                for (java.util.Iterator<byte[]> it = pool.iterator(); it.hasNext(); ) {
+                    byte[] b = it.next();
+                    if (b.length >= size) {
+                        it.remove();
+                        return b;
+                    }
+                }
+            }
+            return new byte[Math.max(size, 256 * 1024)];
+        }
+
+        private void give(byte[] b) {
+            synchronized (pool) {
+                if (pool.size() < 16) pool.add(b);
+            }
+        }
+
+        /** Waits until everything queued is written (true) or the time runs out. */
+        private boolean flushWriter(long seconds) throws InterruptedException {
+            writer.shutdown();
+            return writer.awaitTermination(seconds, java.util.concurrent.TimeUnit.SECONDS);
         }
 
         // ── audio ────────────────────────────────────────────────────────────────
@@ -586,7 +683,15 @@ final class Encoder {
             if (frames == 0) throw new IOException("No se recibió ningún fotograma");
             drain(true);
             if (!muxing) throw new IOException("El codificador no produjo video");
-            writeAudioUpTo(Long.MAX_VALUE);
+            write(new Runnable() {
+                @Override
+                public void run() {
+                    writeAudioUpTo(Long.MAX_VALUE);
+                }
+            });
+            if (!flushWriter(300)) throw new IOException("El video no se terminó de escribir");
+            Exception we = writeError;
+            if (we != null) throw new IOException("No se pudo escribir el video: " + we.getMessage(), we);
             muxer.stop();
             release(false);
             if (out.exists() && !out.delete()) throw new IOException("No se pudo reemplazar " + out.getName());
@@ -632,7 +737,15 @@ final class Encoder {
                 input.release();
                 input = null;
             }
-            if (muxer != null) {
+            // El hilo que escribe termina antes de soltar el MP4 (si quedó trabado en el disco, se deja: soltarlo
+            // en medio de una escritura cerraría la app).
+            writer.shutdownNow();
+            boolean writerDone = false;
+            try {
+                writerDone = writer.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (InterruptedException ignored) {
+            }
+            if (muxer != null && writerDone) {
                 try {
                     if (muxing && deleteOutput) muxer.stop();
                 } catch (Exception ignored) {
@@ -813,33 +926,64 @@ final class Encoder {
          */
         void latch(SurfaceTexture s) {
             if (s != st || cancelled) return;
+            long t0 = System.nanoTime();
+            double wall0 = wallMs();
             try {
                 s.updateTexImage();
                 s.getTransformMatrix(stMatrix);
+                // Cuánto esperó esta imagen desde que la pantalla virtual la compuso hasta que se tomó.
+                long ts = s.getTimestamp();
+                if (ts > 0 && t0 > ts) {
+                    double q = (t0 - ts) / 1e6;
+                    if (q < 5000) {
+                        statQueueMs += q;
+                        statQueueN++;
+                        if (q > statQueueMaxMs) statQueueMaxMs = q;
+                    }
+                }
                 synchronized (gpuLock) {
                     // Después de una pérdida no entra nada hasta que la captura la vea (forget): lo que pidió por
                     // adelantado mientras tanto quedaría fuera de orden.
-                    if (lostPending || wants.isEmpty()) return;
+                    if (lostPending || wants.isEmpty()) {
+                        statImgIdle++;
+                        return;
+                    }
                 }
                 int m = readMarker();
                 Want w;
                 synchronized (gpuLock) {
                     w = wants.peekFirst();
-                    if (lostPending || w == null || m == 0) return; // o la página está cambiando de fotograma
+                    if (lostPending || w == null) {
+                        statImgIdle++;
+                        return;
+                    }
+                    if (m == 0) { // la página está cambiando de fotograma
+                        statImgBusy++;
+                        return;
+                    }
                     if (m != w.seq) {
                         // Una imagen anterior se ignora. Una posterior quiere decir que la esperada nunca se mostró:
                         // se pierde con todo lo que venía detrás (el video no puede saltear ni desordenar fotogramas).
                         if (after(m, w.seq)) {
+                            statImgNewer++;
                             for (Want x : wants) x.status = Want.LOST;
                             wants.clear();
                             lostPending = true;
                             gpuLock.notifyAll();
-                        }
+                        } else statImgOld++;
                         return;
                     }
                     wants.pollFirst();
                 }
-                if (!w.probe) encodeOes();
+                statImgMatched++;
+                w.imageAt = wall0;
+                if (!w.probe) {
+                    long e0 = System.nanoTime();
+                    encodeOes();
+                    long e = System.nanoTime() - e0;
+                    if (e > statEncodeMaxNs) statEncodeMaxNs = e;
+                    w.encodedAt = wallMs();
+                }
                 if (w.probe || w.preview) {
                     ByteBuffer px = readSmall();
                     w.pixels = new byte[px.capacity()];
@@ -858,7 +1002,35 @@ final class Encoder {
                     gpuError = e;
                     gpuLock.notifyAll();
                 }
+            } finally {
+                long d = System.nanoTime() - t0;
+                statLatches++;
+                statLatchNs += d;
+                if (d > statLatchMaxNs) statLatchMaxNs = d;
             }
+        }
+
+        // para los detalles de la exportación (se leen desde otro hilo: son aproximados)
+        volatile long statLatches, statLatchNs, statLatchMaxNs, statEncodeMaxNs;
+        volatile long statImgMatched, statImgBusy, statImgOld, statImgNewer, statImgIdle, statQueueN;
+        volatile double statQueueMs, statQueueMaxMs;
+
+        JSONObject gpuStats() throws JSONException {
+            JSONObject o = new JSONObject();
+            o.put("images", statLatches);
+            o.put("msPerImage", statLatches > 0 ? statLatchNs / 1e6 / statLatches : 0);
+            o.put("msMax", statLatchMaxNs / 1e6);
+            o.put("encodeMsMax", statEncodeMaxNs / 1e6);
+            o.put("writesPendingMax", writesPendingMax);
+            // qué eran las imágenes que llegaron: la esperada, la página cambiando, viejas, posteriores (pérdida) o sin pedido
+            o.put("matched", statImgMatched);
+            o.put("busy", statImgBusy);
+            o.put("old", statImgOld);
+            o.put("newer", statImgNewer);
+            o.put("idle", statImgIdle);
+            o.put("queueMs", statQueueN > 0 ? statQueueMs / statQueueN : 0);
+            o.put("queueMsMax", statQueueMaxMs);
+            return o;
         }
 
         /** The current image of the virtual display (without its marker strip) goes to the encoder. */

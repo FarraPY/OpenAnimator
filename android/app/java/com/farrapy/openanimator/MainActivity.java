@@ -491,6 +491,21 @@ public class MainActivity extends Activity {
 
     private int modeBefore = -1;
 
+    /** The screen's fastest refresh rate at its current resolution (120 on the Tab S8+). */
+    float fastestRefreshRate() {
+        android.view.Display d = getWindowManager().getDefaultDisplay();
+        android.view.Display.Mode cur = d.getMode();
+        float best = cur.getRefreshRate();
+        for (android.view.Display.Mode m : d.getSupportedModes()) {
+            if (m.getPhysicalWidth() == cur.getPhysicalWidth() && m.getPhysicalHeight() == cur.getPhysicalHeight()) best = Math.max(best, m.getRefreshRate());
+        }
+        return best;
+    }
+
+    float currentRefreshRate() {
+        return getWindowManager().getDefaultDisplay().getRefreshRate();
+    }
+
     /**
      * While capturing with the GPU: the screen at its fastest refresh rate (the virtual display gets its
      * frames at the pace of the screen's vsync, so 120 Hz can double the export speed). on=false restores it.

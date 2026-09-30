@@ -59,10 +59,22 @@ type Diag = {
   why: Partial<Record<Method, string>>
   used: Method[]
   video?: string; fps?: number
-  cap?: { mode?: string; frames?: number; msPerFrame?: number; lost?: number; ahead?: number; page?: { n: number; ms: number; max: number } }
+  cap?: {
+    mode?: string; frames?: number; msPerFrame?: number; lost?: number; ahead?: number; page?: { n: number; ms: number; max: number }
+    framesAt?: number[]; dropsAt?: number[]; screenHz?: number; displayHz?: number; view?: string
+    encoder?: {
+      images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
+      matched?: number; busy?: number; old?: number; newer?: number; idle?: number; queueMs?: number; queueMsMax?: number
+    }
+    timeline?: Record<string, number[]>; timelineN?: number; frameIntervalMs?: number; sample?: number[][]; timelineError?: string
+    stateStart?: DeviceState; stateEnd?: DeviceState
+  }
+  calls?: { n: number; ms: number; max: number; gap: number; gapMax: number }
   compat?: { n: number; ms: number }
   audio?: { parts: number; failed: string[] }
 }
+type DeviceState = { thermal?: number; powerSave?: boolean; availMB?: number; lowMemory?: boolean; screenHz?: number }
+const THERMAL = ['normal', 'leve', 'moderada', 'alta', 'crítica', 'emergencia', 'apagado']
 const secs = (ms?: number) => (ms == null ? '—' : `${(ms / 1000).toFixed(1).replace('.', ',')} s`)
 const msf = (ms?: number) => (ms == null || !isFinite(ms) ? '—' : `${Math.round(ms)} ms`)
 
@@ -144,11 +156,17 @@ class Export {
     let started = false
     try {
       const r = await this.inner(() => { started = true })
-      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note, details: this.details() })
+      const details = this.details()
+      saveDetails(details)
+      this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note, details })
     } catch (e: any) {
       if (started) try { host().call('enc.cancel') } catch { /* ignore */ }
       if (e instanceof Cancelled || this.cancelled) this.emit({ phase: 'cancelado', message: 'Exportación cancelada.', done: 0, total: 1 })
-      else this.emit({ phase: 'error', message: String(e?.message || e), done: 0, total: 1, details: this.details(String(e?.message || e)) })
+      else {
+        const details = this.details(String(e?.message || e))
+        saveDetails(details)
+        this.emit({ phase: 'error', message: String(e?.message || e), done: 0, total: 1, details })
+      }
     } finally {
       this.over = true
       // La captura se abre mientras se mezcla el audio: si eso falló o se canceló, se espera a que termine
@@ -173,6 +191,33 @@ class Export {
     lines.push(`Tiempos: preparar ${secs(m.preparar)} · audio ${secs(m.audio)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · terminar ${secs(m.terminar)}`)
     const c = d.cap, pg = c?.page
     if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · por adelantado ${c.ahead ?? '—'}` : ''}`)
+    if (c?.mode === 'gpu') {
+      const hz = (x?: number) => (x ? `${Math.round(x)} Hz` : '—')
+      lines.push(`Pantalla: ${hz(c.screenHz)} · pantalla virtual ${hz(c.displayHz)}`)
+      if (c.framesAt) lines.push(`Por adelantado (fotogramas/perdidos): ${c.framesAt.map((n, i) => `${i}: ${n}/${c.dropsAt?.[i] ?? 0}`).join(' · ')}`)
+      const e = c.encoder
+      if (e && e.images) {
+        lines.push(`Hilo de la GPU: ${e.images} imágenes, ${msf(e.msPerImage)} cada una (máx ${msf(e.msMax)}) · codificar máx ${msf(e.encodeMsMax)} · escrituras pendientes máx ${e.writesPendingMax ?? 0}`)
+        lines.push(`Imágenes: la esperada ${e.matched ?? '—'} · la página cambiando ${e.busy ?? '—'} · viejas ${e.old ?? '—'} · posteriores (pérdida) ${e.newer ?? '—'} · sin pedido ${e.idle ?? '—'} · esperaron para tomarse ${msf(e.queueMs)} (máx ${msf(e.queueMsMax)})`)
+      }
+      if (c.view || c.frameIntervalMs) lines.push(`Página de captura: vista ${c.view || '—'} · un cuadro cada ${c.frameIntervalMs ? `${c.frameIntervalMs.toFixed(1).replace('.', ',')} ms` : '—'}`)
+      const tl = c.timeline
+      if (tl && c.timelineN) {
+        const f = (k: string) => (tl[k] ? tl[k].map((x) => String(Math.round(x))).join('/') : '—')
+        lines.push(`Línea de tiempo por fotograma (mediana/p90/máx en ms, ${c.timelineN} fotogramas):`)
+        lines.push(`  hasta la página ${f('toPage')} · en la cola de la página ${f('queue')} · JavaScript ${f('js')} · hasta entregarlo para dibujar ${f('commit')}`)
+        lines.push(`  motor web + pantalla virtual hasta el codificador ${f('display')} · codificar ${f('encode')} · total ${f('total')}`)
+        lines.push(`  un fotograma codificado cada ${f('cadence')}`)
+      }
+      if (c.sample?.length) {
+        lines.push('Muestra (nivel por adelantado: ms desde el pedido hasta que la página empieza / lo tiene listo / lo entrega / llega la imagen / queda codificado):')
+        for (const r of c.sample) lines.push(`  ${r[0]}: ${r.slice(1).map((x) => String(x).replace('.', ',')).join(' / ')}`)
+      }
+      if (c.timelineError) lines.push(`Sin línea de tiempo: ${c.timelineError}`)
+    }
+    const st = (x?: DeviceState) => (x ? `temperatura ${x.thermal != null ? THERMAL[x.thermal] || x.thermal : '—'} · ahorro de energía ${x.powerSave ? 'sí' : 'no'} · memoria libre ${x.availMB ?? '—'} MB${x.lowMemory ? ' (poca)' : ''} · pantalla ${x.screenHz ? Math.round(x.screenHz) : '—'} Hz` : '—')
+    if (c?.stateStart || c?.stateEnd) lines.push(`Equipo al empezar: ${st(c.stateStart)}; al terminar: ${st(c.stateEnd)}`)
+    if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
     if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
     if (d.audio) lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
     for (const [k, v] of Object.entries(d.why)) lines.push(`Sin ${LABEL[k as Method]}: ${v}`)
@@ -257,16 +302,21 @@ class Export {
     const quality = job.quality === 'max' ? 0.95 : job.quality === 'low' ? 0.86 : 0.92
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
-    let lastEmit = 0, lastPreview = 0, rate = 0
+    let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0
     for (let i = 0; i < frames; i++) {
       this.check()
       const t = start + i / fps
       let shot: string | undefined
       if (method !== 'compat') {
         try {
-          // Con la GPU, los dos que siguen se piden ya (la página los prepara mientras éste se codifica).
-          const next = method === 'gpu' ? [i + 1, i + 2].filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          // Con la GPU, los que siguen se piden ya (la página los prepara mientras éste se codifica).
+          const next = method === 'gpu' ? [i + 1, i + 2, i + 3].filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          const c0 = performance.now()
+          const calls = d.calls || (d.calls = { n: 0, ms: 0, max: 0, gap: 0, gapMax: 0 })
+          if (lastCall) { const g = c0 - lastCall; calls.gap += g; if (g > calls.gapMax) calls.gapMax = g }
           const r = await host().callAsync<{ preview?: string }>('cap.frame', { t, next, preview: performance.now() - lastPreview > 1200 })
+          lastCall = performance.now()
+          calls.n++; calls.ms += lastCall - c0; if (lastCall - c0 > calls.max) calls.max = lastCall - c0
           shot = r?.preview
         } catch (e: any) {
           this.check()
@@ -330,6 +380,13 @@ class Export {
 }
 
 const jobs = new Map<string, Export>()
+
+/** El informe de la última exportación queda guardado (se ve también desde el diálogo de exportar). */
+const DETAILS_FILE = 'logs/ultima-exportacion.txt'
+function saveDetails(text: string) {
+  try { fs.mkdir('logs'); fs.writeText(DETAILS_FILE, `${new Date().toLocaleString('es')}\n${text}\n`) } catch (e) { console.warn('No se pudo guardar el informe', e) }
+}
+export function lastExportDetails() { return fs.exists(DETAILS_FILE) ? fs.readText(DETAILS_FILE) : '' }
 
 /** Empieza una exportación y devuelve su id; el progreso llega por onProgress (export:progress). */
 export async function startExport(job: AndroidExportJob, onProgress: (p: AndroidExportProgress) => void) {

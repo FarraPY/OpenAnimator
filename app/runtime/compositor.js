@@ -506,40 +506,51 @@
   var capChain = Promise.resolve();
   // Cuánto tarda la página en dejar listo cada fotograma (para los detalles de la exportación).
   var capStats = window.__oaCapStats = { n: 0, ms: 0, max: 0 };
-  function capStep(work, n, measure) {
+  // Línea de tiempo de cada pedido, en ms de reloj (con decimales, comparable con el de Java): cuándo llegó,
+  // cuándo lo empezó la página, cuándo quedó listo, cuándo se entregó para dibujar y el rAF de ese cuadro.
+  var capLog = window.__oaCapLog = { rows: [] };
+  function clock() { return performance.timeOrigin + performance.now(); }
+  function capStep(work, n, measure, got) {
+    var row = null;
     capChain = capChain.then(function () {
       // Mientras cambia, la franja dice 0: ninguna imagen a medio cambiar lleva el número de otro fotograma.
       setMark(0);
-      var t = performance.now();
+      var t = performance.now(), start = clock();
       return Promise.resolve(work()).then(function () {
         if (!measure) return;
         var d = performance.now() - t;
         capStats.n++; capStats.ms += d; if (d > capStats.max) capStats.max = d;
+        row = [n, got || start, start, clock()];
       });
     }).then(function () {
       setMark(n);
       window.__oaCapDone = n;
       // El próximo pedido recién cuando este estado ya se entregó para dibujar (si no, se pisarían).
-      if (marker) return afterCommit();
+      if (marker) return afterCommit().then(function (raf) { if (row) { row.push(clock(), raf); capLog.rows.push(row); } });
+      if (row) capLog.rows.push(row);
     }, function (err) {
       // __oaCapError queda: con pedidos por adelantado, __oaCapDone lo pisaría el siguiente que salga bien.
       window.__oaCapDone = window.__oaCapError = 'error: ' + (err && err.message || err);
     });
     return capChain;
   }
-  /** Después de que el cuadro con el estado actual pasó al compositor (rAF + una tarea: ya se pintó). */
+  /**
+   * Después de que el cuadro con el estado actual pasó al compositor (rAF + una tarea: ya se pintó).
+   * Devuelve la hora de ese cuadro (la del rAF, en ms de reloj).
+   */
   function afterCommit() {
     return new Promise(function (resolve) {
-      requestAnimationFrame(function () {
+      requestAnimationFrame(function (ts) {
         var ch = new MessageChannel();
-        ch.port1.onmessage = function () { resolve(); };
+        ch.port1.onmessage = function () { resolve(performance.timeOrigin + ts); };
         ch.port2.postMessage(0);
       });
     });
   }
   if (capture) {
     window.__oaCap = function (t, n) {
-      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n, true);
+      var got = clock();
+      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n, true, got);
     };
     window.__oaCapTest = function (n) { return capStep(function () { showTest(true); }, n); };
   }

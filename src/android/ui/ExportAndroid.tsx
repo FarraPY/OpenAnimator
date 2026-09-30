@@ -52,6 +52,8 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
 
   useEffect(() => { call<Timeline>('timeline:get', project.id, tlId).then((x) => { setTl(x); setRange({ start: 0, end: +x.duration.toFixed(2) }) }).catch(() => setTl(null)) }, [tlId])
   useEffect(() => { call<Saved[]>('export:list').then(setSaved).catch(() => {}) }, [job, prog?.phase])
+  const [lastDetails, setLastDetails] = useState('')
+  useEffect(() => { call<string>('export:lastDetails').then((t) => setLastDetails(t || '')).catch(() => {}) }, [job, prog?.phase])
   // Escucha desde el principio: una exportación que falla enseguida puede avisar antes de que
   // export:start devuelva su id. La vista previa llega cada tanto: se conserva la última.
   const latest = useRef(new Map<string, Prog>())
@@ -186,6 +188,7 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
         <span className="grow">Tamaño aproximado: <b>{fmtSize(estimate)}</b> para {fmtTime(dur)} de video.</span>
         <span className="row" style={{ gap: 10 }}><span className="t3">Guardar en la galería</span><Switch checked={settings?.android?.saveToGallery !== false} onChange={(v) => updateSettings({ android: { saveToGallery: v } })} /></span>
       </div>
+      {lastDetails && <div style={{ marginTop: 12 }}><Details text={lastDetails} label="Detalles de la última exportación" /></div>}
       {saved.length > 0 && <>
         <div className="caps" style={{ margin: '24px 0 6px' }}>Exportaciones anteriores</div>
         <div className="xp-list">
@@ -210,12 +213,12 @@ export default function ExportAndroid({ project, currentTl, onClose }: { project
 }
 
 /** Tiempos y métodos de la exportación, para copiarlos y mandarlos (sirven para ver dónde se va el tiempo). */
-function Details({ text }: { text: string }) {
+function Details({ text, label = 'Detalles' }: { text: string; label?: string }) {
   const { toast } = useApp()
   const copy = () => call('clipboard:text', text).then(() => toast('Detalles copiados'), (e) => toast(e.message, true))
   return (
     <details className="xp-details">
-      <summary><Icon name="info" size={13} />Detalles</summary>
+      <summary><Icon name="info" size={13} />{label}</summary>
       <pre>{text}</pre>
       <Button size="sm" icon="copy" onClick={copy}>Copiar detalles</Button>
     </details>

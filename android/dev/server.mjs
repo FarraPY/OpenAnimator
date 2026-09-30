@@ -591,7 +591,27 @@ async function capStart(a) {
 async function capStats() {
   if (!cap) return null
   const page = await cap.page.evaluate(() => window.__oaCapStats || null).catch(() => null)
-  return { mode: cap.gpu ? 'gpu' : 'draw', frames: cap.frames, msPerFrame: cap.frames ? cap.ms / cap.frames : 0, ...(cap.gpu ? { lost: 0, ahead: 0 } : {}), page }
+  const st = { mode: cap.gpu ? 'gpu' : 'draw', frames: cap.frames, msPerFrame: cap.frames ? cap.ms / cap.frames : 0, page }
+  if (!cap.gpu) return st
+  // La misma línea de tiempo que Capture.timeline, con las horas de la página y las de acá.
+  const view = await cap.page.evaluate(() => ({ log: window.__oaCapLog, dpr: devicePixelRatio, w: innerWidth, h: innerHeight })).catch(() => null)
+  const bySeq = new Map((view?.log?.rows || []).map((r) => [r[0], r.slice(1)]))
+  const spread = (c) => { c = [...c].sort((a, b) => a - b); return [c[c.length >> 1], c[Math.min(c.length - 1, Math.floor(c.length * 0.9))], c[c.length - 1]].map((x) => Math.round(x * 10) / 10) }
+  const names = ['toPage', 'queue', 'js', 'commit', 'display', 'encode', 'total'], segs = [], done = []
+  for (const w of cap.history || []) {
+    const v = bySeq.get(w.seq)
+    if (!v || !w.encodedAt) continue
+    segs.push([v[0] - w.requestedAt, v[1] - v[0], v[2] - v[1], v[3] - v[2], w.imageAt - v[3], w.encodedAt - w.imageAt, w.encodedAt - w.requestedAt])
+    done.push(w)
+  }
+  const timeline = {}
+  if (segs.length) names.forEach((k, i) => { timeline[k] = spread(segs.map((x) => x[i])) })
+  if (done.length > 1) timeline.cadence = spread(done.slice(1).map((w, i) => w.encodedAt - done[i].encodedAt))
+  const mid = Math.max(0, (done.length >> 1) - 6)
+  const sample = done.slice(mid, mid + 12).map((w) => { const v = bySeq.get(w.seq); return [0, ...[v[1], v[2], v[3], w.imageAt, w.encodedAt].map((x) => Math.round((x - w.requestedAt) * 10) / 10)] })
+  return { ...st, lost: 0, ahead: 0, framesAt: [done.length, 0, 0, 0], dropsAt: [0, 0, 0, 0], view: view ? `${view.w}×${view.h} @${view.dpr}` : undefined, timeline, timelineN: segs.length, sample,
+    encoder: { images: cap.images || 0, msPerImage: 0, msMax: 0, encodeMsMax: 0, writesPendingMax: 0, matched: done.length, busy: 0, old: 0, newer: 0, idle: 0 },
+    stateStart: { thermal: 0, powerSave: false, availMB: 4096, screenHz: 60 }, stateEnd: { thermal: 1, powerSave: false, availMB: 4000, screenHz: 60 } }
 }
 async function capFrame(a) {
   if (!cap) throw new Error('La captura no está abierta')
@@ -615,13 +635,17 @@ async function capFrameGpu(a) {
   const c = cap
   c.seq = c.seq % 0xFFFFFF + 1
   const n = c.seq
+  const w = { seq: n, requestedAt: performance.timeOrigin + performance.now() }
+  ;(c.history || (c.history = [])).push(w)
   await c.page.evaluate(([t, n]) => { window.__oaCap(t, n) }, [a.t, n]) // sin esperar, como post() en Java
   const img = await gpuImage(n, 30000)
+  w.imageAt = performance.timeOrigin + performance.now()
   // El video sin la franja: las primeras H filas.
   const rgb = Buffer.alloc(c.W * c.H * 3)
   for (let i = 0, j = 0; i < c.W * c.H; i++, j += 4) { rgb[i * 3] = img.data[j]; rgb[i * 3 + 1] = img.data[j + 1]; rgb[i * 3 + 2] = img.data[j + 2] }
   const jpg = execFileSync('ffmpeg', ['-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', `${c.W}x${c.H}`, '-i', 'pipe:0', '-q:v', '2', '-f', 'mjpeg', 'pipe:1'], { input: rgb, maxBuffer: 64 << 20 }).toString('base64')
   encFrame(jpg)
+  w.encodedAt = performance.timeOrigin + performance.now()
   c.frames++
   const now = Date.now()
   if (now - (c.lastPreview || 0) > 1000) { c.lastPreview = now; return { preview: jpg } }
