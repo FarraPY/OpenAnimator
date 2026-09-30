@@ -196,11 +196,13 @@ class Export {
     if (d.used.length) lines.push(`Captura: ${d.used.map((x) => LABEL[x]).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
     lines.push(`Tiempos: preparar ${secs(m.preparar)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · audio en paralelo ${secs(m.audio)}${m.esperaAudio != null && m.esperaAudio >= 50 ? ` (al final se esperó ${secs(m.esperaAudio)})` : ''} · terminar ${secs(m.terminar)}`)
     const c = d.cap, pg = c?.page
-    if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · por adelantado ${c.ahead ?? '—'}` : ''}`)
+    // Reordenando, lo que se ajusta es cuántos pedidos van en camino a la vez; en orden, cuántos por adelantado.
+    const inFlight = !!c?.encoder?.reorder
+    if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · ${inFlight ? 'en camino a la vez' : 'por adelantado'} ${c.ahead ?? '—'}` : ''}`)
     if (c?.mode === 'gpu') {
       const hz = (x?: number) => (x ? `${Math.round(x)} Hz` : '—')
       lines.push(`Pantalla: ${hz(c.screenHz)} · pantalla virtual ${hz(c.displayHz)}`)
-      if (c.framesAt) lines.push(`Por adelantado (fotogramas/perdidos): ${c.framesAt.map((n, i) => `${i}: ${n}/${c.dropsAt?.[i] ?? 0}`).join(' · ')}`)
+      if (c.framesAt) lines.push(`${inFlight ? 'En camino a la vez' : 'Por adelantado'} (fotogramas/perdidos): ${c.framesAt.map((n, i) => [i, n, c.dropsAt?.[i] ?? 0]).filter(([, n, l]) => n || l).map(([i, n, l]) => `${i}: ${n}/${l}`).join(' · ') || '—'}`)
       const e = c.encoder
       if (e && e.images) {
         lines.push(`Hilo de la GPU: ${e.images} imágenes, ${msf(e.msPerImage)} cada una (máx ${msf(e.msMax)}) · codificar máx ${msf(e.encodeMsMax)} · escrituras pendientes máx ${e.writesPendingMax ?? 0}`)
@@ -340,7 +342,7 @@ class Export {
       if (method !== 'compat') {
         try {
           // Con la GPU, los que siguen se piden ya (la página los prepara mientras éste se codifica).
-          const next = method === 'gpu' ? [1, 2, 3, 4, 5, 6, 7, 8].map((k) => i + k).filter((k) => k < frames).map((k) => start + k / fps) : undefined
+          const next = method === 'gpu' ? Array.from({ length: 12 }, (_, k) => i + 1 + k).filter((k) => k < frames).map((k) => start + k / fps) : undefined
           const c0 = performance.now()
           const calls = d.calls || (d.calls = { n: 0, ms: 0, max: 0, gap: 0, gapMax: 0 })
           if (lastCall) { const g = c0 - lastCall; calls.gap += g; if (g > calls.gapMax) calls.gapMax = g }

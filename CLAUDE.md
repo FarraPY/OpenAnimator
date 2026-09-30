@@ -151,8 +151,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
      el hilo del codificador y sin nada lento (la vista previa se lee chica y el JPEG se arma afuera): codifica la
      esperada (`gpuExpect`), ignora las viejas y, si llega una posterior, la esperada se perdió: no entra nada más
      hasta que Capture se entera (`gpuForget`) y la vuelve a pedir (la segunda vez, solo: así no se puede perder).
-     Con OpenGL ES 3, `latch` no espera a la GPU: copia la imagen a una textura del anillo (hasta 8, ~100 MB) y su
-     marca a un PBO con una fence, y la juzga cuando la GPU terminó (en la imagen siguiente o en un sondeo cada 2 ms).
+     Con OpenGL ES 3, `latch` no espera a la GPU: copia la imagen a una textura del anillo (1/64 de la memoria del
+     equipo, hasta 100 MB: 12 a 1080p en la Tab S8+) y su marca a un PBO con una fence, y la juzga cuando la GPU
+     terminó (en la imagen siguiente o en un sondeo cada 2 ms).
      Trampa de Adreno: el PBO sólo se llena sin esperar a la GPU si la fila mide un múltiplo de 64 píxeles (256 bytes,
      `MARK_W`); con 8 píxeles la copia esperaba 3,9 ms, como la lectura directa. Con el anillo se reordena
      (`gpuReorder`): en la Tab S8+ el motor web a veces nunca muestra un fotograma cuando la página dibuja otro enseguida
@@ -161,9 +162,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
      anillo, sólo el perdido se pide otra vez y el codificador los pone en el video por su clave (el tiempo, `byKey`);
      si no queda lugar se descarta el guardado más adelantado. Qué se pide y cuándo está en `GpuFrames.java` (sin
      vistas: se probó en la PC contra el código real con GPU, EGL y pantalla virtual simuladas; con 15 % de fotogramas
-     que la pantalla junta, en orden 52 fps y reordenando ~80). Reordenando, lo adelantado (hasta 6) se ajusta por la
-     velocidad de cada tanda de 60. Si algo del anillo falla sigue sin él (`ringFailed`: se pierde todo, se olvida y
-     sigue en orden); la prueba del patrón pasa por el anillo y, si no coincide, se repite sin él. Las imágenes chicas
+     que la pantalla junta, en orden 52 fps y reordenando ~93; en la tablet, 70 antes del control de lo que va en
+     camino). Reordenando se puede pedir hasta los lugares del anillo menos 2, pero sólo unos pocos van en camino a la
+     vez (pedidos cuya imagen no llegó; se ajusta por la velocidad de cada tanda de 60) y lo perdido va primero: la
+     página dibuja en el orden en que se le pide, así que con la cola corta lo que se vuelve a pedir se dibuja enseguida
+     (al final de la cola costaba ~25 ms por pérdida). Lo guardado entra al video de a un fotograma por turno del hilo
+     (`scheduleEncode`): de a 7 seguidos el hilo quedaba ~20 ms ocupado y la pantalla reemplazaba imágenes. Si algo del
+     anillo falla sigue sin él (`ringFailed`: se pierde todo, se olvida y sigue en orden); la prueba del patrón pasa por el anillo y, si no coincide, se repite sin él. Las imágenes chicas
      se sueltan después del JPEG (la historia de pedidos queda para los detalles: con ellas eran ~0,5 MB por segundo).
      En orden, Java pide hasta 4 fotogramas por adelantado (por tandas de 60: baja si se pierde el 10 %, sube si casi nada;
      en la Tab S8+ de a uno daba 20 fps: cada fotograma tarda ~3 refrescos en dar la vuelta), sube la pantalla a su

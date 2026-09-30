@@ -211,15 +211,15 @@ final class Encoder {
         return j == null ? 0 : j.ringSize;
     }
 
-    /** How many expected images have been lost so far (gpuAwaitChange returns when it changes). */
-    long gpuLosses() {
+    /** Counts what happens to the expected images (one arrived, was lost or went into the video): see gpuAwaitChange. */
+    long gpuEvents() {
         Job j = job;
-        return j == null ? 0 : j.losses();
+        return j == null ? 0 : j.events();
     }
 
     /**
-     * Waits until w is done or lost (1), another expected image is lost (2: losses no longer equals seen) or the
-     * time runs out (0).
+     * Waits until w is done or lost (1), something else happens to an expected image (2: gpuEvents no longer equals
+     * seen) or the time runs out (0).
      */
     int gpuAwaitChange(Want w, long timeoutMs, long seen) throws Exception {
         Job j = job;
@@ -1031,8 +1031,12 @@ final class Encoder {
          * replace the next image while this thread was busy. The ring also keeps the images that arrive after a
          * lost one until it comes again (reorder).
          */
-        static final int RING_MAX = 8;
-        /** Slots of this ring: as many as fit in ~100 MB of textures at this size (between 3 and RING_MAX). */
+        static final int RING_MAX = 12;
+        /**
+         * Slots of this ring: as many as fit at this size in 1/64 of the device's memory, up to 100 MB (between 3 and
+         * RING_MAX): 12 at 1080p on an 8 GB tablet. With reorder, the frames that arrive after a lost one wait here
+         * while it's drawn again (about ten refreshes on the Tab S8+).
+         */
         volatile int ringSize;
         boolean es3, ring;
         final int[] slotTex = new int[RING_MAX], slotFbo = new int[RING_MAX], slotPbo = new int[RING_MAX];
@@ -1065,7 +1069,7 @@ final class Encoder {
         final ArrayDeque<Want> waiting = new ArrayDeque<>();
         /** Slots of images given up on another thread (forget): they go back to freeSlots on this one. */
         final ArrayList<Integer> slotsBack = new ArrayList<>();
-        long lossCount;
+        long eventCount;
         int storedNow;
         /** Se perdió una imagen esperada y la captura todavía no se enteró (ver latch). */
         boolean lostPending;
@@ -1150,9 +1154,9 @@ final class Encoder {
             }
         }
 
-        long losses() {
+        long events() {
             synchronized (gpuLock) {
-                return lossCount;
+                return eventCount;
             }
         }
 
@@ -1162,7 +1166,7 @@ final class Encoder {
                 while (w.status == Want.WAITING || w.status == Want.STORED) {
                     if (gpuError != null) throw gpuError;
                     if (cancelled) throw new IOException("cancelado");
-                    if (lossCount != seen) return 2;
+                    if (eventCount != seen) return 2;
                     long left = deadline - System.currentTimeMillis();
                     if (left <= 0) return 0;
                     gpuLock.wait(left);
@@ -1175,7 +1179,7 @@ final class Encoder {
             synchronized (gpuLock) {
                 if (!reorder || w.status != Want.WAITING || !waiting.remove(w)) return false;
                 w.status = Want.LOST; // queda en byKey hasta que se vuelva a pedir
-                lossCount++;
+                eventCount++;
                 gpuLock.notifyAll();
                 return true;
             }
@@ -1492,7 +1496,8 @@ final class Encoder {
         // ── el anillo (OpenGL ES 3) ─────────────────────────────────────────────────
 
         private boolean ringSetup() {
-            ringSize = (int) Math.max(3, Math.min(RING_MAX, 100L * 1024 * 1024 / ((long) width * height * 4)));
+            long budget = Math.min(100L << 20, deviceMemory() / 64);
+            ringSize = (int) Math.max(3, Math.min(RING_MAX, budget / ((long) width * height * 4)));
             try {
                 GLES20.glGenBuffers(ringSize, slotPbo, 0);
                 for (int i = 0; i < ringSize; i++) {
@@ -1511,6 +1516,19 @@ final class Encoder {
                 ringRelease();
                 return false;
             }
+        }
+
+        /** The device's memory (MemTotal in /proc/meminfo; 4 GB if it can't be read). */
+        private static long deviceMemory() {
+            try (java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader("/proc/meminfo"))) {
+                for (String line; (line = r.readLine()) != null; ) {
+                    if (!line.startsWith("MemTotal:")) continue;
+                    return Long.parseLong(line.replaceAll("[^0-9]", "")) * 1024;
+                }
+            } catch (Exception ignored) {
+                // sin /proc/meminfo
+            }
+            return 4L << 30;
         }
 
         /**
@@ -1677,7 +1695,7 @@ final class Encoder {
             boolean gap = false;
             while (waiting.peekFirst() != hit) {
                 waiting.pollFirst().status = Want.LOST;
-                lossCount++;
+                eventCount++;
                 gap = true;
             }
             waiting.pollFirst();
@@ -1691,30 +1709,71 @@ final class Encoder {
             hit.slot = k;
             hit.status = Want.STORED;
             if (++storedNow > statStoredMax) statStoredMax = storedNow;
+            eventCount++;
             gpuLock.notifyAll();
             return true;
         }
 
-        /** Reorder: the stored images whose turn came (everything before them is in the video), in order. */
+        /**
+         * Reorder: the stored image whose turn came (everything before it is in the video) goes to the video. One per
+         * turn of this thread: if the next one is ready too, it goes in a turn of its own, so the images that arrive
+         * meanwhile are taken in between (a batch of 7 frames kept this thread busy ~20 ms and the display replaced
+         * images).
+         */
         private void encodeStored() throws IOException {
-            while (true) {
-                Want w;
-                synchronized (gpuLock) {
-                    java.util.Map.Entry<Long, Want> e = byKey.firstEntry();
-                    if (e == null || e.getValue().status != Want.STORED) return;
-                    w = byKey.pollFirstEntry().getValue();
-                    storedNow--;
-                }
-                int k = w.slot;
-                boolean ok = false;
-                try {
-                    finish(w, k);
-                    ok = true;
-                } finally {
-                    w.slot = -1;
-                    freeSlots.addLast(k);
-                    if (!ok) failed(w);
-                }
+            Want w;
+            synchronized (gpuLock) {
+                if (!headStored()) return;
+                w = byKey.pollFirstEntry().getValue();
+                storedNow--;
+            }
+            int k = w.slot;
+            boolean ok = false;
+            try {
+                finish(w, k);
+                ok = true;
+            } finally {
+                w.slot = -1;
+                freeSlots.addLast(k);
+                if (!ok) failed(w);
+            }
+            synchronized (gpuLock) {
+                if (!headStored()) return;
+            }
+            scheduleEncode();
+        }
+
+        /** Under gpuLock: the first frame not yet in the video already arrived. */
+        private boolean headStored() {
+            java.util.Map.Entry<Long, Want> e = byKey.firstEntry();
+            return e != null && e.getValue().status == Want.STORED;
+        }
+
+        boolean encodeScheduled;
+
+        /** The next stored image, in another turn of this thread (after the images that arrived meanwhile). */
+        private void scheduleEncode() {
+            if (encodeScheduled || gpuExec == null) return;
+            encodeScheduled = true;
+            final SurfaceTexture cur = st;
+            try {
+                gpuExec.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        encodeScheduled = false;
+                        if (st != cur || cancelled || !ring) return;
+                        workBegin(System.nanoTime());
+                        try {
+                            encodeStored();
+                        } catch (Exception e) {
+                            ringFailed(e);
+                        } finally {
+                            workEnd = System.nanoTime();
+                        }
+                    }
+                });
+            } catch (RejectedExecutionException ignored) {
+                encodeScheduled = false; // la exportación ya terminó
             }
         }
 
@@ -1743,6 +1802,7 @@ final class Encoder {
             }
             synchronized (gpuLock) {
                 w.status = Want.DONE;
+                eventCount++;
                 gpuLock.notifyAll();
             }
             if (small != null) throw small;
@@ -1753,7 +1813,7 @@ final class Encoder {
             synchronized (gpuLock) {
                 if (w.status != Want.DONE && w.status != Want.LOST) {
                     w.status = Want.LOST;
-                    lossCount++;
+                    eventCount++;
                 }
                 gpuLock.notifyAll();
             }
@@ -1784,7 +1844,7 @@ final class Encoder {
                 if (v == null) return false;
                 v.status = Want.LOST; // queda en byKey: lo que viene después no entra antes
                 storedNow--;
-                lossCount++;
+                eventCount++;
                 gpuLock.notifyAll();
             }
             freeSlots.addLast(v.slot);
@@ -1895,7 +1955,7 @@ final class Encoder {
                     wants.clear();
                     dropReordered();
                     lostPending = true;
-                    lossCount++;
+                    eventCount++;
                 }
                 slotsBack.clear();
                 reorder = false;

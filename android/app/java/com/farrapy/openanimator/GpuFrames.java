@@ -12,12 +12,16 @@ import java.util.Map;
  *
  * The next frames are requested ahead: the page prepares one while the previous one travels through the
  * virtual display. The display sometimes never shows one (on the Tab S8+, when the page draws one per refresh
- * the web engine skips some). Two ways to go on:
- * - in order (without the ring): the lost frame and everything requested after it are asked for again;
+ * the web engine skips 15-18 %). Two ways to go on:
+ * - in order (without the ring): the lost frame and everything requested after it are asked for again; how far
+ *   ahead goes by blocks of 60 frames (down if 10 % were lost, up if almost none);
  * - reorder (with the ring, Encoder.gpuReorder): what arrives after the lost one waits in the ring and only the
- *   lost frame is asked for again (at the end of the page's queue); the encoder puts them in the video in order.
- * How far ahead: in order, by blocks of 60 frames (down if 10 % were lost, up if almost none); reorder, by the
- * speed of each block (it keeps going the way that made the last block faster).
+ *   lost frame is asked for again; the encoder puts them in the video in order. Frames up to the ring's size
+ *   ahead may be requested, but only a few at a time are "in flight" (requested, image not arrived): the page
+ *   draws them in the order they're asked for, so with a short queue a frame asked for again is drawn at once
+ *   instead of after everything already requested (~25 ms per lost frame on the Tab S8+). How many in flight
+ *   goes by the speed of each block of 60 frames (the same way while blocks get faster, the other way when one
+ *   gets slower).
  */
 final class GpuFrames {
     /** The capture page: Capture drives the WebView; the test, a simulated page. */
@@ -32,7 +36,7 @@ final class GpuFrames {
         String error() throws Exception;
     }
 
-    static final int MAX_DEPTH = 6;
+    static final int MAX_DEPTH = 12;
     /** In order, at most this many ahead (a lost frame takes all of them with it). */
     static final int IN_ORDER_MAX = 4;
 
@@ -68,7 +72,7 @@ final class GpuFrames {
         this.encoder = encoder;
         this.page = page;
         this.seq = seq;
-        depth = encoder.gpuReorder() ? Math.min(3, maxDepth()) : 2;
+        depth = encoder.gpuReorder() ? Math.min(5, maxDepth()) : 2;
         blockStart = System.nanoTime();
     }
 
@@ -82,8 +86,9 @@ final class GpuFrames {
         return encoder.gpuReorder() ? reorder(t, upcoming) : inOrder(t, upcoming);
     }
 
+    /** Reorder: at most this many in flight (the frames requested ahead may have to wait in the ring). */
     private int maxDepth() {
-        return Math.max(1, Math.min(MAX_DEPTH, encoder.gpuSlots() - 2));
+        return lookahead();
     }
 
     private Encoder.Want inOrder(double t, double[] upcoming) throws Exception {
@@ -151,8 +156,9 @@ final class GpuFrames {
         long key = key(t);
         int lostHere = 0;
         long shownSince = 0;
+        int look = lookahead();
         while (true) {
-            long seen = encoder.gpuLosses();
+            long seen = encoder.gpuEvents();
             if (!encoder.gpuReorder()) return inOrder(t, upcoming); // el anillo se apagó: en orden desde acá
             Req r = reqs.get(key);
             if (r == null || r.want.status == Encoder.Want.LOST) {
@@ -166,15 +172,22 @@ final class GpuFrames {
                 reqs.put(key, r);
                 shownSince = 0;
             }
-            // Los siguientes: los nuevos y, otra vez, los que se perdieron. Si éste se perdió dos veces va solo al final
-            // de la cola de la página: sin nada detrás que lo reemplace, no se puede perder.
-            int want = lostHere >= 2 ? 0 : Math.min(depth, maxDepth());
-            for (int i = 0; upcoming != null && i < upcoming.length && i < want; i++) {
-                long kn = key(upcoming[i]);
-                Req q = reqs.get(kn);
-                if (q != null && q.want.status != Encoder.Want.LOST) continue;
-                if (q != null) countLost();
-                reqs.put(kn, request(upcoming[i], q != null && q.want.preview));
+            // Los siguientes, con a lo sumo `depth` en camino: primero los que se perdieron, después los nuevos (en
+            // orden). Si éste se perdió dos veces, nada detrás de él: es lo último que dibuja la página y no se pierde.
+            if (lostHere < 2 && upcoming != null) {
+                int inFlight = inFlight();
+                int n = Math.min(upcoming.length, look);
+                for (int pass = 0; pass < 2 && inFlight < depth; pass++) {
+                    for (int i = 0; i < n && inFlight < depth; i++) {
+                        long kn = key(upcoming[i]);
+                        Req q = reqs.get(kn);
+                        boolean again = q != null && q.want.status == Encoder.Want.LOST;
+                        if (pass == 0 ? !again : q != null) continue;
+                        if (again) countLost();
+                        reqs.put(kn, request(upcoming[i], again && q.want.preview));
+                        inFlight++;
+                    }
+                }
             }
             Encoder.Want w = r.want;
             int ch = w.status == Encoder.Want.DONE ? 1 : encoder.gpuAwaitChange(w, 1000, seen);
@@ -195,8 +208,20 @@ final class GpuFrames {
                 }
                 if (now > deadline) throw new IOException("La escena tardó demasiado en dibujarse (" + t + " s)");
             }
-            // perdido éste u otro: arriba se vuelve a pedir lo que haga falta
+            // llegó, se perdió o entró al video uno de los pedidos: arriba se pide lo que haga falta
         }
+    }
+
+    /** Reorder: requests whose image hasn't arrived yet (the page's queue plus what's traveling through the display). */
+    private int inFlight() {
+        int n = 0;
+        for (Req q : reqs.values()) if (q.want.status == Encoder.Want.WAITING) n++;
+        return n;
+    }
+
+    /** Reorder: how many frames after the current one may be requested (they may have to wait in the ring). */
+    private int lookahead() {
+        return Math.max(1, Math.min(MAX_DEPTH, encoder.gpuSlots() - 2));
     }
 
     private void countLost() {
@@ -207,8 +232,8 @@ final class GpuFrames {
 
     /**
      * Every 60 frames, how far ahead. In order: fewer if many were lost (each one takes everything requested after
-     * it), more if almost none. Reorder (a lost frame costs little): one step each block, the same way while the
-     * blocks get faster, the other way when one gets slower.
+     * it), more if almost none. Reorder (a lost frame costs little), how many in flight: one step each block, the same
+     * way while the blocks get faster, the other way when one gets slower.
      */
     private void block(boolean byRate) {
         if (++blockFrames < 60) return;
@@ -217,7 +242,7 @@ final class GpuFrames {
             double fps = 60e9 / Math.max(1, now - blockStart);
             if (lastBlockFps > 0 && fps < lastBlockFps) dir = -dir;
             lastBlockFps = fps;
-            depth = Math.max(1, Math.min(maxDepth(), depth + dir));
+            depth = Math.max(2, Math.min(maxDepth(), depth + dir));
         } else if (blockDrops >= 6 && depth > 0) depth--;
         else if (blockDrops <= 1 && depth < IN_ORDER_MAX) depth++;
         blockFrames = blockDrops = 0;
