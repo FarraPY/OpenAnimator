@@ -132,7 +132,14 @@ h('app:toast', (text: string) => { try { host().call('app.toast', { text: String
 
 // ── proyecto abierto ──────────────────────────────────────────────────────────
 h('project:open', (id) => P.readProject(id))
-h('project:close', async (id) => { F.closeFramePool(id); await F.makeThumb(id); F.closeFramePool(id); send('projects:changed', null) })
+h('project:close', async (id) => {
+  // Si Claude sigue trabajando en el proyecto, el compositor no se cierra (se cierra solo cuando deja de usarse).
+  const busy = await chatBusy(id)
+  if (!busy) F.closeFramePool(id)
+  await F.makeThumb(id)
+  if (!busy) F.closeFramePool(id)
+  send('projects:changed', null)
+})
 h('project:get', (id) => P.readProject(id))
 h('project:save', (p: Project) => { P.writeProject(p); return p })
 h('timeline:get', (id, tl) => P.readTimeline(id, tl))
@@ -227,6 +234,11 @@ h('plugins:setKey', (id, key) => PL.setKey(id, key))
 h('plugins:test', (id) => PL.testPlugin(id))
 h('plugins:voices', (provider, q) => PL.listVoices(provider, q))
 h('plugins:whisperModels', () => [])
+// Whisper en la tablet: whisper.cpp en Termux (Ajustes › Plugins › Whisper)
+h('whisper:status', () => PL.whisperInfo())
+h('whisper:install', (model: string) => PL.whisperInstall(String(model || '')))
+h('whisper:remove', (model: string) => PL.whisperRemove(String(model || '')))
+h('whisper:test', (model?: string) => PL.whisperTest(model ? String(model) : undefined))
 h('plugins:installYtdlp', notAvailable('yt-dlp'))
 h('plugins:loginCodex', notAvailable('ChatGPT con Codex CLI'))
 h('plugins:image', async (projectId, req) => { const r = await PL.generateImage(projectId, req); projectChanged(projectId, r.path); return r })
@@ -266,7 +278,32 @@ for (const ch of ['analyze:pickFile', 'analyze:start', 'analyze:cancel', 'analyz
 const agent = () => import('./agent')
 const code = () => import('./code')
 const chatMode = new Map<string, 'api' | 'termux'>() // cada chat sigue con el camino con el que se abrió
+const chatProject = new Map<string, string>()
 const engine = async (id?: string) => (((id && chatMode.get(id)) || claudeMode()) === 'api' ? agent() : code())
+/**
+ * Conversaciones sin editor abierto (el usuario fue a Ajustes o al inicio): siguen trabajando y el
+ * editor las retoma al volver al proyecto. Se cierran solas tras media hora sin actividad.
+ */
+const parked = new Map<string, { id: string; since: number }>() // proyecto → conversación
+const PARK_MS = 30 * 60e3
+async function chatBusy(projectId: string) {
+  for (const [id, pid] of chatProject) if (pid === projectId && (await (await engine(id)).getChat(id))?.busy) return true
+  return false
+}
+async function killChat(id: string) {
+  try { (await engine(id)).killChat(id) } finally {
+    chatMode.delete(id); chatProject.delete(id)
+    for (const [projectId, p] of parked) if (p.id === id) parked.delete(projectId)
+  }
+}
+setInterval(async () => {
+  for (const [projectId, p] of [...parked]) {
+    const s = await (await engine(p.id)).getChat(p.id)
+    if (!s) { parked.delete(projectId); continue }
+    if (s.busy) { p.since = Date.now(); continue }
+    if (Date.now() - p.since > PARK_MS) await killChat(p.id)
+  }
+}, 60e3)
 h('chat:pickFiles', async () => host().callAsync('pick.files', { accept: [], multiple: true }))
 h('chat:attach', async (projectId, files) => (await agent()).attachFiles(projectId, files))
 h('chat:attachData', async (projectId, name, b64) => (await agent()).attachData(projectId, name, b64))
@@ -274,9 +311,24 @@ h('chat:create', async (projectId, opts) => {
   const mode = claudeMode()
   const snap = await (await engine()).createChat(projectId, opts)
   chatMode.set(snap.id, mode)
+  chatProject.set(snap.id, projectId)
   return snap
 })
 h('chat:get', async (id) => (await engine(id)).getChat(id))
+// El editor se cierra: la conversación sigue (si está trabajando, termina el turno) y queda para retomarla.
+h('chat:leave', async (id) => {
+  const projectId = chatProject.get(id)
+  if (!projectId) return
+  const old = parked.get(projectId)
+  if (old && old.id !== id) await killChat(old.id)
+  parked.set(projectId, { id, since: Date.now() })
+})
+// El editor vuelve a abrir el proyecto: retoma la conversación que dejó (o null para empezar una nueva).
+h('chat:forProject', async (projectId) => {
+  const p = parked.get(projectId)
+  parked.delete(projectId)
+  return p ? (await engine(p.id)).getChat(p.id) : null
+})
 h('chat:sessions', async (projectId) => (await engine()).listSessions(projectId))
 h('chat:compact', async (id, instr) => (await engine(id)).compactChat(id, instr))
 const editorCtx = new Map<string, { timeline: string; t: number }>()
@@ -288,7 +340,7 @@ h('chat:isPopped', () => false)
 h('chat:send', async (id, text, images, files) => (await engine(id)).sendChat(id, text, images || [], files || []))
 h('chat:interrupt', async (id) => (await engine(id)).interruptChat(id))
 h('chat:permission', async (id, itemId, allow, always) => (await engine(id)).respondPermission(id, itemId, allow, !!always))
-h('chat:kill', async (id) => { (await engine(id)).killChat(id); chatMode.delete(id) })
+h('chat:kill', (id) => killChat(id))
 h('chat:setOptions', async (id, patch, label) => {
   const cur = S.getSettings().claude
   S.setSettings({ claude: { ...cur, ...patch } })

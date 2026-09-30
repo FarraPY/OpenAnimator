@@ -1,6 +1,6 @@
 /**
  * Plugins de IA en Android: los mismos servicios que en la PC (electron/plugins.ts) salvo los que
- * necesitan programas de escritorio (Codex CLI, Whisper local con Python, yt-dlp).
+ * necesitan programas de escritorio (Codex CLI, yt-dlp). Whisper corre en Termux (whisper.cpp).
  *
  * Las peticiones salen por Java (sin límites de CORS) y las claves nunca pasan por JavaScript:
  * se escribe {{secret:plugin.<id>}} y Java pone la clave guardada en el Keystore.
@@ -11,21 +11,24 @@ import { blobToBase64, fs, join, slugify } from './fsx'
 import { decodeRange, probeDuration } from './media'
 import { projectDir } from './projects'
 import { getSettings } from './settings'
+import type { WhisperBridgeStatus, WhisperModel } from './termux'
+import { holdAwake } from './wake'
 
 export type Cap = 'image' | 'voice' | 'sfx' | 'ask' | 'transcribe' | 'download'
 export type Word = { w: string; start: number; end: number }
 
-/** En Android sólo los que funcionan por internet con una clave. */
+/** En Android: los que funcionan por internet con una clave, y Whisper en Termux. */
 export const PLUGINS: Array<{ id: PluginId; name: string; caps: Cap[]; needsKey: boolean }> = [
   { id: 'openai', name: 'OpenAI API', caps: ['image', 'ask', 'transcribe'], needsKey: true },
   { id: 'gemini', name: 'Google Gemini', caps: ['image', 'ask'], needsKey: true },
   { id: 'openrouter', name: 'OpenRouter', caps: ['ask'], needsKey: true },
   { id: 'elevenlabs', name: 'ElevenLabs', caps: ['voice', 'sfx', 'transcribe'], needsKey: true },
   { id: 'fish', name: 'Fish Audio', caps: ['voice', 'transcribe'], needsKey: true },
+  { id: 'whisper', name: 'Whisper (en la tablet)', caps: ['transcribe'], needsKey: false },
 ]
 const ORDER: Record<string, PluginId[]> = {
   image: ['openai', 'gemini'], voice: ['elevenlabs', 'fish'], sfx: ['elevenlabs'],
-  ask: ['openai', 'gemini', 'openrouter'], transcribe: ['elevenlabs', 'openai', 'fish'], download: [],
+  ask: ['openai', 'gemini', 'openrouter'], transcribe: ['whisper', 'elevenlabs', 'openai', 'fish'], download: [],
 }
 const pname = (id: string) => PLUGINS.find((p) => p.id === id)?.name || id
 const KEY = (id: string) => `{{secret:plugin.${id}}}`
@@ -71,11 +74,13 @@ function outFile(projectId: string, sub: string, name: string, ext: string) {
 }
 
 // ── estado ────────────────────────────────────────────────────────────────────
+/** Whisper se revisa preguntándole al puente de Termux (whisperState); acá va lo último que se supo. */
 export function pluginStatus(): PluginStatus[] {
   const s = getSettings().plugins as any
-  const masked = host().call<Record<string, string>>('secrets.list', { names: PLUGINS.map((p) => `plugin.${p.id}`) })
+  const masked = host().call<Record<string, string>>('secrets.list', { names: PLUGINS.filter((p) => p.needsKey).map((p) => `plugin.${p.id}`) })
   return PLUGINS.map((p) => {
     const enabled = s[p.id]?.enabled !== false
+    if (p.id === 'whisper') { const w = whisperQuick(); return { ...p, enabled, ready: enabled && w.ready, detail: w.detail } }
     const m = masked[`plugin.${p.id}`] || ''
     return { ...p, enabled, ready: enabled && !!m, masked: m, detail: m ? `Clave cargada (${m})` : 'Sin clave' }
   })
@@ -87,6 +92,7 @@ export function setKey(id: string, key: string) {
 }
 
 async function pick(cap: Cap, want?: string): Promise<PluginId> {
+  if (cap === 'transcribe' && (!want || want === 'whisper') && getSettings().plugins.whisper?.enabled !== false) await whisperState()
   const st = pluginStatus()
   const ready = (id: string) => st.find((x) => x.id === id)?.ready
   const pref = want || ((getSettings().plugins as any)[cap] as string | undefined)
@@ -101,6 +107,7 @@ async function pick(cap: Cap, want?: string): Promise<PluginId> {
 }
 
 export async function testPlugin(id: PluginId): Promise<string> {
+  if (id === 'whisper') return whisperTest()
   needKey(id)
   switch (id) {
     case 'openai': { const j = await json('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${KEY('openai')}` }, timeout: 20000 }); return `Conectado · ${j.data?.length || 0} modelos disponibles` }
@@ -252,13 +259,12 @@ export async function sfx(projectId: string, req: { text: string; seconds?: numb
 
 // ── transcripción ─────────────────────────────────────────────────────────────
 /**
- * Audio mono 16 kHz en WAV (las APIs de transcripción tienen límite de tamaño). Se decodifica de a
- * un minuto: un video largo no entra entero en la memoria del WebView.
+ * El audio de un archivo, mono de 16 bits a 16 kHz, de a un minuto: un video largo no entra entero en
+ * la memoria del WebView.
  */
-async function lightAudio(rel: string, maxSec?: number): Promise<Blob> {
+async function* pcm16k(rel: string, maxSec?: number): AsyncGenerator<Int16Array<ArrayBuffer>> {
   const SR = 16000, WIN = 60
-  const parts: Int16Array<ArrayBuffer>[] = []
-  let len = 0
+  let any = false
   for (let t = 0; !maxSec || t < maxSec; t += WIN) {
     const dur = maxSec ? Math.min(WIN, maxSec - t) : WIN
     let buf: AudioBuffer | null
@@ -275,11 +281,18 @@ async function lightAudio(rel: string, maxSec?: number): Promise<Blob> {
       v /= chans.length
       pcm[i] = Math.max(-32768, Math.min(32767, Math.round(v * 32767)))
     }
-    parts.push(pcm)
-    len += pcm.length
+    if (pcm.length) { any = true; yield pcm }
     if (buf.duration < dur - 0.05) break
   }
-  if (!len) throw new Error('El archivo no tiene audio')
+  if (!any) throw new Error('El archivo no tiene audio')
+}
+
+/** Audio en WAV para las APIs de transcripción (tienen límite de tamaño: mono a 16 kHz alcanza). */
+async function lightAudio(rel: string, maxSec?: number): Promise<Blob> {
+  const SR = 16000
+  const parts: Int16Array<ArrayBuffer>[] = []
+  let len = 0
+  for await (const pcm of pcm16k(rel, maxSec)) { parts.push(pcm); len += pcm.length }
   const h = new DataView(new ArrayBuffer(44))
   const wr = (o: number, s: string) => { for (let i = 0; i < s.length; i++) h.setUint8(o + i, s.charCodeAt(i)) }
   wr(0, 'RIFF'); h.setUint32(4, 36 + len * 2, true); wr(8, 'WAVE'); wr(12, 'fmt '); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true)
@@ -289,7 +302,8 @@ async function lightAudio(rel: string, maxSec?: number): Promise<Blob> {
 
 export async function transcribe(rel: string, o: { provider?: string; maxSec?: number; lang?: string } = {}): Promise<{ text: string; words: Word[]; provider: string; lang?: string }> {
   if (!fs.exists(rel)) throw new Error('No existe el archivo: ' + rel)
-  const provider = await pick('transcribe', o.provider === 'whisper' ? undefined : o.provider)
+  const provider = await pick('transcribe', o.provider)
+  if (provider === 'whisper') return whisperFile(rel, o)
   const blob = await lightAudio(rel, o.maxSec)
   if (provider === 'elevenlabs') {
     const fd = new FormData()
@@ -321,6 +335,111 @@ export async function transcribe(rel: string, o: { provider?: string; maxSec?: n
   const { body, contentType } = await formBody(fd)
   const j = await json('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { Authorization: `Bearer ${KEY('openai')}`, 'Content-Type': contentType }, body, timeout: 900000 })
   return { text: j.text || '', words: (j.words || []).map((w: any) => ({ w: w.word, start: w.start, end: w.end })), provider: 'OpenAI', lang: j.language }
+}
+
+// ── Whisper en la tablet (whisper.cpp en Termux) ──────────────────────────────
+type WState = { ready: boolean; detail: string; model?: WhisperModel; installed: string[]; status?: WhisperBridgeStatus }
+let wCache: { at: number; st: WState } | null = null
+const NEED_TERMUX = 'Necesita Termux preparado (Ajustes › Claude › Con tu plan de Claude, pasos 1 a 3)'
+
+/** Lo último que se supo de Whisper, sin preguntarle al puente (para listar los plugins al instante). */
+function whisperQuick(): { ready: boolean; detail: string } {
+  if (wCache) return wCache.st
+  try {
+    const t = host().call<{ installed: boolean; permission: boolean }>('termux.status')
+    if (!t.installed || !t.permission) return { ready: false, detail: NEED_TERMUX }
+  } catch { /* sin Termux */ }
+  return { ready: false, detail: 'Sin revisar' }
+}
+
+/** Qué hay instalado de verdad: se lo pregunta al puente de Termux (y lo arranca si hace falta). */
+export async function whisperState(force = false): Promise<WState> {
+  if (!force && wCache && Date.now() - wCache.at < 5 * 60e3) return wCache.st
+  const done = (st: WState) => { wCache = { at: Date.now(), st }; return st }
+  const T = await import('./termux')
+  const t = T.termuxStatus()
+  if (!t.installed || !t.permission) return done({ ready: false, detail: NEED_TERMUX, installed: [] })
+  let st: WhisperBridgeStatus
+  try { st = await T.whisperBridgeStatus() } catch (e: any) { return done({ ready: false, detail: `Termux no respondió: ${e?.message || e}`, installed: [] }) }
+  const installed: string[] = T.WHISPER_MODELS.filter((m) => st.models.some((x) => x.file === m.file)).map((m) => m.id)
+  if (!st.bin) return done({ ready: false, detail: 'No instalado', installed, status: st })
+  if (!installed.length) return done({ ready: false, detail: `whisper.cpp ${st.version || ''} sin modelos: descargá uno`, installed, status: st })
+  // El elegido si está descargado; si no, el más preciso de los que hay.
+  const want = getSettings().plugins.whisper?.model || ''
+  const model = T.whisperModel(installed.includes(want) ? want : installed[installed.length - 1])!
+  return done({ ready: true, detail: `${model.label} · whisper.cpp ${st.version || ''} · ${installed.length} modelo${installed.length > 1 ? 's' : ''} descargado${installed.length > 1 ? 's' : ''}`, model, installed, status: st })
+}
+export function resetWhisper() { wCache = null }
+
+/** Para los ajustes: los modelos con su estado, la versión instalada y si Termux está listo. */
+export async function whisperInfo() {
+  const T = await import('./termux')
+  const st = await whisperState(true)
+  return {
+    ready: st.ready, detail: st.detail, termux: T.termuxStatus(), bin: !!st.status?.bin, version: st.status?.version || null,
+    cores: st.status?.cores || 0, busy: !!st.status?.busy, active: st.model?.id || null,
+    models: T.WHISPER_MODELS.map((m) => ({ id: m.id, label: m.label, mb: m.mb, desc: m.desc, installed: st.installed.includes(m.id) })),
+  }
+}
+
+export async function whisperInstall(model: string) {
+  const T = await import('./termux')
+  const m = T.whisperModel(model)
+  if (!m) throw new Error('Modelo de Whisper desconocido: ' + model)
+  resetWhisper()
+  await T.whisperInstall(m)
+}
+
+export async function whisperRemove(model: string) {
+  const T = await import('./termux')
+  const m = T.whisperModel(model)
+  if (!m) throw new Error('Modelo de Whisper desconocido: ' + model)
+  await T.whisperRemove(m)
+  resetWhisper()
+  return whisperInfo()
+}
+
+const dec1 = (n: number) => n.toFixed(1).replace('.', ',')
+function speedText(audioSec: number, ms: number) {
+  if (!(audioSec > 0 && ms > 0)) return ''
+  const f = audioSec / (ms / 1000)
+  return f >= 1 ? `${dec1(f)}× más rápido que el audio` : `tarda ${dec1(1 / f)} veces lo que dura el audio`
+}
+
+/** Errores conocidos de whisper.cpp, con lo que hay que hacer. */
+function whisperHint(msg: string) {
+  if (/failed to (initialize|load)|invalid model|bad magic/i.test(msg)) return `El modelo de Whisper parece dañado: borralo y descargalo de nuevo en Ajustes › Plugins › Whisper. (${msg})`
+  if (/SIGKILL|out of memory|bad_alloc/i.test(msg)) return `Android cortó Whisper, seguramente por falta de memoria: cerrá otras apps o usá un modelo más chico. (${msg})`
+  if (/SIGILL|Illegal instruction/i.test(msg)) return `whisper.cpp usó una instrucción que este procesador no tiene. (${msg})`
+  return msg
+}
+
+async function whisperFile(rel: string, o: { maxSec?: number; lang?: string }) {
+  const w = await whisperState()
+  if (!w.ready || !w.model) throw new Error(`Whisper no está listo (${w.detail}): configuralo en Ajustes › Plugins › Whisper.`)
+  const T = await import('./termux')
+  const release = holdAwake()
+  try {
+    const r = await T.whisperTranscribe({ model: w.model, lang: o.lang, pcm: pcm16k(rel, o.maxSec) })
+    const speed = speedText(r.audioSec, r.ms)
+    return { text: r.text, words: r.words, provider: `Whisper en la tablet (${w.model.label}${speed ? `, ${speed}` : ''})`, lang: r.lang || undefined }
+  } catch (e: any) { throw new Error(whisperHint(String(e?.message || e))) } finally { release() }
+}
+
+/** Prueba con la muestra de voz que dejó la instalación: si anda y a qué velocidad va en esta tablet. */
+export async function whisperTest(model?: string): Promise<string> {
+  const w = await whisperState(true)
+  const T = await import('./termux')
+  if (!w.status?.bin) throw new Error(w.detail || 'Whisper no está instalado')
+  const m = model ? T.whisperModel(model) : w.model
+  if (!m || !w.installed.includes(m.id)) throw new Error(`Falta descargar el modelo ${m?.label || model || ''}`.trim())
+  if (!w.status.sample) throw new Error('Falta la muestra de voz: volvé a instalar Whisper.')
+  const release = holdAwake()
+  try {
+    const r = await T.whisperTranscribe({ model: m, sample: true, lang: 'en' })
+    const said = r.text.length > 90 ? r.text.slice(0, 88) + '…' : r.text
+    return `${m.label}: transcribió ${dec1(r.audioSec)} s de voz en ${dec1(r.ms / 1000)} s (${speedText(r.audioSec, r.ms)}), ${r.words.length} palabras con su tiempo: «${said}»`
+  } catch (e: any) { throw new Error(whisperHint(String(e?.message || e))) } finally { release() }
 }
 
 // ── consultar otros modelos ───────────────────────────────────────────────────

@@ -605,7 +605,7 @@ class AgentChat {
           const d = ev.delta || {}
           if (!it) break
           if (d.type === 'text_delta') this.patchSoon(it.id, { text: (it.text || '') + d.text })
-          else if (d.type === 'thinking_delta') this.patchSoon(it.id, { text: (it.text || '') + d.thinking })
+          else if (d.type === 'thinking_delta') this.patchSoon(it.id, { text: (it.text || '') + (d.thinking || ''), tokens: (it.tokens || 0) + (typeof d.estimated_tokens === 'number' ? d.estimated_tokens : Math.ceil((d.thinking || '').length / 4)) })
           else if (d.type === 'input_json_delta' && Date.now() - lastInput > 500) {
             // Vista previa de la entrada (p. ej. qué archivo está escribiendo) mientras llega.
             lastInput = Date.now()

@@ -7,12 +7,12 @@ const FILE = 'settings.json'
 
 /**
  * Los de la PC (electron/settings-defaults.ts) con lo propio de la tablet: Claude con el plan del
- * usuario (Claude Code en Termux) o por la API, sin Codex ni Whisper local, y las preferencias de
- * pantalla y exportación.
+ * usuario (Claude Code en Termux) o por la API, sin Codex, Whisper con whisper.cpp en Termux (el
+ * modelo es el nombre de whisper-install.sh) y las preferencias de pantalla y exportación.
  */
 export const DEFAULTS: Settings = mergeSettings(structuredClone(PC_DEFAULTS) as Settings, {
   claude: { model: 'claude-opus-5-5', backend: 'termux' },
-  plugins: { codex: { enabled: false }, whisper: { enabled: false, model: '' } },
+  plugins: { codex: { enabled: false }, whisper: { enabled: true, model: 'small' } },
   android: { immersive: true, uiScale: 1, debug: false, saveToGallery: true, keepAwake: true },
   androidExport: { codec: 'avc', quality: 'high', bitrate: 0, height: 0, fps: 0, audio: true, audioBitrate: 192 },
 })
@@ -26,6 +26,9 @@ export function getSettings(): Settings {
   try { raw = fs.readJSON(FILE) } catch { raw = {} }
   const f = raw?.plugins?.fish
   if (f && !f.v) { if (/^(s1|speech-1\.\d)$/.test(f.model || '')) f.model = 's2.1-pro-free'; f.v = 2 }
+  // Antes Whisper no existía en la tablet (quedaba apagado y sin modelo): ahora arranca con los valores nuevos.
+  const w = raw?.plugins?.whisper
+  if (w && !/^(base|small|large-v3-turbo-q5_0)$/.test(w.model || '')) Object.assign(w, DEFAULTS.plugins.whisper)
   cache = merge(structuredClone(DEFAULTS), raw)
   // Claude Code y sus modelos no existen en Android: "Predeterminado" pasa a Opus 5.5.
   if (!cache.claude.model || !/^claude-/.test(cache.claude.model)) cache.claude.model = DEFAULTS.claude.model

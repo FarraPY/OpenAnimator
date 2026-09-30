@@ -73,6 +73,7 @@ const STEPS = [
 ]
 let n = 0
 const id = (p) => `${p}_${crypto.randomBytes(8).toString('hex')}`
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 async function turn(text) {
   const t0 = Date.now()
@@ -82,7 +83,29 @@ async function turn(text) {
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, total_cost_usd: 0.01, result: '' })
     return
   }
-  for (const s of STEPS) {
+  // «[pensar]»: razonamiento oculto (sólo llegan los tokens estimados, como con Opus 5.5) y una respuesta corta.
+  if (/^\[pensar\]/.test(text)) {
+    out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 15000, cache_creation_input_tokens: 0 } } } })
+    out({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } } })
+    for (let k = 0; k < 16; k++) {
+      await sleep(250)
+      out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '', estimated_tokens: 420 } } })
+      out({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 420 * (k + 1), estimated_tokens_delta: 420 })
+    }
+    out({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    const answer = 'Pensé un rato largo: listo.'
+    out({ type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } } })
+    out({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: answer } } })
+    out({ type: 'stream_event', event: { type: 'content_block_stop', index: 1 } })
+    out({ type: 'assistant', message: { role: 'assistant', model, content: [{ type: 'thinking', thinking: '', signature: 'fake' }, { type: 'text', text: answer }] } })
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - t0, total_cost_usd: 0.004, result: answer, modelUsage: { [model]: { contextWindow: 1000000 } } })
+    return
+  }
+  // «[transcribir] ruta»: un solo paso con oa_transcribir (prueba de Whisper en la tablet).
+  const tr = /^\[transcribir\]\s+(\S+)/.exec(text)
+  const steps = tr ? [{ text: 'Transcribo la narración.', tool: 'oa_transcribir', input: { path: tr[1], idioma: 'es' } }] : STEPS
+  let lastResult = ''
+  for (const s of steps) {
     const blocks = []
     let index = 0
     out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 14000 + 900 * n++, cache_creation_input_tokens: 400 } } } })
@@ -101,6 +124,12 @@ async function turn(text) {
     const name = `mcp__openanimator__${s.tool}`
     const use = { type: 'tool_use', id: id('toolu'), name, input: s.input }
     out({ type: 'stream_event', event: { type: 'content_block_start', index, content_block: { ...use, input: {} } } })
+    // La entrada llega de a pedazos, como cuando Claude escribe un archivo largo.
+    const json = JSON.stringify(s.input)
+    for (let k = 0; k < json.length; k += 120) {
+      out({ type: 'stream_event', event: { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: json.slice(k, k + 120) } } })
+      await sleep(90)
+    }
     out({ type: 'stream_event', event: { type: 'content_block_stop', index } })
     blocks.push(use)
     out({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 120 } } })
@@ -110,11 +139,12 @@ async function turn(text) {
     if (await permission(name, s.input)) {
       const r = (await call('tools/call', { name: s.tool, arguments: s.input })).result
       result = { type: 'tool_result', tool_use_id: use.id, content: r.content, is_error: !!r.isError }
+      lastResult = (r.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n')
     } else result = { type: 'tool_result', tool_use_id: use.id, content: 'El usuario rechazó esta acción.', is_error: true }
     out({ type: 'user', message: { role: 'user', content: [result] } })
     record({ type: 'user', message: { role: 'user', content: [result] } })
   }
-  const final = 'Listo: creé **scenes/termux.html** y la puse en el timeline de 0 a 4 s. Revisé los fotogramas en 0,5 s y 2,5 s.'
+  const final = tr ? `Transcripción:\n${lastResult || '(sin resultado)'}` : 'Listo: creé **scenes/termux.html** y la puse en el timeline de 0 a 4 s. Revisé los fotogramas en 0,5 s y 2,5 s.'
   out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 18000, cache_creation_input_tokens: 200 } } } })
   out({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
   out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: final } } })

@@ -55,6 +55,26 @@ clave se guarda cifrada con el almacén de claves de Android y sólo se envía a
 
 Modelos: Opus 5.5 (por defecto), Sonnet 5.5, Haiku 4.5 y Fable 5.1.
 
+## Whisper en la tablet (transcribir la narración)
+
+Para sincronizar las animaciones con la voz, Claude necesita saber en qué segundo se dice cada
+palabra. En la tablet eso lo hace **Whisper** con [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+compilado en Termux: gratis, sin clave y sin mandar el audio a internet. Usa Termux igual que Claude
+con tu plan, así que primero hacé los pasos 1 a 3 de arriba.
+
+En **Ajustes › Plugins › Whisper**:
+
+1. Elegí el modelo: **Base** (142 MB, el más rápido), **Small** (466 MB, recomendado) o **Large v3
+   Turbo** (547 MB, el mismo de la PC comprimido: el más preciso y el más lento).
+2. **Instalar Whisper**: se abre Termux, compila whisper.cpp 1.9.4 (la primera vez, unos 5 a 10
+   minutos) y descarga el modelo, comprobando su suma SHA-1. Cuando diga «Listo», volvé a la app.
+3. **Probar**: transcribe una muestra de voz de 11 segundos y te dice cuánto tardó en *tu* tablet.
+
+Después, `oa_transcribir` usa Whisper antes que cualquier servicio pago. Los modelos se pueden borrar
+desde la misma pantalla. El instalador queda en `~/.openanimator/whisper-install.sh` de Termux (se
+puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo de Whisper, en
+`~/.openanimator/whisper/`.
+
 ## Cómo se usa
 
 - **Inicio**: proyectos, plantillas, *Importar proyecto (.zip)* y la papelera. Mantener apretada una
@@ -66,7 +86,10 @@ Modelos: Opus 5.5 (por defecto), Sonnet 5.5, Haiku 4.5 y Fable 5.1.
   desplaza el timeline, **pellizcar hace zoom** y la regla de arriba mueve el cursor.
 - **Claude**: la conversación ocupa toda la pantalla, con una vista previa del video que se actualiza
   sola cuando Claude cambia algo y pedidos rápidos. Si Claude necesita permiso mientras estás en el
-  editor, aparece un aviso arriba.
+  editor, aparece un aviso arriba. Mientras razona se ve cuánto lleva (tiempo y tokens estimados) y,
+  si Claude deja de dar señales por más de dos minutos y medio, un aviso para detenerlo. Ir a Ajustes o
+  al inicio no lo corta: sigue trabajando y al volver al proyecto está donde iba (una conversación
+  sin usar se cierra sola a la media hora).
 - **Exportar**: presets (Recomendado 1080p, 4K HEVC, Liviano 720p, Para editar), calidad, códec y
   audio. El video se guarda en *Galería › Movies/OpenAnimator* y se puede compartir o abrir.
 - Con teclado físico (funda con teclado o Samsung DeX) funcionan los mismos atajos que en la PC.
@@ -81,8 +104,9 @@ Modelos: Opus 5.5 (por defecto), Sonnet 5.5, Haiku 4.5 y Fable 5.1.
 ### Diferencias con la PC
 
 No están (dependen de programas de la PC): la terminal de Claude Code, la exportación NVENC con sus
-ajustes avanzados, *Plantilla desde un video*, *Importar de CoAnimator*, ChatGPT vía Codex, Whisper
-local y yt-dlp. Los plugins por API (OpenAI, Gemini, OpenRouter, ElevenLabs, Fish Audio) funcionan igual.
+ajustes avanzados, *Plantilla desde un video*, *Importar de CoAnimator*, ChatGPT vía Codex y yt-dlp.
+Whisper corre en Termux (más lento que con la GPU de la PC). Los plugins por API (OpenAI, Gemini,
+OpenRouter, ElevenLabs, Fish Audio) funcionan igual.
 
 ## Para desarrollar
 
@@ -137,7 +161,10 @@ escena, la pone en el timeline y mira fotogramas), para probar el chat sin gasta
 Termux también se imita: `RUN_COMMAND` corre con el bash de la PC y un `HOME` propio, así el puente
 de verdad (`android/termux/bridge.mjs`) arranca y lanza `android/dev/fake-claude.mjs`, un Claude Code
 simulado que usa las herramientas de la app por MCP y pide permisos (con `--termux-claude real` usa el
-Claude Code instalado en la PC).
+Claude Code instalado en la PC). Un mensaje `[transcribir] assets/voz/x.mp3` lo hace llamar a
+`oa_transcribir` y uno `[pensar]`, razonar con el texto oculto (sólo tokens estimados). Instalar Whisper
+no compila nada: deja `android/dev/fake-whisper.mjs` como `whisper-cli` (lee el WAV, pone una palabra
+por tramo con sonido y escribe el JSON como whisper.cpp).
 
 El servidor escucha sólo en `127.0.0.1` (su puente no tiene token). El audio que en la tablet
 decodifica Java (`AudioDecoder.java`: formas de onda, mezcla de la exportación, transcripción) acá

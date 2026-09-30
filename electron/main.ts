@@ -68,6 +68,22 @@ const exports = new Map<string, Exporter>()
 
 // ── chats ───────────────────────────────────────────────────────────────────
 const chats = new Map<string, ChatSession>()
+/**
+ * Conversaciones sin editor abierto (el usuario fue a Ajustes o al inicio): siguen trabajando y el
+ * editor las retoma al volver al proyecto. Se cierran solas tras media hora sin actividad.
+ */
+const parked = new Map<string, { id: string; since: number }>() // proyecto → conversación
+const PARK_MS = 30 * 60e3
+setInterval(() => {
+  for (const [projectId, p] of parked) {
+    const chat = chats.get(p.id)
+    if (!chat) { parked.delete(projectId); continue }
+    if (chat.busy) { p.since = Date.now(); continue }
+    // Terminó el turno y el proyecto no está abierto: sus ventanas de fotogramas ya no hacen falta.
+    if (!watchers.has(projectId)) closeFramePool(projectId)
+    if (Date.now() - p.since > PARK_MS) { chat.kill(); chats.delete(p.id); parked.delete(projectId) }
+  }
+}, 60e3).unref()
 
 // ── análisis de video → plantilla ───────────────────────────────────────────
 const analyses = new Map<string, Analyzer>()
@@ -157,7 +173,12 @@ function registerIpc() {
 
   // proyecto abierto
   h('project:open', (id) => { watch(id); return P.readProject(id) })
-  h('project:close', async (id) => { unwatch(id); closeFramePool(id); await makeThumb(id) })
+  h('project:close', async (id) => {
+    unwatch(id)
+    // Si Claude sigue trabajando en el proyecto, sus ventanas de fotogramas no se cierran (se cierran solas sin uso).
+    if (![...chats.values()].some((c) => c.opts.projectId === id && c.busy)) closeFramePool(id)
+    await makeThumb(id)
+  })
   h('project:get', (id) => P.readProject(id))
   h('project:save', (p) => { selfWrites.set(p.id + '|project.json', Date.now()); P.writeProject(p); return p })
   h('timeline:get', (id, tl) => P.readTimeline(id, tl))
@@ -326,12 +347,26 @@ function registerIpc() {
     chats.set(chat.id, chat)
     return { id: chat.id, items: chat.items, sessionId: chat.sessionId, options: { model: c.model, effort: c.effort, permissionMode: c.permissionMode }, stats: chat.stats() }
   })
-  // Una ventana que se conecta a una conversación ya abierta (el chat separado o el editor al volver).
-  h('chat:get', (id) => {
-    const chat = chats.get(id)
-    if (!chat) return null
+  const snapshot = (chat: ChatSession) => {
     const o = chat.opts
-    return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model }
+    return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined }
+  }
+  // Una ventana que se conecta a una conversación ya abierta (el chat separado o el editor al volver).
+  h('chat:get', (id) => { const chat = chats.get(id); return chat ? snapshot(chat) : null })
+  // El editor se cierra: la conversación sigue (si está trabajando, termina el turno) y queda para retomarla.
+  h('chat:leave', (id) => {
+    const chat = chats.get(id)
+    if (!chat) return
+    const old = parked.get(chat.opts.projectId)
+    if (old && old.id !== id) { chats.get(old.id)?.kill(); chats.delete(old.id) }
+    parked.set(chat.opts.projectId, { id, since: Date.now() })
+  })
+  // El editor vuelve a abrir el proyecto: retoma la conversación que dejó (o null para empezar una nueva).
+  h('chat:forProject', (projectId) => {
+    const p = parked.get(projectId)
+    parked.delete(projectId)
+    const chat = p && chats.get(p.id)
+    return chat ? snapshot(chat) : null
   })
   h('chat:sessions', (projectId) => listSessions(projectId))
   h('chat:compact', (id, instructions?: string) => chats.get(id)?.compact(instructions))
@@ -363,7 +398,10 @@ function registerIpc() {
   h('chat:send', (id, text, images, files) => chats.get(id)?.send(text, images || [], files || []))
   h('chat:interrupt', (id) => chats.get(id)?.interrupt())
   h('chat:permission', (id, itemId, allow, always) => chats.get(id)?.respondPermission(itemId, allow, !!always))
-  h('chat:kill', (id) => { chats.get(id)?.kill(); chats.delete(id) })
+  h('chat:kill', (id) => {
+    chats.get(id)?.kill(); chats.delete(id)
+    for (const [projectId, p] of parked) if (p.id === id) parked.delete(projectId)
+  })
   h('chat:setOptions', (id, patch: { model?: string; effort?: string; permissionMode?: string }, label: string) => {
     const cur = getSettings().claude
     setSettings({ claude: { ...cur, ...patch } })

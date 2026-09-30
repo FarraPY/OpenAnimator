@@ -1,6 +1,8 @@
 import { ReactNode, useEffect, useRef, useState } from 'react'
+import { WhisperSetup } from '../android/ui/WhisperSetup'
 import { call, on, PluginId, PluginStatus, Voice } from '../api'
 import { useApp } from '../App'
+import { isAndroid } from '../platform'
 import { Icon, IconName } from '../ui/icons'
 import { Badge, Button, NumberInput, Progress, Select, Slider, Spinner, Switch, TextInput } from '../ui/kit'
 
@@ -18,6 +20,7 @@ const META: Record<PluginId, { color: string; mark: string; desc: string; keyUrl
   whisper: { color: '#f5a524', mark: 'W', desc: 'Whisper de OpenAI corriendo en tu propia PC (con la GPU si hay CUDA): transcripción con tiempos por palabra, gratis, sin clave y sin enviar el audio a internet. Usa Python con torch y transformers y los modelos que ya estén descargados en la caché de Hugging Face. Es la opción preferida para transcribir.', site: 'https://huggingface.co/openai/whisper-large-v3-turbo' },
   ytdlp: { color: '#ff4e45', mark: 'YT', desc: 'Descarga videos de YouTube (y otros sitios) para analizarlos con la herramienta de plantillas. Programa libre y oficial.', site: 'https://github.com/yt-dlp/yt-dlp' },
 }
+const WHISPER_TABLET = 'Whisper de OpenAI corriendo en la propia tablet con whisper.cpp (en Termux): transcripción con tiempos por palabra, gratis, sin clave y sin enviar el audio a internet. Es más lento que en la PC, pero sirve para sincronizar las animaciones con la narración. Es la opción preferida para transcribir.'
 
 function Row({ label, desc, children, stack }: { label: ReactNode; desc?: ReactNode; children?: ReactNode; stack?: boolean }) {
   return (
@@ -49,7 +52,7 @@ export default function PluginsSettings() {
         <div className="plug-hero-icon"><Icon name="plug" size={22} /></div>
         <div className="grow">
           <div style={{ font: '600 15px var(--font-display)' }}>Otros modelos y servicios para Claude</div>
-          <div className="t3" style={{ marginTop: 3, lineHeight: 1.5 }}>Con un plugin listo, Claude puede generar imágenes, narraciones y efectos de sonido, transcribir voces o pedirle una segunda opinión a otro modelo mientras arma tu video. Las claves se guardan <b className="t2">cifradas en esta PC</b> y nunca se muestran completas.</div>
+          <div className="t3" style={{ marginTop: 3, lineHeight: 1.5 }}>Con un plugin listo, Claude puede generar imágenes, narraciones y efectos de sonido, transcribir voces o pedirle una segunda opinión a otro modelo mientras arma tu video. Las claves se guardan <b className="t2">cifradas en {isAndroid() ? 'la tablet' : 'esta PC'}</b> y nunca se muestran completas.</div>
         </div>
         <Badge tone={readyCount ? 'ok' : 'neutral'} icon={readyCount ? 'check' : undefined}>{st ? `${readyCount} listo${readyCount === 1 ? '' : 's'}` : '…'}</Badge>
       </div>
@@ -85,6 +88,8 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
   const P = s!.plugins as any
   const cfg = P[p.id] || {}
   const enabledSw = p.id !== 'ytdlp'
+  // En la tablet Whisper se instala en Termux y trae su propia prueba (velocidad con una muestra de voz).
+  const tabletWhisper = p.id === 'whisper' && isAndroid()
 
   useEffect(() => on('plugins:progress', (e: { id: string; p: number }) => { if (e.id === p.id) setInstall(e.p) }), [p.id])
 
@@ -103,7 +108,7 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
     try { await call('plugins:installYtdlp'); toast('yt-dlp instalado'); onChanged(); runTest() } catch (e: any) { toast(e.message, true) } finally { setInstall(null) }
   }
 
-  const state = !p.enabled ? { tone: 'neutral' as const, text: 'Desactivado' } : p.ready ? { tone: 'ok' as const, text: 'Listo' } : { tone: 'warn' as const, text: p.needsKey ? 'Falta la clave' : p.id === 'codex' ? 'Sin sesión' : p.id === 'whisper' ? 'No disponible' : 'No instalado' }
+  const state = !p.enabled ? { tone: 'neutral' as const, text: 'Desactivado' } : p.ready ? { tone: 'ok' as const, text: 'Listo' } : { tone: 'warn' as const, text: p.needsKey ? 'Falta la clave' : p.id === 'codex' ? 'Sin sesión' : p.id === 'whisper' && !tabletWhisper ? 'No disponible' : 'No instalado' }
   return (
     <div className={`plug-card ${open ? 'open' : ''} ${p.ready ? 'ready' : ''}`}>
       <div className="plug-head" onClick={onToggle}>
@@ -117,7 +122,7 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
       </div>
       {open && (
         <div className="plug-body">
-          <p className="plug-desc">{m.desc}</p>
+          <p className="plug-desc">{tabletWhisper ? WHISPER_TABLET : m.desc}</p>
 
           {p.needsKey && (
             <div className="plug-key">
@@ -137,7 +142,7 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
               {!p.ready && <Button icon="terminal" onClick={() => call('plugins:loginCodex')}>{/no está instalado/i.test(p.detail) ? 'Instalar Codex' : 'Iniciar sesión'}</Button>}
             </div>
           )}
-          {p.id === 'whisper' && (
+          {p.id === 'whisper' && !tabletWhisper && (
             <div className="plug-key"><div className="grow t2" style={{ fontSize: 12.5 }}>{p.detail}</div></div>
           )}
           {p.id === 'ytdlp' && (
@@ -148,12 +153,12 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
             </div>
           )}
 
-          <div className="plug-test">
+          {!tabletWhisper && <div className="plug-test">
             <Button size="sm" icon="zap" onClick={runTest} loading={test?.busy} disabled={p.needsKey && !p.masked}>Probar conexión</Button>
             {test && !test.busy && <span className={`plug-test-msg ${test.ok ? 'ok' : 'err'}`}><Icon name={test.ok ? 'check-circle' : 'x-circle'} size={14} />{test.msg}</span>}
             <div className="grow" />
             {(m.keyUrl || m.site) && <Button size="sm" variant="ghost" iconRight="external" onClick={() => call('shell:openExternal', m.keyUrl || m.site)}>{m.keyUrl ? 'Conseguir una clave' : 'Sitio oficial'}</Button>}
-          </div>
+          </div>}
 
           {p.id === 'codex' && <div className="set-card plug-opts">
             <Row label="Modelo" desc="Vacío = el predeterminado de tu cuenta."><TextInput mono width={220} value={cfg.model} placeholder="predeterminado" onChange={(v) => up({ plugins: { codex: { model: v } } })} /></Row>
@@ -171,7 +176,7 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
           {p.id === 'openrouter' && <div className="set-card plug-opts">
             <Row label="Modelo" desc="Formato proveedor/modelo, p. ej. openai/gpt-5, google/gemini-2.5-pro, deepseek/deepseek-chat."><TextInput mono width={260} value={cfg.chatModel} onChange={(v) => up({ plugins: { openrouter: { chatModel: v } } })} /></Row>
           </div>}
-          {p.id === 'whisper' && <WhisperOptions onChanged={onChanged} />}
+          {p.id === 'whisper' && (tabletWhisper ? <WhisperSetup onChanged={onChanged} /> : <WhisperOptions onChanged={onChanged} />)}
           {(p.id === 'elevenlabs' || p.id === 'fish') && <VoiceOptions provider={p.id} ready={p.ready} />}
         </div>
       )}

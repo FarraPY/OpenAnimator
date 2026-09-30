@@ -86,7 +86,7 @@ function options(projectId: string, resume?: string): ChatOptions {
 
 function snapshot(chat: TermuxChat) {
   const o = chat.opts
-  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model }
+  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined }
 }
 
 export async function createChat(projectId: string, o?: { resume?: string }) {

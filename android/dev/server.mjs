@@ -13,6 +13,7 @@
  * Termux (Claude Code con el plan) también se imita: RUN_COMMAND corre con el bash de la PC y un HOME
  * propio (data/.dev-termux/home), así el puente de verdad (android/termux/bridge.mjs) arranca y lanza
  * fake-claude.mjs (guion fijo, sin gastar) o, con --termux-claude real, el Claude Code instalado.
+ * Instalar Whisper deja fake-whisper.mjs en lugar de whisper.cpp (el puente lo usa como el de verdad).
  *
  * El puente no tiene token: por defecto sólo escucha en 127.0.0.1 (con --host 0.0.0.0 cualquiera en
  * la red podría leer y escribir la carpeta de datos).
@@ -143,11 +144,37 @@ function termuxEnv() {
 }
 // Las rutas de Termux se traducen a la carpeta de prueba (y su bash/node a los de la PC).
 const inTermux = (p) => String(p).replace('/data/data/com.termux/files/home', TERMUX_HOME).replace('/data/data/com.termux/files/usr', path.join(DATA, '.dev-termux', 'usr'))
+/**
+ * La instalación de Whisper (compilar whisper.cpp y bajar el modelo) no se hace en la PC: se deja
+ * fake-whisper.mjs como whisper-cli, un modelo de mentira y una muestra de voz sintética (22 tonos).
+ */
+function fakeWhisperInstall(model) {
+  const W = path.join(TERMUX_HOME, '.openanimator', 'whisper')
+  fs.mkdirSync(path.join(W, 'bin'), { recursive: true })
+  fs.mkdirSync(path.join(W, 'models'), { recursive: true })
+  fs.writeFileSync(path.join(W, 'bin', 'whisper-cli'), `#!/bin/sh\nexec "${process.execPath}" "${path.join(ROOT, 'android', 'dev', 'fake-whisper.mjs')}" "$@"\n`, { mode: 0o755 })
+  fs.writeFileSync(path.join(W, 'VERSION'), 'v1.9.4\n')
+  fs.writeFileSync(path.join(W, 'models', `ggml-${model}.bin`), 'modelo de prueba')
+  const jfk = path.join(W, 'jfk.wav')
+  if (!fs.existsSync(jfk)) {
+    const n = 16000 * 11, pcm = Buffer.alloc(n * 2)
+    for (let i = 0; i < n; i++) { const t = i / 16000; if (t % 0.5 < 0.3) pcm.writeInt16LE(Math.round(Math.sin(2 * Math.PI * 440 * t) * 12000), i * 2) }
+    const h = Buffer.alloc(44)
+    h.write('RIFF', 0); h.writeUInt32LE(36 + pcm.length, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16); h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22)
+    h.writeUInt32LE(16000, 24); h.writeUInt32LE(32000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34); h.write('data', 36); h.writeUInt32LE(pcm.length, 40)
+    fs.writeFileSync(jfk, Buffer.concat([h, pcm]))
+  }
+}
 function termuxRun(a) {
   if (!termuxPerm) throw new Error('OpenAnimator todavía no tiene permiso para usar Termux')
   fs.mkdirSync(TERMUX_HOME, { recursive: true })
   const args = (a.args || []).map(inTermux)
-  if (a.background === false) { console.log('[termux] sesión visible:', args.join(' ')); return true }
+  if (a.background === false) {
+    const w = /whisper-install\.sh"? ([\w.-]+)/.exec(args.join(' '))
+    if (w) { fakeWhisperInstall(w[1]); console.log('[termux] Whisper instalado (simulado):', w[1]); return true }
+    console.log('[termux] sesión visible:', args.join(' '))
+    return true
+  }
   const exe = /\/bin\/node$/.test(a.path) ? process.execPath : /\/bin\/bash$/.test(a.path) ? 'bash' : inTermux(a.path)
   const p = spawn(exe, args, { env: termuxEnv(), cwd: TERMUX_HOME, stdio: ['pipe', a.result ? 'pipe' : 'ignore', a.result ? 'pipe' : 'inherit'] })
   p.stdin.end(a.stdin || '')

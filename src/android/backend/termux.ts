@@ -7,6 +7,7 @@
  */
 import bridgeSrc from '../../../android/termux/bridge.mjs?raw'
 import mcpSrc from '../../../android/termux/oa-mcp.mjs?raw'
+import whisperSrc from '../../../android/termux/whisper-install.sh?raw'
 import { host } from '../host'
 import { projectChanged } from './events'
 import { fs } from './fsx'
@@ -55,6 +56,7 @@ function token() {
 type Proc = { project: string; out: (msg: any) => void; exit: (code: number, err: string) => void }
 const procs = new Map<string, Proc>()
 const replies = new Map<string, { resolve: (v: any) => void; reject: (e: Error) => void }>()
+const progress = new Map<string, (pct: number) => void>() // avance de las transcripciones con Whisper
 let current: string | null = null // id de la conexión abierta
 let connecting: Promise<string> | null = null
 let fresh = true // la primera conexión de esta apertura de la app cierra las conversaciones viejas del puente
@@ -203,6 +205,7 @@ function onMessage(m: any) {
       break
     }
     case 'tool': void runBridgeTool(m); break
+    case 'wprog': progress.get(m.job)?.(+m.pct || 0); break
     case 'reply': {
       const w = replies.get(m.id)
       if (w) { replies.delete(m.id); if (m.ok) w.resolve(m.value); else w.reject(new Error(m.error || 'Error del puente')) }
@@ -230,13 +233,14 @@ async function runBridgeTool(m: { call: string; proc: string; name: string; inpu
 }
 
 // ── API para code.ts y los ajustes ──────────────────────────────────────────────
-export async function request<T = any>(op: string, extra: Record<string, unknown> = {}): Promise<T> {
+/** Pedido al puente; timeoutMs 0 = sin límite (una transcripción larga). */
+export async function request<T = any>(op: string, extra: Record<string, unknown> = {}, timeoutMs = 60000): Promise<T> {
   await bridge()
   const id = `q${++seq}`
   return new Promise<T>((resolve, reject) => {
     replies.set(id, { resolve, reject })
     try { sendNow({ t: 'req', id, op, ...extra }) } catch (e) { replies.delete(id); reject(e as Error); return }
-    setTimeout(() => { if (replies.delete(id)) reject(new Error('El puente de Termux no respondió.')) }, 60000)
+    if (timeoutMs > 0) setTimeout(() => { if (replies.delete(id)) reject(new Error('El puente de Termux no respondió.')) }, timeoutMs)
   })
 }
 
@@ -261,4 +265,60 @@ export async function login() {
     args: ['-lc', 'claude auth login; echo; echo "Cuando termines, volvé a OpenAnimator."; read -r -p "Enter para cerrar " _'],
   })
   openTermux()
+}
+
+// ── Whisper (whisper.cpp en Termux) ────────────────────────────────────────────
+/** Los modelos que sabe instalar whisper-install.sh (ahí están sus sumas SHA-1). dtw = alineación por palabra. */
+export const WHISPER_MODELS = [
+  { id: 'base', file: 'ggml-base.bin', dtw: 'base', label: 'Base', mb: 142, desc: 'El más rápido; se equivoca más con nombres y palabras poco comunes.' },
+  { id: 'small', file: 'ggml-small.bin', dtw: 'small', label: 'Small', mb: 466, desc: 'Buen equilibrio entre precisión y velocidad.' },
+  { id: 'large-v3-turbo-q5_0', file: 'ggml-large-v3-turbo-q5_0.bin', dtw: 'large.v3.turbo', label: 'Large v3 Turbo', mb: 547, desc: 'El más preciso (el mismo modelo que en la PC, comprimido); tarda más.' },
+] as const
+export type WhisperModel = (typeof WHISPER_MODELS)[number]
+export const whisperModel = (id: string): WhisperModel | undefined => WHISPER_MODELS.find((m) => m.id === id)
+
+export type WhisperBridgeStatus = { bin: boolean; version: string | null; models: Array<{ file: string; size: number }>; sample: boolean; busy: boolean; cores: number }
+export type WhisperResult = { text: string; words: Array<{ w: string; start: number; end: number }>; lang: string | null; ms: number; audioSec: number }
+
+export const whisperBridgeStatus = () => request<WhisperBridgeStatus>('whisper.status')
+export const whisperRemove = (model: WhisperModel) => request<WhisperBridgeStatus>('whisper.remove', { model: model.file })
+
+/** Copia el instalador a Termux y lo corre en una sesión visible: compila whisper.cpp (una vez) y baja el modelo. */
+export async function whisperInstall(model: WhisperModel) {
+  const script = ['set -e', 'mkdir -p "$HOME/.openanimator"', `cat > "$HOME/.openanimator/whisper-install.sh" <<'OA_WHISPER_EOF'`, whisperSrc.replace(/\n$/, ''), 'OA_WHISPER_EOF', 'echo listo'].join('\n') + '\n'
+  const r = await host().callAsync<RunResult>('termux.run', { path: BASH, args: ['-s'], stdin: script, background: true, result: true, timeoutMs: 60000, label: 'OpenAnimator: preparar Whisper' })
+  checkRun(r, 'la preparación de Whisper')
+  await host().callAsync('termux.run', {
+    path: BASH, background: false, result: false, label: 'Whisper: instalar',
+    args: ['-lc', `bash "$HOME/.openanimator/whisper-install.sh" ${model.id}; echo; read -r -p "Enter para cerrar " _`],
+  })
+  openTermux()
+}
+
+function base64(u8: Uint8Array) {
+  let s = ''
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode(...u8.subarray(i, i + 0x8000))
+  return btoa(s)
+}
+
+/**
+ * Transcribe con Whisper en Termux. El audio (PCM mono de 16 bits a 16 kHz, por partes) viaja por la
+ * conexión con el puente; vuelven el texto y cada palabra con su tiempo. `sample` usa la muestra de voz
+ * que dejó la instalación (para medir la velocidad).
+ */
+export async function whisperTranscribe(o: { model: WhisperModel; lang?: string; pcm?: AsyncIterable<Int16Array>; sample?: boolean; onProgress?: (pct: number) => void }): Promise<WhisperResult> {
+  const job = `w${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`
+  const PART = 512 * 1024
+  try {
+    if (o.pcm) for await (const part of o.pcm) {
+      const bytes = new Uint8Array(part.buffer, part.byteOffset, part.byteLength)
+      for (let off = 0; off < bytes.length; off += PART) await request('whisper.put', { job, pcm: base64(bytes.subarray(off, off + PART)) })
+    }
+    if (o.onProgress) progress.set(job, o.onProgress)
+    return await request<WhisperResult>('whisper.run', { job, model: o.model.file, dtw: o.model.dtw, lang: o.lang || '', sample: !!o.sample }, 0)
+  } catch (e) {
+    // Si se cortó la conexión, el puente ya la descartó; si no, que no quede ocupando Termux.
+    try { if (current) sendNow({ t: 'req', id: `q${++seq}`, op: 'whisper.cancel', job }) } catch { /* ya no está */ }
+    throw e
+  } finally { progress.delete(job) }
 }

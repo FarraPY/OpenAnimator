@@ -106,17 +106,27 @@ function EffortBars({ n }: { n: number }) {
 }
 
 /** Segundos transcurridos desde `since`, actualizados cada segundo. */
+const dur = (s: number) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`)
 function Elapsed({ since }: { since: number }) {
   const [, tick] = useState(0)
   useEffect(() => { const i = setInterval(() => tick((x) => x + 1), 1000); return () => clearInterval(i) }, [])
-  const s = Math.max(0, Math.round((Date.now() - since) / 1000))
-  return <span className="tabnum">{s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`}</span>
+  return <span className="tabnum">{dur(Math.max(0, Math.round((Date.now() - since) / 1000)))}</span>
+}
+
+/** Aviso si Claude Code deja de mandar señales mientras el modelo trabaja (no mientras corre una herramienta). */
+function Stall({ at }: { at: number }) {
+  const [, tick] = useState(0)
+  useEffect(() => { const i = setInterval(() => tick((x) => x + 1), 5000); return () => clearInterval(i) }, [])
+  const s = Math.round((Date.now() - at) / 1000)
+  if (s < 150) return null
+  return <div className="notice warn"><Icon name="alert" size={14} />Claude no manda señales hace {dur(s)}: puede haberse trabado. Si no avanza, tocá Detener y pedile que siga.</div>
 }
 
 const kShort = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`)
 /** Nivel de alerta: lo que importa para el límite de uso es cuántos tokens se reenvían en cada mensaje. */
 const ctxLevel = (tokens: number, pct: number) => (tokens >= 250000 || pct >= 80 ? 2 : tokens >= 140000 || pct >= 60 ? 1 : 0)
 const kTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)} M` : n >= 1000 ? `${Math.round(n / 1000)} mil` : String(n))
+const kSize = (chars: number) => (chars >= 1024 ? `${(chars / 1024).toFixed(chars >= 10240 ? 0 : 1).replace('.', ',')} KB` : `${chars} B`)
 
 /** Anillo con el porcentaje de la ventana de contexto que ocupa la conversación. */
 function ContextRing({ pct, level }: { pct: number; level: number }) {
@@ -160,6 +170,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const [opts, setOpts] = useState({ model: '', effort: '', permissionMode: 'acceptEdits' })
   const [liveModel, setLiveModel] = useState<string | undefined>()
   const [busySince, setBusySince] = useState(0)
+  const [signalAt, setSignalAt] = useState(0) // última señal de Claude Code (sólo con Claude Code)
   const seen = useRef(new Map<string, number>())
   const list = useRef<HTMLDivElement>(null)
   const ta = useRef<HTMLTextAreaElement>(null)
@@ -170,15 +181,19 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
 
   const load = (r: any) => {
     sid.current = r.id; setSession(r.id); setItems(r.items); setBusy(!!r.busy); setOpts(r.options); setStats(r.stats || null)
-    setLiveModel(r.model); setGone(false); setClaudeSession(r.sessionId)
+    setLiveModel(r.model); setGone(false); setClaudeSession(r.sessionId); setSignalAt(r.signalAt || 0)
     for (const it of r.items as ChatItem[]) seen.current.set(it.id, Date.now())
   }
   const start = async (resume?: string) => load(await call('chat:create', projectId, resume ? { resume } : undefined))
   const reattach = async (id: string) => { const r = await call('chat:get', id); if (r) load(r); else setGone(true) }
+  // Al volver al proyecto (desde Ajustes o el inicio) se retoma la conversación que quedó abierta.
+  const resumeOrStart = async () => { const r = await call('chat:forProject', projectId).catch(() => null); if (r) load(r); else await start() }
+  const busyRef = useRef(false)
+  busyRef.current = busy
 
   useEffect(() => {
     if (windowMode && attachTo) reattach(attachTo)
-    else start()
+    else resumeOrStart()
     const off = on('chat:event', (e: ChatEvent) => {
       if (e.session !== sid.current) return
       if (e.type === 'item') { seen.current.set(e.item!.id, Date.now()); setItems((xs) => [...xs, e.item as ChatItem]) }
@@ -188,6 +203,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
         if (e.state?.model) setLiveModel(e.state.model)
         if (e.state?.stats) setStats(e.state.stats)
         if (e.state?.sessionId) setClaudeSession(e.state.sessionId)
+        if (e.state?.signalAt) setSignalAt(e.state.signalAt)
       }
     })
     const offPop = on('chat:popout', (e: { projectId: string; open: boolean }) => {
@@ -196,7 +212,13 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       if (!e.open && sid.current) reattach(sid.current)
     })
     if (!windowMode) call<boolean>('chat:isPopped', projectId).then(setPopped).catch(() => {})
-    return () => { off(); offPop(); if (!windowMode && sid.current) { call('chat:kill', sid.current); call('chat:popin', projectId) } }
+    return () => {
+      off(); offPop()
+      if (windowMode || !sid.current) return
+      // Salir del editor no corta a Claude: la conversación sigue y se retoma al volver al proyecto.
+      call('chat:leave', sid.current); call('chat:popin', projectId)
+      if (busyRef.current) toast('Claude sigue trabajando en este proyecto: al volver lo ves donde va')
+    }
   }, [projectId])
 
   // Mientras el chat está en otra ventana, el editor le informa dónde está el cursor.
@@ -439,13 +461,15 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             <div key={it.id} className="msg-ai"><span className="msg-ai-avatar"><Icon name="sparkles" size={13} stroke={2} /></span><div className="msg-ai-body"><Markdown text={it.text} /></div></div>
           ) : null
           if (it.kind === 'thinking') {
+            // Los tokens estimados muestran que sigue razonando aunque el texto del razonamiento no llegue.
+            const tok = it.tokens ? <span className="t3 tabnum" data-tip="Tokens de razonamiento estimados">· {kTok(it.tokens)} tokens</span> : null
             if (it.status === 'streaming') return (
-              <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={seen.current.get(it.id) || Date.now()} />
+              <div key={it.id} className="think live"><span className="think-dot" /><span>Pensando…</span><Elapsed since={seen.current.get(it.id) || Date.now()} />{tok}
                 {showThinking && it.text ? <div className="think-text">{it.text.slice(-500)}</div> : null}</div>
             )
             const secs = it.durationMs ? Math.max(1, Math.round(it.durationMs / 1000)) : null
-            if (showThinking && it.text) return <details key={it.id} className="think"><summary><Icon name="brain" size={12} />Razonamiento{secs ? ` · ${secs} s` : ''}<Icon name="chevron-down" size={11} /></summary><div className="think-text full">{it.text}</div></details>
-            return secs && secs >= 2 ? <div key={it.id} className="think done"><Icon name="brain" size={12} />Pensó {secs} s</div> : null
+            if (showThinking && it.text) return <details key={it.id} className="think"><summary><Icon name="brain" size={12} />Razonamiento{secs ? ` · ${dur(secs)}` : ''}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}<Icon name="chevron-down" size={11} /></summary><div className="think-text full">{it.text}</div></details>
+            return secs && secs >= 2 ? <div key={it.id} className="think done"><Icon name="brain" size={12} />Pensó {dur(secs)}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}</div> : null
           }
           if (it.kind === 'notice') return <div key={it.id} className={`notice ${it.level || ''}`}><Icon name={it.level === 'error' ? 'x-circle' : it.level === 'warn' ? 'alert' : 'info'} size={14} />{it.text}</div>
           if (it.kind === 'result') return it.isError
@@ -459,7 +483,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
                 <details className="tool-card">
                   <summary>
                     <span className="tool-state">{it.status === 'ejecutando' ? <Spinner size={12} /> : <Icon name={it.isError ? 'x-circle' : 'check-circle'} size={13} style={{ color: it.isError ? 'var(--err)' : 'var(--ok)' }} />}</span>
-                    <Icon name={m.icon} size={13} /><b>{m.name}</b><span className="t3 ellipsis grow mono" style={{ fontSize: 11 }}>{m.arg}</span><Icon name="chevron-down" size={12} />
+                    <Icon name={m.icon} size={13} /><b>{m.name}</b>
+                    <span className="t3 ellipsis grow mono" style={{ fontSize: 11 }}>{m.arg || (it.status === 'ejecutando' && it.streamed ? `escribiendo… ${kSize(it.streamed)}` : '')}</span><Icon name="chevron-down" size={12} />
                   </summary>
                   <pre>{JSON.stringify(it.input, null, 1)?.slice(0, 3000)}{it.result ? '\n\n→ ' + String(it.result).slice(0, 4000) : ''}</pre>
                 </details>
@@ -489,6 +514,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           return null
         })}
         {busy && !activeNow && <div className="think live"><span className="think-dot" /><span>{last?.kind === 'tool' ? 'Procesando el resultado…' : 'Pensando…'}</span><Elapsed since={busySince || Date.now()} /></div>}
+        {busy && !!signalAt && !(last?.kind === 'tool' && last.status === 'ejecutando' && !last.streamed) && !(last?.kind === 'permission' && last.status === 'pendiente') && <Stall key={signalAt} at={signalAt} />}
       </div>
       {away && (
         <button className={`to-bottom ${unread ? 'has-new' : ''}`} onClick={() => toBottom()} data-tip="Ir al último mensaje (Ctrl+Fin)">

@@ -15,7 +15,7 @@ description: Narración (TTS), tiempos por palabra, música y efectos de sonido 
 3. **Generá la voz por párrafo** (un archivo por parte: `assets/voz/<nombre>/parte-N.mp3`). Si una parte sale mal,
    se regenera sólo esa.
 4. **Obtené tiempos por palabra** (con timestamps del TTS o transcribiendo el audio con `oa_transcribir`, que usa
-   Whisper local: gratis y preciso). Guardalos en
+   Whisper en el equipo del usuario: gratis y preciso). Guardalos en
    `assets/voz/<nombre>/tiempos.json` como `[{ "parte": 1, "palabra": "lupus", "ini": 3.42, "fin": 3.81 }]`.
 5. **Ubicá las partes en el timeline** (pista `Voz`), una detrás de otra con 0,3–0,4 s de aire.
 6. **Recién ahora** poné los tiempos de cada beat/elemento = inicio de la parte + tiempo de la palabra ancla.
@@ -28,11 +28,13 @@ Primero usá las herramientas de la app: `oa_plugins` (qué hay configurado), `o
 Fish Audio **S2.1 Pro Free** es gratis: si el usuario tiene Fish configurado, es la opción sin costo
 (detalles en la skill `voz-fish-audio`).
 
-**Transcripción = Whisper local.** `oa_transcribir` sin `proveedor` corre Whisper (large-v3-turbo) en la PC del
-usuario: tiempos por palabra precisos, gratis, sin enviar el audio a internet. Usalo siempre que necesites
-tiempos o control de calidad; pasá `idioma: "es"` si lo sabés (es más rápido y evita que detecte otro idioma).
-No uses ElevenLabs/OpenAI/Fish para transcribir salvo que el usuario lo pida. Ni escribas scripts propios de Whisper:
-la herramienta ya lo hace.
+**Transcripción = Whisper local.** `oa_transcribir` sin `proveedor` corre Whisper en el equipo del usuario: en la
+PC, large-v3-turbo con la GPU; en la tablet, whisper.cpp en Termux (si el usuario lo instaló: `oa_plugins` lo dice).
+Tiempos por palabra precisos, gratis, sin enviar el audio a internet. Usalo siempre que necesites tiempos o control
+de calidad; pasá `idioma: "es"` si lo sabés (es más rápido y evita que detecte otro idioma). En la tablet tarda más:
+transcribí cada parte una vez, no el video entero de nuevo por cada cambio.
+No uses ElevenLabs/OpenAI/Fish para transcribir salvo que el usuario lo pida o que no haya Whisper. Ni escribas
+scripts propios de Whisper: la herramienta ya lo hace.
 
 Lo de abajo es la referencia de las APIs por si hiciera falta.
 

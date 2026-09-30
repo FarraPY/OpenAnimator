@@ -11,10 +11,18 @@ export type ChatItem = {
   id: string; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'permission' | 'result' | 'notice'
   text?: string; name?: string; input?: any; status?: string; result?: string; isError?: boolean
   requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: 'info' | 'warn' | 'error'
+  /** Razonamiento: tokens estimados hasta ahora (aunque el texto no se muestre). */
+  tokens?: number
+  /** Herramienta: caracteres de la entrada que ya llegaron mientras Claude la escribe (p. ej. un archivo largo). */
+  streamed?: number
 }
 /** Consumo de la conversación: contexto ocupado (tokens del último pedido al modelo) y ventana del modelo. */
 export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
-export type ChatEvent = { session: string; type: 'item' | 'patch' | 'state'; item?: Partial<ChatItem> & { id: string }; state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats } }
+export type ChatEvent = {
+  session: string; type: 'item' | 'patch' | 'state'; item?: Partial<ChatItem> & { id: string }
+  /** signalAt: la última vez que Claude Code mandó algo (si pasa mucho sin nada mientras piensa, puede estar trabado). */
+  state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number }
+}
 export type ChatOptions = { projectId: string; permissionMode: string; model?: string; effort?: string; extraInstructions?: string; claudePath?: string; resume?: string; saver?: boolean }
 
 let seq = 0
@@ -47,14 +55,38 @@ export abstract class ClaudeStreamSession {
   /** Permisos que la plataforma concede sola (además de los "para toda la sesión"). */
   protected autoAllow(_tool: string, _input: any): boolean { return false }
 
-  private push(it: ChatItem) { this.items.push(it); if (this.items.length > 3000) this.items.shift(); this.emit({ session: this.id, type: 'item', item: it }) }
+  private push(it: ChatItem) { this.flushPatches(); this.items.push(it); if (this.items.length > 3000) this.items.shift(); this.emit({ session: this.id, type: 'item', item: it }) }
   private patch(id: string, p: Partial<ChatItem>) {
+    this.flushPatches()
     const it = this.items.find((x) => x.id === id)
     if (it) Object.assign(it, p)
     this.emit({ session: this.id, type: 'patch', item: { id, ...p } })
   }
+  // Avances que llegan muy seguido (tokens de razonamiento, entrada de una herramienta): se mandan agrupados.
+  private pending = new Map<string, Partial<ChatItem>>()
+  private pendingTimer: ReturnType<typeof setTimeout> | null = null
+  private patchLater(id: string, p: Partial<ChatItem>) {
+    const it = this.items.find((x) => x.id === id)
+    if (it) Object.assign(it, p)
+    this.pending.set(id, { ...(this.pending.get(id) || {}), ...p })
+    if (!this.pendingTimer) this.pendingTimer = setTimeout(() => this.flushPatches(), 400)
+  }
+  private flushPatches() {
+    if (this.pendingTimer) { clearTimeout(this.pendingTimer); this.pendingTimer = null }
+    if (!this.pending.size) return
+    const all = [...this.pending]
+    this.pending.clear()
+    for (const [id, p] of all) this.emit({ session: this.id, type: 'patch', item: { id, ...p } })
+  }
+  private signalAt = 0
+  private signalSent = 0
+  /** La última vez que Claude Code mandó algo (para la foto de la conversación al volver a abrirla). */
+  get lastSignal() { return this.signalAt }
   stats(): ChatStats { return { ...this.usage } }
-  protected state() { this.emit({ session: this.id, type: 'state', state: { busy: this.busy, alive: this.alive, sessionId: this.sessionId, model: this.model, effort: this.opts.effort || '', permissionMode: this.opts.permissionMode, stats: this.stats() } }) }
+  protected state() {
+    this.signalSent = Date.now()
+    this.emit({ session: this.id, type: 'state', state: { busy: this.busy, alive: this.alive, sessionId: this.sessionId, model: this.model, effort: this.opts.effort || '', permissionMode: this.opts.permissionMode, stats: this.stats(), signalAt: this.signalAt || undefined } })
+  }
   notice(text: string, level: ChatItem['level'] = 'info') { this.push({ id: nid('n'), kind: 'notice', text, level }) }
 
   /** Claude Code terminó (código de salida y el final de lo que escribió en stderr). */
@@ -72,6 +104,7 @@ export abstract class ClaudeStreamSession {
     this.push({ id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined })
     this.streamedText = false
     this.busy = true
+    this.signalAt = Date.now()
     this.state()
     this.writeLine({ type: 'user', message: { role: 'user', content } })
   }
@@ -82,6 +115,7 @@ export abstract class ClaudeStreamSession {
     if (!this.alive && !this.start()) return
     this.compacting = true
     this.busy = true
+    this.signalAt = Date.now()
     this.notice('Compactando la conversación: Claude la resume para liberar contexto…')
     this.state()
     this.writeLine({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: '/compact' + (instructions?.trim() ? ' ' + instructions.trim() : '') }] } })
@@ -149,7 +183,10 @@ export abstract class ClaudeStreamSession {
   protected onLine(line: string) {
     let m: any
     try { m = JSON.parse(line) } catch { return }
+    // Señal de vida: mientras trabaja, la interfaz se entera cada tanto (si deja de llegar, puede estar trabado).
+    this.signalAt = Date.now()
     this.onMessage(m)
+    if (this.busy && Date.now() - this.signalSent > 5000) this.state()
   }
 
   /** Un mensaje de la salida de Claude Code (ya leído). */
@@ -239,10 +276,18 @@ export abstract class ClaudeStreamSession {
       if (!it) return
       const d = ev.delta || {}
       if (d.type === 'text_delta') { this.streamedText = true; this.patch(id, { text: (it.text || '') + d.text }) }
-      else if (d.type === 'thinking_delta') this.patch(id, { text: (it.text || '') + d.thinking })
+      else if (d.type === 'thinking_delta') {
+        // Con el razonamiento oculto llega sólo la cantidad estimada de tokens; con texto, se estima por su largo.
+        const text = typeof d.thinking === 'string' ? d.thinking : ''
+        const tokens = (it.tokens || 0) + (typeof d.estimated_tokens === 'number' ? d.estimated_tokens : Math.ceil(text.length / 4))
+        if (text) this.patch(id, { text: (it.text || '') + text, tokens })
+        else this.patchLater(id, { tokens })
+      } else if (d.type === 'input_json_delta' && it.kind === 'tool') this.patchLater(id, { streamed: (it.streamed || 0) + String(d.partial_json || '').length })
     } else if (ev.type === 'content_block_stop') {
       const id = this.blocks.get(ev.index)
       const it = id && this.items.find((x) => x.id === id)
+      // La entrada de la herramienta ya llegó entera: ahora se ejecuta (streamed 0 = ya no se está escribiendo).
+      if (it && it.kind === 'tool' && it.streamed) this.patch(it.id, { streamed: 0 })
       if (it && it.kind !== 'tool') {
         const t0 = this.thinkStart.get(it.id)
         this.thinkStart.delete(it.id)

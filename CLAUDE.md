@@ -67,6 +67,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`restartWhenIdle`). El `close` de un proceso viejo no pisa `this.proc` del nuevo.
 - Historial: `listSessions`/`loadTranscript` leen `~/.claude/projects/<ruta con [^a-zA-Z0-9]→->/*.jsonl`
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
+- Salir del editor NO corta a Claude: ChatPanel manda `chat:leave` (la conversación queda "estacionada" por
+  proyecto, sigue el turno) y al volver `chat:forProject` la retoma; sin uso, se cierra a los 30 min. Mientras
+  un chat del proyecto trabaja, `project:close` no cierra el compositor de fotogramas.
+- Razonamiento oculto (Opus 5.5 en Claude Code): los `thinking_delta` traen sólo `estimated_tokens` → `ChatItem.tokens`
+  («Pensando… · N mil tokens»). `signalAt` (última línea de Claude Code) avisa "puede haberse trabado" a los 150 s
+  sin señales, salvo mientras corre una herramienta (`streamed` = entrada de la herramienta que va llegando).
 
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente
@@ -91,6 +97,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   de la PC (`electron/claude-session.ts`, compartido); `code.ts` es el transporte. Nunca leer credenciales de Claude.
   Si el puente no arranca, el error trae la salida de Termux y `~/.openanimator/bridge.log`. Trampa vista en la
   tablet: Node.js nuevo con OpenSSL viejo no enlaza (`CANNOT LINK EXECUTABLE`) → la preparación hace `yes | pkg upgrade`.
+- Whisper en la tablet: whisper.cpp 1.9.4 compilado en Termux por `android/termux/whisper-install.sh` (commit y
+  SHA-1 de los modelos fijados; base/small/large-v3-turbo-q5_0). El audio viaja como PCM 16 kHz por el puente
+  (`whisper.put`), `whisper.run` corre `whisper-cli -ojf --dtw <modelo> -nfa -bs 1 -sns -pp` y arma las palabras con
+  `t_dtw`. Trampas de 1.9.4: sin `-l` asume inglés (usar `auto`); flash attention (por defecto) desactiva DTW; si no
+  puede leer el audio termina con 0 sin JSON; el JSON no escapa caracteres de control (`lenientJson`).
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
 - Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
@@ -101,5 +112,5 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
   `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.
 - Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`
-  (Termux se imita con el puente real y `android/dev/fake-claude.mjs`).
+  (Termux se imita con el puente real, `android/dev/fake-claude.mjs` y, para Whisper, `fake-whisper.mjs`).
   APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.

@@ -14,7 +14,12 @@
  *                   toolResult {call, content, isError} · req {id, op, …} · ping
  *   puente → app:   hello {ok, version} · out {proc, msg} · exit {proc, code, err}
  *                   tool {call, proc, name, input} · reply {id, ok, value | error} · pong
+ *                   wprog {job, pct} (avance de una transcripción con Whisper)
  *   oa-mcp → puente: mcp {proc, key} · tools {id} · call {id, name, arguments}
+ *
+ * También transcribe con Whisper (whisper.cpp, compilado en Termux por whisper-install.sh): la app le
+ * manda el audio como PCM de 16 kHz (whisper.put) y whisper.run devuelve el texto y cada palabra con
+ * su tiempo. Todo queda en la tablet.
  */
 import net from 'node:net'
 import fs from 'node:fs'
@@ -24,7 +29,7 @@ import crypto from 'node:crypto'
 import readline from 'node:readline'
 import { spawn, execFile } from 'node:child_process'
 
-const VERSION = 2
+const VERSION = 3
 const HOME = os.homedir()
 const DIR = path.join(HOME, '.openanimator')
 const TMP = path.join(DIR, 'tmp')
@@ -224,6 +229,200 @@ function transcript(project, session) {
   return items.slice(-400)
 }
 
+// ── Whisper (whisper.cpp) ──────────────────────────────────────────────────────────
+// whisper-install.sh deja el programa en whisper/bin, los modelos en whisper/models y una muestra de voz
+// (whisper/jfk.wav) para medir la velocidad. Las transcripciones van de a una: cada una ocupa los núcleos
+// grandes del procesador.
+const WDIR = path.join(DIR, 'whisper')
+const WBIN = path.join(WDIR, 'bin', 'whisper-cli')
+const WMODELS = path.join(WDIR, 'models')
+const DTW = new Set(['tiny', 'base', 'small', 'medium', 'large.v3', 'large.v3.turbo'])
+const MODEL_FILE = /^ggml-[\w.-]+\.bin$/
+const jobs = new Map() // job → { file, bytes, sample, child, cancelled }
+let wQueue = Promise.resolve()
+const jobId = (s) => (/^[\w-]{1,40}$/.test(String(s || '')) ? String(s) : null)
+const cores = () => os.availableParallelism?.() || os.cpus().length || 4
+const threads = (n) => Math.max(1, Math.min(+n || 4, cores(), 8))
+for (const f of fs.readdirSync(TMP)) if (f.startsWith('whisper-')) fs.rmSync(path.join(TMP, f), { force: true })
+
+function whisperStatus() {
+  const models = []
+  try { for (const f of fs.readdirSync(WMODELS)) if (MODEL_FILE.test(f)) models.push({ file: f, size: fs.statSync(path.join(WMODELS, f)).size }) } catch { /* sin modelos */ }
+  let version = null
+  try { version = fs.readFileSync(path.join(WDIR, 'VERSION'), 'utf8').trim() || null } catch { /* sin instalar */ }
+  return { bin: canRun(WBIN), version, models, sample: fs.existsSync(path.join(WDIR, 'jfk.wav')), busy: [...jobs.values()].some((j) => j.child), cores: cores() }
+}
+
+/** El audio llega en partes: PCM mono de 16 bits a 16 kHz. La cabecera WAV se completa al final. */
+function whisperPut(m) {
+  const id = jobId(m.job)
+  if (!id) throw new Error('Transcripción inválida')
+  let j = jobs.get(id)
+  if (!j) {
+    if (jobs.size >= 4) throw new Error('Hay demasiadas transcripciones pendientes')
+    j = { file: path.join(TMP, `whisper-${id}.wav`), bytes: 0, sample: false, child: null, cancelled: false }
+    fs.writeFileSync(j.file, Buffer.alloc(44), { mode: 0o600 })
+    jobs.set(id, j)
+  }
+  const data = Buffer.from(String(m.pcm || ''), 'base64')
+  if (j.bytes + data.length > 400 << 20) throw new Error('El audio es demasiado largo para transcribirlo en la tablet')
+  fs.appendFileSync(j.file, data)
+  j.bytes += data.length
+  return j.bytes
+}
+
+function wavHeader(bytes) {
+  const h = Buffer.alloc(44)
+  h.write('RIFF', 0); h.writeUInt32LE(36 + bytes, 4); h.write('WAVE', 8); h.write('fmt ', 12); h.writeUInt32LE(16, 16)
+  h.writeUInt16LE(1, 20); h.writeUInt16LE(1, 22); h.writeUInt32LE(16000, 24); h.writeUInt32LE(32000, 28); h.writeUInt16LE(2, 32); h.writeUInt16LE(16, 34)
+  h.write('data', 36); h.writeUInt32LE(bytes, 40)
+  return h
+}
+
+/** whisper-cli no escapa los caracteres de control dentro de los textos ni los NaN: se arreglan antes de leer. */
+function lenientJson(s) {
+  try { return JSON.parse(s) } catch { /* se arregla abajo */ }
+  let out = '', inStr = false, esc = false
+  for (const ch of s) {
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      else if (ch.charCodeAt(0) < 0x20) { out += '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'); continue }
+    } else if (ch === '"') inStr = true
+    out += ch
+  }
+  return JSON.parse(out.replace(/:\s*-?(nan|inf)\b/gi, ': null'))
+}
+
+const num = (v, d = 0) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
+const r3 = (x) => Math.round(x * 1000) / 1000
+const OPENER = /^[¿¡"'“‘«([-]+$/
+
+/**
+ * Palabras con su tiempo a partir de los tokens de whisper-cli (-ojf). El comienzo sale de la alineación
+ * DTW (t_dtw, en centésimas: el momento en que se dice el token); el fin, del tiempo del último token,
+ * sin pasar del comienzo de la palabra siguiente.
+ */
+function whisperResult(j) {
+  const raw = [], texts = []
+  for (const s of Array.isArray(j?.transcription) ? j.transcription : []) {
+    if (typeof s.text === 'string') texts.push(s.text.trim())
+    const segEnd = num(s.offsets?.to) / 1000
+    let cur = null
+    for (const t of Array.isArray(s.tokens) ? s.tokens : []) {
+      const tx = typeof t.text === 'string' ? t.text : ''
+      if (!tx || tx.startsWith('[_')) continue // [_BEG_], [_TT_…], [_EOT_]…
+      const t1 = num(t.offsets?.to, -1000) / 1000
+      const at = num(t.t_dtw, -1) >= 0 ? t.t_dtw / 100 : num(t.offsets?.from, -1000) / 1000
+      // Palabra nueva: token con espacio adelante y con letras o números (o un signo que abre: ¿ ¡ « …).
+      // La puntuación suelta se queda con la palabra anterior.
+      const letters = /[\p{L}\p{N}]/u.test(tx)
+      if (!cur || (/^\s/.test(tx) && (letters || OPENER.test(tx.trim())) && !OPENER.test(cur.w))) {
+        if (cur) raw.push(cur)
+        cur = { w: tx.trim(), start: at, t1, segEnd }
+      } else {
+        cur.w += letters && !OPENER.test(cur.w) ? tx : tx.trim()
+        cur.t1 = Math.max(cur.t1, t1)
+      }
+    }
+    if (cur) raw.push(cur)
+  }
+  const list = raw.filter((w) => w.w && /[\p{L}\p{N}]/u.test(w.w))
+  const words = []
+  let prev = 0
+  for (let i = 0; i < list.length; i++) {
+    const w = list[i], next = list[i + 1]
+    const start = Math.max(prev, w.start >= 0 ? w.start : prev)
+    const hi = Math.max(start, next ? next.start : w.segEnd)
+    let end = w.t1 > start ? Math.min(w.t1, hi) : hi
+    if (end - start < 0.02) end = next ? Math.max(hi, start + 0.02) : start + 0.2
+    words.push({ w: w.w.replace(/\s+/g, ' ').trim(), start: r3(start), end: r3(end) })
+    prev = start
+  }
+  return { text: texts.join(' ').replace(/\s+/g, ' ').trim(), words, lang: typeof j?.result?.language === 'string' ? j.result.language : null }
+}
+
+const lastLines = (t) => t.trim().split('\n').filter((l) => l.trim() && !/progress =/.test(l)).slice(-3).join(' · ').slice(-600)
+
+/** Corre whisper-cli sobre el audio subido (o la muestra) cuando termine la transcripción anterior. */
+function whisperRun(m) {
+  const id = jobId(m.job)
+  if (!id) throw new Error('Transcripción inválida')
+  if (!canRun(WBIN)) throw new Error('Whisper no está instalado en Termux: instalalo en Ajustes › Plugins › Whisper.')
+  const model = String(m.model || '')
+  if (!MODEL_FILE.test(model) || !fs.existsSync(path.join(WMODELS, model))) throw new Error(`Falta el modelo de Whisper ${model || ''}: descargalo en Ajustes › Plugins › Whisper.`)
+  let j = jobs.get(id)
+  if (m.sample) {
+    const file = path.join(WDIR, 'jfk.wav')
+    if (!fs.existsSync(file)) throw new Error('Falta la muestra de voz: volvé a instalar Whisper.')
+    if (j) throw new Error('Transcripción repetida')
+    j = { file, bytes: fs.statSync(file).size - 44, sample: true, child: null, cancelled: false }
+    jobs.set(id, j)
+  } else {
+    if (!j || !j.bytes) throw new Error('No llegó el audio')
+    const fd = fs.openSync(j.file, 'r+')
+    try { fs.writeSync(fd, wavHeader(j.bytes), 0, 44, 0) } finally { fs.closeSync(fd) }
+  }
+  const lang = /^[a-z]{2,3}$/.test(String(m.lang || '')) ? String(m.lang) : 'auto'
+  const job = j
+  const run = () => new Promise((resolve, reject) => {
+    if (job.cancelled) { reject(new Error('Transcripción cancelada')); return }
+    const out = path.join(TMP, `whisper-${id}`)
+    // -bs 1: búsqueda simple (el doble de rápida que la de 5 haces, y alcanza para una voz clara).
+    // -sns: sin símbolos de "no habla" (♪…), como el Whisper original. DTW necesita -nfa.
+    const args = ['-m', path.join(WMODELS, model), '-f', job.file, '-l', lang, '-t', String(threads(m.threads)), '-bs', '1', '-sns', '-ojf', '-of', out, '-pp']
+    if (DTW.has(m.dtw)) args.push('-nfa', '--dtw', m.dtw)
+    const t0 = Date.now()
+    let err = '', audioSec = 0, last = -1
+    log('whisper', id, model, lang, job.sample ? 'muestra' : `${Math.round(job.bytes / 32000)} s`)
+    const child = spawn(WBIN, args, { cwd: TMP, stdio: ['ignore', 'ignore', 'pipe'] })
+    job.child = child
+    readline.createInterface({ input: child.stderr, crlfDelay: Infinity }).on('line', (l) => {
+      err = (err + l + '\n').slice(-8000)
+      const p = /progress =\s*(\d+)%/.exec(l)
+      if (p && +p[1] !== last) { last = +p[1]; send({ t: 'wprog', job: id, pct: last }) }
+      const a = /\((\d+) samples, ([\d.]+) sec\)/.exec(l)
+      if (a) audioSec = +a[2]
+    })
+    child.on('error', (e) => { err += `\n${e.message}` })
+    child.on('close', (code, signal) => {
+      job.child = null
+      const json = `${out}.json`
+      try {
+        if (job.cancelled) throw new Error('Transcripción cancelada')
+        // Si no pudo leer el audio, whisper-cli 1.9.4 igual termina con 0: manda que exista el resultado.
+        if (!fs.existsSync(json)) throw new Error(`Whisper falló (${signal || code}): ${lastLines(err) || 'sin detalles'}`)
+        const r = whisperResult(lenientJson(fs.readFileSync(json, 'utf8')))
+        log('whisper listo', id, `${r.words.length} palabras`, `${Date.now() - t0} ms`)
+        resolve({ ...r, ms: Date.now() - t0, audioSec: audioSec || job.bytes / 32000 })
+      } catch (e) { log('whisper', id, e.message); reject(e) } finally { fs.rmSync(json, { force: true }) }
+    })
+  })
+  job.queued = true
+  const done = wQueue.then(run, run).finally(() => { jobs.delete(id); if (!job.sample) fs.rmSync(job.file, { force: true }) })
+  wQueue = done.catch(() => {})
+  return done
+}
+
+function whisperCancel(id) {
+  const j = jobs.get(id)
+  if (!j) return false
+  j.cancelled = true
+  if (j.child) { try { j.child.kill('SIGTERM') } catch { /* ya terminó */ } return true }
+  // En la fila, whisperRun lo descarta al llegarle el turno; si sólo se estaba subiendo, se borra ya.
+  if (!j.queued) { jobs.delete(id); if (!j.sample) fs.rmSync(j.file, { force: true }) }
+  return true
+}
+/** La app se fue: sus transcripciones ya no tienen a quién responder. */
+function dropJobs() { for (const id of [...jobs.keys()]) whisperCancel(id) }
+
+function whisperRemove(file) {
+  if (!MODEL_FILE.test(file)) throw new Error('Modelo inválido')
+  fs.rmSync(path.join(WMODELS, file), { force: true })
+  return whisperStatus()
+}
+
 // ── la app (una sola conexión a la vez) ─────────────────────────────────────────
 let app = null
 let appQueue = Promise.resolve()
@@ -265,6 +464,11 @@ async function fromApp(m) {
         if (m.op === 'status') value = await status()
         else if (m.op === 'sessions') value = listSessions(m.project)
         else if (m.op === 'transcript') value = transcript(m.project, String(m.session || ''))
+        else if (m.op === 'whisper.status') value = whisperStatus()
+        else if (m.op === 'whisper.put') value = whisperPut(m)
+        else if (m.op === 'whisper.run') value = await whisperRun(m)
+        else if (m.op === 'whisper.cancel') value = whisperCancel(String(m.job || ''))
+        else if (m.op === 'whisper.remove') value = whisperRemove(String(m.model || ''))
         else if (m.op === 'shutdown') { send({ t: 'reply', id: m.id, ok: true, value: true }); setTimeout(() => shutdown(0), 100); return }
         else throw new Error('Pedido desconocido: ' + m.op)
       } catch (e) { error = String(e?.message || e) }
@@ -306,7 +510,7 @@ function listen(token) {
           app = sock
           lastApp = Date.now()
           // Una app recién abierta no conoce las conversaciones viejas: se cierran.
-          if (m.fresh) { for (const id of [...procs.keys()]) killProc(id); outbox = []; outboxBytes = 0 }
+          if (m.fresh) { for (const id of [...procs.keys()]) killProc(id); dropJobs(); outbox = []; outboxBytes = 0 }
           sock.write(JSON.stringify({ t: 'hello', ok: true, version: VERSION, pid: process.pid }) + '\n')
           const pending = outbox
           outbox = []; outboxBytes = 0
@@ -335,6 +539,7 @@ function listen(token) {
         app = null
         lastApp = Date.now()
         for (const [cid, c] of calls) { calls.delete(cid); c.reply({ content: [{ type: 'text', text: 'OpenAnimator se desconectó durante la herramienta.' }], isError: true }) }
+        dropJobs()
       }
     })
   })
