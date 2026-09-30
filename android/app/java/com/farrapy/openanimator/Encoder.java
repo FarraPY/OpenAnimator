@@ -15,6 +15,7 @@ import android.opengl.EGLExt;
 import android.opengl.EGLSurface;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.opengl.GLES30;
 import android.opengl.GLUtils;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -187,6 +188,23 @@ final class Encoder {
     JSONObject gpuStats() throws JSONException {
         Job j = job;
         return j == null ? new JSONObject() : j.gpuStats();
+    }
+
+    /**
+     * Turns the ring off (the test pattern didn't match through it); false if the pattern didn't go through the
+     * ring (it wasn't on and didn't fail): then trying without it changes nothing.
+     */
+    boolean gpuRingOff(final String why) throws Exception {
+        final Job j = job;
+        if (j == null) throw new IOException("No hay una exportación en curso");
+        return run(new Callable<Boolean>() {
+            @Override
+            public Boolean call() {
+                if (!j.ring) return j.ringError != null;
+                j.ringFailed(new IOException(why));
+                return true;
+            }
+        });
     }
 
     /** Forgets the images still expected (the capture starts over from another frame). */
@@ -884,16 +902,23 @@ final class Encoder {
             if (eglDisplay == EGL14.EGL_NO_DISPLAY) throw new IOException("Sin pantalla EGL");
             int[] ver = new int[2];
             if (!EGL14.eglInitialize(eglDisplay, ver, 0, ver, 1)) throw new IOException("eglInitialize falló");
-            int[] attribs = {
-                    EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
-                    EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                    0x3142 /* EGL_RECORDABLE_ANDROID */, 1,
-                    EGL14.EGL_NONE};
             EGLConfig[] configs = new EGLConfig[1];
             int[] num = new int[1];
-            if (!EGL14.eglChooseConfig(eglDisplay, attribs, 0, configs, 0, 1, num, 0) || num[0] < 1) throw new IOException("Sin configuración EGL grabable");
-            eglContext = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE}, 0);
-            if (eglContext == null || eglContext == EGL14.EGL_NO_CONTEXT) throw new IOException("No se pudo crear el contexto EGL");
+            // OpenGL ES 3 si hay (la captura por GPU lee la marca de cada imagen sin esperar a la GPU); si no, ES 2.
+            for (int v = 3; v >= 2 && eglContext == EGL14.EGL_NO_CONTEXT; v--) {
+                int[] attribs = {
+                        EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
+                        EGL14.EGL_RENDERABLE_TYPE, v == 3 ? 0x40 /* EGL_OPENGL_ES3_BIT_KHR */ : EGL14.EGL_OPENGL_ES2_BIT,
+                        0x3142 /* EGL_RECORDABLE_ANDROID */, 1,
+                        EGL14.EGL_NONE};
+                if (!EGL14.eglChooseConfig(eglDisplay, attribs, 0, configs, 0, 1, num, 0) || num[0] < 1) continue;
+                EGLContext c = EGL14.eglCreateContext(eglDisplay, configs[0], EGL14.EGL_NO_CONTEXT, new int[]{EGL14.EGL_CONTEXT_CLIENT_VERSION, v, EGL14.EGL_NONE}, 0);
+                if (c != null && c != EGL14.EGL_NO_CONTEXT) {
+                    eglContext = c;
+                    es3 = v == 3;
+                }
+            }
+            if (eglContext == EGL14.EGL_NO_CONTEXT) throw new IOException("No se pudo crear el contexto EGL (grabable)");
             eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, configs[0], input, new int[]{EGL14.EGL_NONE}, 0);
             if (eglSurface == null || eglSurface == EGL14.EGL_NO_SURFACE) throw new IOException("No se pudo crear la superficie EGL");
             if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) throw new IOException("eglMakeCurrent falló");
@@ -944,6 +969,31 @@ final class Encoder {
         final float[] stMatrix = new float[16];
         int capHeight, capMarker;
         final ByteBuffer markPixels = ByteBuffer.allocateDirect(8 * 4).order(ByteOrder.nativeOrder());
+        /**
+         * Ring (OpenGL ES 3): each image is copied to one of RING textures and the read of its marker is left to
+         * the GPU (a pixel buffer and a fence); only when the GPU finished it the image is judged and encoded. So
+         * taking an image never waits for the GPU: waiting there (3,3 ms per image on the Tab S8+) let the virtual
+         * display replace the next image while this thread was busy, and that frame was lost.
+         */
+        static final int RING = 4;
+        boolean es3, ring;
+        final int[] slotTex = new int[RING], slotFbo = new int[RING], slotPbo = new int[RING];
+        final long[] slotFence = new long[RING], slotTs = new long[RING];
+        final double[] slotWall = new double[RING];
+        final ArrayDeque<Integer> pending = new ArrayDeque<>(), freeSlots = new ArrayDeque<>();
+        Handler frameHandler;
+        Executor gpuExec;
+        /** Why the ring was turned off (for the details), or null. */
+        volatile String ringError;
+        boolean pollScheduled;
+        long pendingSince, lastMatchedTs;
+        /**
+         * For the details, why each frame was lost: this thread was busy since before the lost image arrived (it
+         * was replaced while waiting), or it was free (the display never showed it). busySince: when the thread
+         * got busy without a break; workEnd: when it last finished; imagePeriod: the shortest time between images.
+         */
+        long busySince, workEnd, lastImageTs, imagePeriod;
+        final long[] slotBusy = new long[RING];
         /** Lo que espera la captura, en orden (lo agrega otro hilo: se protege con gpuLock). */
         final Object gpuLock = new Object();
         final ArrayDeque<Want> wants = new ArrayDeque<>();
@@ -971,6 +1021,9 @@ final class Encoder {
                 frameThread = new HandlerThread("oa-frames");
                 frameThread.start();
             }
+            frameHandler = new Handler(frameThread.getLooper());
+            gpuExec = exec;
+            ring = es3 && ringSetup();
             final SurfaceTexture s = new SurfaceTexture(oesTex);
             s.setDefaultBufferSize(w, h + marker);
             // Cada imagen nueva se toma en el hilo del codificador (el del contexto de OpenGL), una por aviso.
@@ -1040,6 +1093,7 @@ final class Encoder {
         void latch(SurfaceTexture s) {
             if (s != st || cancelled) return;
             long t0 = System.nanoTime();
+            long busy = workBegin(t0);
             double wall0 = wallMs();
             try {
                 s.updateTexImage();
@@ -1047,6 +1101,8 @@ final class Encoder {
                 statTexNs += System.nanoTime() - t0;
                 // Cuánto esperó esta imagen desde que la pantalla virtual la compuso hasta que se tomó.
                 long ts = s.getTimestamp();
+                if (lastImageTs > 0 && ts - lastImageTs >= 2_000_000L && (imagePeriod == 0 || ts - lastImageTs < imagePeriod)) imagePeriod = ts - lastImageTs;
+                lastImageTs = ts;
                 if (ts > 0 && t0 > ts) {
                     double q = (t0 - ts) / 1e6;
                     if (q < 5000) {
@@ -1062,6 +1118,14 @@ final class Encoder {
                         statImgIdle++;
                         return;
                     }
+                }
+                if (ring) {
+                    try {
+                        copyToRing(ts, wall0, busy);
+                    } catch (Exception e) {
+                        ringFailed(e);
+                    }
+                    return;
                 }
                 long m0 = System.nanoTime();
                 int m = readMarker();
@@ -1083,6 +1147,7 @@ final class Encoder {
                         // se pierde con todo lo que venía detrás (el video no puede saltear ni desordenar fotogramas).
                         if (after(m, w.seq)) {
                             statImgNewer++;
+                            noteLoss(ts, busy);
                             for (Want x : wants) x.status = Want.LOST;
                             wants.clear();
                             lostPending = true;
@@ -1093,6 +1158,7 @@ final class Encoder {
                     wants.pollFirst();
                 }
                 statImgMatched++;
+                lastMatchedTs = ts;
                 w.imageAt = wall0;
                 if (!w.probe) {
                     long e0 = System.nanoTime();
@@ -1120,7 +1186,8 @@ final class Encoder {
                     gpuLock.notifyAll();
                 }
             } finally {
-                long d = System.nanoTime() - t0;
+                workEnd = System.nanoTime();
+                long d = workEnd - t0;
                 statLatches++;
                 statLatchNs += d;
                 if (d > statLatchMaxNs) statLatchMaxNs = d;
@@ -1130,6 +1197,10 @@ final class Encoder {
         // para los detalles de la exportación (se leen desde otro hilo: son aproximados)
         volatile long statLatches, statLatchNs, statLatchMaxNs, statEncodeMaxNs;
         volatile long statTexNs, statMarkNs, statMarkN, statDrainNs, statDrawNs, statSwapNs, statSwapMaxNs, statEncN;
+        volatile long statCopyNs, statCopyN, statWaitNs, statWaitN;
+        volatile int statRingMax;
+        final long[] statGaps = new long[4];
+        volatile long statLostBusy, statLostIdle;
         volatile long statImgMatched, statImgBusy, statImgOld, statImgNewer, statImgIdle, statQueueN;
         volatile double statQueueMs, statQueueMaxMs;
 
@@ -1155,17 +1226,38 @@ final class Encoder {
             o.put("swapMs", statEncN > 0 ? statSwapNs / 1e6 / statEncN : 0);
             o.put("swapMsMax", statSwapMaxNs / 1e6);
             o.put("drainMs", statEncN > 0 ? statDrainNs / 1e6 / statEncN : 0);
+            // con el anillo: copiar cada imagen (sólo encargarlo), cuántas veces hubo que esperar a la GPU y cuántas
+            // imágenes llegaron a estar en cola; y, de cada pérdida, a cuánto llegó la imagen que la reemplazó
+            o.put("ring", ring);
+            o.put("es3", es3);
+            if (ringError != null) o.put("ringError", ringError);
+            o.put("copyMs", statCopyN > 0 ? statCopyNs / 1e6 / statCopyN : 0);
+            o.put("waits", statWaitN);
+            o.put("waitMs", statWaitN > 0 ? statWaitNs / 1e6 / statWaitN : 0);
+            o.put("ringMax", statRingMax);
+            org.json.JSONArray gaps = new org.json.JSONArray();
+            for (long g : statGaps) gaps.put(g);
+            o.put("gaps", gaps);
+            o.put("lostBusy", statLostBusy);
+            o.put("lostIdle", statLostIdle);
+            o.put("imageMs", imagePeriod / 1e6);
             return o;
         }
 
         /** The current image of the virtual display (without its marker strip) goes to the encoder. */
         private void encodeOes() throws IOException {
+            encodeImage(-1);
+        }
+
+        /** To the encoder: ring slot k (-1: the virtual display's current image, without its marker strip). */
+        private void encodeImage(int k) throws IOException {
             long a = System.nanoTime();
             drain(false);
             long b = System.nanoTime();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, width, height);
-            drawOes(false);
+            if (k < 0) drawOes(false);
+            else drawSlot(k, oesQuad);
             checkGl("gpu draw");
             long ptsNs = Math.round(frames * 1e9 / fps);
             EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
@@ -1201,6 +1293,8 @@ final class Encoder {
                 stSurface = null;
             }
             if (eglDisplay == EGL14.EGL_NO_DISPLAY) return;
+            ringRelease();
+            lastMatchedTs = lastImageTs = 0;
             int[] one = new int[1];
             if (oesTex != 0) { one[0] = oesTex; GLES20.glDeleteTextures(1, one, 0); oesTex = 0; }
             if (markFbo != 0) { one[0] = markFbo; GLES20.glDeleteFramebuffers(1, one, 0); markFbo = 0; }
@@ -1211,6 +1305,15 @@ final class Encoder {
 
         /** The number the page painted in its marker strip: 8 cells, 3 bits each (R, G, B on or off). */
         private int readMarker() {
+            drawMarker();
+            markPixels.position(0);
+            GLES20.glReadPixels(0, 0, 8, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, markPixels);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            return decodeMarker(markPixels);
+        }
+
+        /** The 8 cells of the marker strip of the current image into markFbo (8×1). */
+        private void drawMarker() {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, markFbo);
             GLES20.glViewport(0, 0, 8, 1);
             GLES20.glUseProgram(markProgram);
@@ -1222,16 +1325,287 @@ final class Encoder {
             GLES20.glVertexAttribPointer(markPos, 2, GLES20.GL_FLOAT, false, 16, oesQuad);
             GLES20.glEnableVertexAttribArray(markPos);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-            markPixels.position(0);
-            GLES20.glReadPixels(0, 0, 8, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, markPixels);
-            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+        }
+
+        private static int decodeMarker(ByteBuffer px) {
             int v = 0;
             for (int i = 0; i < 8; i++) {
-                if ((markPixels.get(i * 4) & 0xFF) > 127) v |= 1 << (3 * i);
-                if ((markPixels.get(i * 4 + 1) & 0xFF) > 127) v |= 1 << (3 * i + 1);
-                if ((markPixels.get(i * 4 + 2) & 0xFF) > 127) v |= 1 << (3 * i + 2);
+                if ((px.get(i * 4) & 0xFF) > 127) v |= 1 << (3 * i);
+                if ((px.get(i * 4 + 1) & 0xFF) > 127) v |= 1 << (3 * i + 1);
+                if ((px.get(i * 4 + 2) & 0xFF) > 127) v |= 1 << (3 * i + 2);
             }
             return v;
+        }
+
+        // ── el anillo (OpenGL ES 3) ─────────────────────────────────────────────────
+
+        private boolean ringSetup() {
+            try {
+                GLES20.glGenBuffers(RING, slotPbo, 0);
+                for (int i = 0; i < RING; i++) {
+                    slotTex[i] = texture2d(width, height);
+                    slotFbo[i] = framebuffer(slotTex[i]);
+                    GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, slotPbo[i]);
+                    GLES20.glBufferData(GLES30.GL_PIXEL_PACK_BUFFER, 8 * 4, null, GLES30.GL_STREAM_READ);
+                    freeSlots.addLast(i);
+                }
+                GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+                checkGl("anillo");
+                return true;
+            } catch (Exception e) {
+                // Sin memoria para las texturas (u otro problema): se captura como antes, esperando a la GPU.
+                Log.w(TAG, "captura por GPU sin anillo", e);
+                ringRelease();
+                return false;
+            }
+        }
+
+        /**
+         * The image just taken goes to a free slot: the frame (without the strip, as the encoder would get it) to
+         * its texture and its marker to its pixel buffer, all queued on the GPU; a fence tells when it's done.
+         */
+        private void copyToRing(long ts, double wall0, long busy) throws IOException {
+            long c0 = System.nanoTime();
+            if (freeSlots.isEmpty()) processReady(true); // lleno: se espera a la GPU por la más vieja
+            int k = freeSlots.pollFirst();
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, slotFbo[k]);
+            GLES20.glViewport(0, 0, width, height);
+            drawOes(false);
+            drawMarker();
+            GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, slotPbo[k]);
+            GLES30.glReadPixels(0, 0, 8, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, 0);
+            GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(0, 0, width, height);
+            slotFence[k] = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+            GLES20.glFlush();
+            checkGl("gpu copy");
+            slotTs[k] = ts;
+            slotWall[k] = wall0;
+            slotBusy[k] = busy;
+            if (pending.isEmpty()) pendingSince = System.nanoTime();
+            pending.addLast(k);
+            if (pending.size() > statRingMax) statRingMax = pending.size();
+            statCopyNs += System.nanoTime() - c0;
+            statCopyN++;
+            processReady(false);
+            schedulePoll();
+        }
+
+        /** The slots the GPU already finished, in order: judged and encoded now. With block, waits for the oldest. */
+        private void processReady(boolean block) throws IOException {
+            while (!pending.isEmpty()) {
+                int k = pending.peekFirst();
+                long w0 = System.nanoTime();
+                int r = GLES30.glClientWaitSync(slotFence[k], GLES30.GL_SYNC_FLUSH_COMMANDS_BIT, 0);
+                if (r == GLES30.GL_TIMEOUT_EXPIRED) {
+                    if (!block) return;
+                    for (int i = 0; i < 20 && r == GLES30.GL_TIMEOUT_EXPIRED; i++) r = GLES30.glClientWaitSync(slotFence[k], GLES30.GL_SYNC_FLUSH_COMMANDS_BIT, 100_000_000L);
+                    if (r == GLES30.GL_TIMEOUT_EXPIRED) throw new IOException("La GPU no terminó de copiar una imagen");
+                    statWaitNs += System.nanoTime() - w0;
+                    statWaitN++;
+                }
+                if (r != GLES30.GL_ALREADY_SIGNALED && r != GLES30.GL_CONDITION_SATISFIED) throw new IOException("glClientWaitSync: 0x" + Integer.toHexString(r) + " (error 0x" + Integer.toHexString(GLES20.glGetError()) + ")");
+                GLES30.glDeleteSync(slotFence[k]);
+                slotFence[k] = 0;
+                pending.pollFirst();
+                if (!pending.isEmpty()) pendingSince = System.nanoTime();
+                try {
+                    processSlot(k);
+                } finally {
+                    freeSlots.addLast(k);
+                }
+                block = false;
+            }
+        }
+
+        /** One slot whose copy is done: its marker says which frame it is; the expected one is encoded. */
+        private void processSlot(int k) throws IOException {
+            long m0 = System.nanoTime();
+            GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, slotPbo[k]);
+            java.nio.Buffer mapped = GLES30.glMapBufferRange(GLES30.GL_PIXEL_PACK_BUFFER, 0, 8 * 4, GLES30.GL_MAP_READ_BIT);
+            if (!(mapped instanceof ByteBuffer)) {
+                GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+                throw new IOException("No se pudo leer la marca de la imagen (glMapBufferRange)");
+            }
+            int m = decodeMarker(((ByteBuffer) mapped).order(ByteOrder.nativeOrder()));
+            GLES30.glUnmapBuffer(GLES30.GL_PIXEL_PACK_BUFFER);
+            GLES20.glBindBuffer(GLES30.GL_PIXEL_PACK_BUFFER, 0);
+            statMarkNs += System.nanoTime() - m0;
+            statMarkN++;
+            Want w;
+            synchronized (gpuLock) {
+                w = wants.peekFirst();
+                if (lostPending || w == null) {
+                    statImgIdle++;
+                    return;
+                }
+                if (m == 0) {
+                    statImgBusy++;
+                    return;
+                }
+                if (m != w.seq) {
+                    if (after(m, w.seq)) {
+                        statImgNewer++;
+                        noteLoss(slotTs[k], slotBusy[k]);
+                        for (Want x : wants) x.status = Want.LOST;
+                        wants.clear();
+                        lostPending = true;
+                        gpuLock.notifyAll();
+                    } else statImgOld++;
+                    return;
+                }
+                wants.pollFirst();
+            }
+            statImgMatched++;
+            lastMatchedTs = slotTs[k];
+            w.imageAt = slotWall[k];
+            if (!w.probe) {
+                long e0 = System.nanoTime();
+                encodeImage(k);
+                long e = System.nanoTime() - e0;
+                if (e > statEncodeMaxNs) statEncodeMaxNs = e;
+                w.encodedAt = wallMs();
+            }
+            IOException small = null;
+            if (w.probe || w.preview) {
+                // Desde la copia (así la prueba del patrón también comprueba la copia: orientación y recorte).
+                try {
+                    ByteBuffer px = readSmallSlot(k);
+                    w.pixels = new byte[px.capacity()];
+                    px.position(0);
+                    px.get(w.pixels);
+                    w.pw = prevW;
+                    w.ph = prevH;
+                } catch (IOException e) {
+                    small = e; // el fotograma ya está en el video: queda hecho (sin imagen chica) y el anillo se apaga
+                }
+            }
+            synchronized (gpuLock) {
+                w.status = Want.DONE;
+                gpuLock.notifyAll();
+            }
+            if (small != null) throw small;
+        }
+
+        /** If slots are still waiting for the GPU and no new image comes to push them, they're checked again soon. */
+        private void schedulePoll() {
+            if (pending.isEmpty() || pollScheduled || frameHandler == null) return;
+            pollScheduled = true;
+            final Executor ex = gpuExec;
+            final SurfaceTexture cur = st;
+            frameHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        ex.execute(new Runnable() {
+                            @Override
+                            public void run() {
+                                pollScheduled = false;
+                                if (st != cur || cancelled || !ring) return;
+                                long now = System.nanoTime();
+                                workBegin(now);
+                                try {
+                                    // Más de medio segundo sin que la GPU termine: se la espera (y si no, falla).
+                                    processReady(now - pendingSince > 500_000_000L);
+                                } catch (Exception e) {
+                                    ringFailed(e);
+                                    return;
+                                } finally {
+                                    workEnd = System.nanoTime();
+                                }
+                                schedulePoll();
+                            }
+                        });
+                    } catch (RejectedExecutionException ignored) {
+                        // la exportación ya terminó
+                    }
+                }
+            }, 2);
+        }
+
+        /** Slot k drawn with the given quad (oesQuad: as it is; quad, the bitmaps' one: upside down). */
+        private void drawSlot(int k, FloatBuffer q) {
+            GLES20.glUseProgram(program);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, slotTex[k]);
+            q.position(0);
+            GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, q);
+            GLES20.glEnableVertexAttribArray(aPos);
+            q.position(2);
+            GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, q);
+            GLES20.glEnableVertexAttribArray(aTex);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+        }
+
+        /** Slot k, 480 pixels wide, RGBA with the rows from top to bottom (like readSmall). */
+        private ByteBuffer readSmallSlot(int k) throws IOException {
+            ensurePrev();
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo);
+            GLES20.glViewport(0, 0, prevW, prevH);
+            drawSlot(k, quad);
+            ByteBuffer px = ByteBuffer.allocateDirect(prevW * prevH * 4).order(ByteOrder.nativeOrder());
+            GLES20.glReadPixels(0, 0, prevW, prevH, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px);
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
+            GLES20.glViewport(0, 0, width, height);
+            checkGl("gpu preview");
+            return px;
+        }
+
+        /**
+         * For the details, a lost frame: how far its replacement came after the last good image (SurfaceTexture
+         * times) and whether this thread was busy all along since before the lost image could arrive (busy: how
+         * long it had been busy without a break when it took the replacement).
+         */
+        private void noteLoss(long ts, long busy) {
+            long period = imagePeriod > 0 ? imagePeriod : 8_333_333L;
+            if (busy >= period * 3 / 4) statLostBusy++;
+            else statLostIdle++;
+            if (lastMatchedTs <= 0 || ts <= lastMatchedTs) return;
+            double ms = (ts - lastMatchedTs) / 1e6;
+            statGaps[ms <= 10 ? 0 : ms <= 18 ? 1 : ms <= 26 ? 2 : 3]++;
+        }
+
+        /** This thread starts some capture work at now: how long it has been busy without a break (0: it was free). */
+        private long workBegin(long now) {
+            if (workEnd == 0 || now - workEnd > 300_000L) {
+                busySince = now;
+                return 0;
+            }
+            return now - busySince;
+        }
+
+        /**
+         * The ring failed (some OpenGL detail of this device): the capture goes on as before, waiting for the GPU
+         * on each image. What was in the ring is lost and gets requested again.
+         */
+        void ringFailed(Exception e) {
+            Log.w(TAG, "captura por GPU: sigue sin el anillo", e);
+            ringError = String.valueOf(e.getMessage());
+            ringRelease();
+            synchronized (gpuLock) {
+                if (!wants.isEmpty()) {
+                    for (Want x : wants) x.status = Want.LOST;
+                    wants.clear();
+                    lostPending = true;
+                }
+                gpuLock.notifyAll();
+            }
+        }
+
+        private void ringRelease() {
+            if (frameHandler != null) frameHandler.removeCallbacksAndMessages(null);
+            pollScheduled = false;
+            int[] one = new int[1];
+            for (int i = 0; i < RING; i++) {
+                if (slotFence[i] != 0) { GLES30.glDeleteSync(slotFence[i]); slotFence[i] = 0; }
+                if (slotFbo[i] != 0) { one[0] = slotFbo[i]; GLES20.glDeleteFramebuffers(1, one, 0); slotFbo[i] = 0; }
+                if (slotTex[i] != 0) { one[0] = slotTex[i]; GLES20.glDeleteTextures(1, one, 0); slotTex[i] = 0; }
+                if (slotPbo[i] != 0) { one[0] = slotPbo[i]; GLES20.glDeleteBuffers(1, one, 0); slotPbo[i] = 0; }
+            }
+            pending.clear();
+            freeSlots.clear();
+            ring = false;
         }
 
         /** The virtual display's image without the marker strip; flip=true for reading it back (rows top-down). */
@@ -1255,12 +1629,7 @@ final class Encoder {
 
         /** The current image, 480 pixels wide, RGBA with the rows from top to bottom. */
         private ByteBuffer readSmall() throws IOException {
-            if (prevFbo == 0) {
-                prevW = 480;
-                prevH = Math.max(2, Math.round(480f * height / width));
-                prevTexture = texture2d(prevW, prevH);
-                prevFbo = framebuffer(prevTexture);
-            }
+            ensurePrev();
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo);
             GLES20.glViewport(0, 0, prevW, prevH);
             drawOes(true);
@@ -1269,6 +1638,14 @@ final class Encoder {
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0);
             GLES20.glViewport(0, 0, width, height);
             return px;
+        }
+
+        private void ensurePrev() throws IOException {
+            if (prevFbo != 0) return;
+            prevW = 480;
+            prevH = Math.max(2, Math.round(480f * height / width));
+            prevTexture = texture2d(prevW, prevH);
+            prevFbo = framebuffer(prevTexture);
         }
 
         private void gpuPrograms() throws IOException {

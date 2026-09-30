@@ -254,17 +254,30 @@ final class Capture {
         // Prueba: la página muestra un patrón conocido. Si lo que llega al codificador no es eso (colores,
         // orientación, recorte de la franja), este equipo usa el otro método.
         seq = TEST_SEQ;
-        Encoder.Want w = encoder.gpuExpect(TEST_SEQ, false, true);
-        post("window.__oaCapTest(" + TEST_SEQ + ");0");
-        if (!encoder.gpuAwait(w, 10000) || w.status != Encoder.Want.DONE) throw new IOException("La pantalla virtual no mostró el patrón de prueba");
-        String bad = checkPattern(w.pixels, w.pw, w.ph);
-        if (bad != null) throw new IOException("La captura por GPU no coincide con la página (" + bad + ")");
+        String bad = probe(false);
+        // El patrón pasa por el anillo del codificador (la copia de cada imagen): si no coincide, se prueba sin él.
+        if (bad != null && encoder.gpuRingOff("la prueba del patrón no coincidió: " + bad)) bad = probe(true);
+        if (bad != null) throw new IOException(bad);
         ahead.clear();
         depth = 2;
         blockFrames = blockDrops = 0;
         java.util.Arrays.fill(framesAt, 0);
         java.util.Arrays.fill(dropsAt, 0);
         lastPreviewReq = 0;
+    }
+
+    /**
+     * Shows the test pattern and checks what reaches the encoder; null if it matches, otherwise why not. Again:
+     * the pattern is already on screen, so a frame of the scene goes first (else no new image would come).
+     */
+    private String probe(boolean again) throws Exception {
+        encoder.gpuForget();
+        Encoder.Want w = encoder.gpuExpect(TEST_SEQ, false, true);
+        if (again) post("window.__oaCap(0," + (TEST_SEQ - 1) + ");0");
+        post("window.__oaCapTest(" + TEST_SEQ + ");0");
+        if (!encoder.gpuAwait(w, 10000) || w.status != Encoder.Want.DONE) return "La pantalla virtual no mostró el patrón de prueba";
+        String bad = checkPattern(w.pixels, w.pw, w.ph);
+        return bad == null ? null : "La captura por GPU no coincide con la página (" + bad + ")";
     }
 
     private void waitReady() throws Exception {

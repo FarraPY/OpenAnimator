@@ -65,6 +65,8 @@ type Diag = {
     encoder?: {
       images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
       texMs?: number; markMs?: number; drawMs?: number; swapMs?: number; swapMsMax?: number; drainMs?: number
+      ring?: boolean; es3?: boolean; ringError?: string; copyMs?: number; waits?: number; waitMs?: number; ringMax?: number; gaps?: number[]
+      lostBusy?: number; lostIdle?: number; imageMs?: number
       matched?: number; busy?: number; old?: number; newer?: number; idle?: number; queueMs?: number; queueMsMax?: number
     }
     timeline?: Record<string, number[]>; timelineN?: number; frameIntervalMs?: number; sample?: number[][]; timelineError?: string
@@ -202,7 +204,18 @@ class Export {
       if (e && e.images) {
         lines.push(`Hilo de la GPU: ${e.images} imágenes, ${msf(e.msPerImage)} cada una (máx ${msf(e.msMax)}) · codificar máx ${msf(e.encodeMsMax)} · escrituras pendientes máx ${e.writesPendingMax ?? 0}`)
         const ms1 = (x?: number) => (x == null ? '—' : `${x.toFixed(1).replace('.', ',')} ms`)
-        if (e.texMs != null) lines.push(`  por imagen: tomarla ${ms1(e.texMs)} · leer su marca ${ms1(e.markMs)}; por fotograma: dibujarlo ${ms1(e.drawMs)} · entregarlo al codificador ${ms1(e.swapMs)} (máx ${ms1(e.swapMsMax)}) · sacar lo codificado ${ms1(e.drainMs)}`)
+        if (e.texMs != null) lines.push(`  por imagen: tomarla ${ms1(e.texMs)}${e.copyMs ? ` · copiarla al anillo ${ms1(e.copyMs)}` : ''} · leer su marca ${ms1(e.markMs)}; por fotograma: dibujarlo ${ms1(e.drawMs)} · entregarlo al codificador ${ms1(e.swapMs)} (máx ${ms1(e.swapMsMax)}) · sacar lo codificado ${ms1(e.drainMs)}`)
+        if (e.ring != null || e.ringError) {
+          const how = e.ring ? `sí · hasta ${e.ringMax ?? 0} imágenes esperando a la GPU · hubo que esperarla ${e.waits ?? 0} veces${e.waits ? ` (${ms1(e.waitMs)})` : ''}`
+            : e.ringError ? `se apagó (${e.ringError})` : e.es3 === false ? 'no (sin OpenGL ES 3)' : 'no'
+          lines.push(`Anillo (tomar cada imagen sin esperar a la GPU): ${how}`)
+        }
+        if ((e.lostBusy ?? 0) + (e.lostIdle ?? 0) > 0) {
+          // Por qué se perdió cada fotograma: el hilo que toma las imágenes estaba ocupado (la esperada se reemplazó
+          // mientras esperaba) o estaba libre (la pantalla virtual nunca la mostró).
+          const g = e.gaps ?? []
+          lines.push(`Pérdidas${e.imageMs ? ` (una imagen cada ${ms1(e.imageMs)} como mucho)` : ''}: con el hilo de la GPU ocupado (se reemplazó) ${e.lostBusy ?? 0} · con el hilo libre (la pantalla no la mostró) ${e.lostIdle ?? 0} · la que llegó en su lugar, a cuánto de la anterior buena: hasta 10 ms ${g[0] ?? 0} · hasta 18 ms ${g[1] ?? 0} · hasta 26 ms ${g[2] ?? 0} · más ${g[3] ?? 0}`)
+        }
         lines.push(`Imágenes: la esperada ${e.matched ?? '—'} · la página cambiando ${e.busy ?? '—'} · viejas ${e.old ?? '—'} · posteriores (pérdida) ${e.newer ?? '—'} · sin pedido ${e.idle ?? '—'} · esperaron para tomarse ${msf(e.queueMs)} (máx ${msf(e.queueMsMax)})`)
       }
       if (c.view || c.frameIntervalMs) lines.push(`Página de captura: vista ${c.view || '—'} · un cuadro cada ${c.frameIntervalMs ? `${c.frameIntervalMs.toFixed(1).replace('.', ',')} ms` : '—'}`)
