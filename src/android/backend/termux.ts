@@ -307,7 +307,9 @@ export type WhisperModel = (typeof WHISPER_MODELS)[number]
 export const whisperModel = (id: string): WhisperModel | undefined => WHISPER_MODELS.find((m) => m.id === id)
 
 export type WhisperBridgeStatus = { bin: boolean; version: string | null; models: Array<{ file: string; size: number }>; sample: boolean; busy: boolean; cores: number }
-export type WhisperResult = { text: string; words: Array<{ w: string; start: number; end: number }>; lang: string | null; ms: number; audioSec: number }
+/** Lo que midió whisper.cpp (ms): cargar el modelo, el codificador (y cuántas pasadas), el decodificador y los reintentos. */
+export type WhisperTiming = { ctx?: number; load?: number; encode?: number; encodeRuns?: number; decode?: number; batchd?: number; prompt?: number; fallbacks?: number; total?: number }
+export type WhisperResult = { text: string; words: Array<{ w: string; start: number; end: number }>; lang: string | null; ms: number; audioSec: number; timing?: WhisperTiming }
 
 export const whisperBridgeStatus = () => request<WhisperBridgeStatus>('whisper.status')
 export const whisperRemove = (model: WhisperModel) => request<WhisperBridgeStatus>('whisper.remove', { model: model.file })

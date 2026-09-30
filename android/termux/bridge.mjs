@@ -29,7 +29,7 @@ import crypto from 'node:crypto'
 import readline from 'node:readline'
 import { spawn, execFile } from 'node:child_process'
 
-const VERSION = 4
+const VERSION = 5
 const HOME = os.homedir()
 const DIR = path.join(HOME, '.openanimator')
 const TMP = path.join(DIR, 'tmp')
@@ -389,6 +389,15 @@ function whisperResult(j) {
 
 const lastLines = (t) => t.trim().split('\n').filter((l) => l.trim() && !/progress =/.test(l)).slice(-3).join(' · ').slice(-600)
 
+/**
+ * Contexto de audio para el codificador (0: la ventana entera de 30 s). Para menos de 27 s: lo que dura más 3 s,
+ * en múltiplos de 64 y no menos de 512 (~10 s: con menos, Whisper empieza a equivocarse).
+ */
+function audioCtx(secs) {
+  if (!(secs > 0) || secs >= 27) return 0
+  return Math.min(1500, Math.max(512, Math.ceil(((secs + 3) * 50) / 64) * 64))
+}
+
 /** Corre whisper-cli sobre el audio subido (o la muestra) cuando termine la transcripción anterior. */
 function whisperRun(m) {
   const id = jobId(m.job)
@@ -417,8 +426,15 @@ function whisperRun(m) {
     // -sns: sin símbolos de "no habla" (♪…), como el Whisper original. DTW necesita -nfa.
     const args = ['-m', path.join(WMODELS, model), '-f', job.file, '-l', lang, '-t', String(threads(m.threads)), '-bs', '1', '-sns', '-ojf', '-of', out, '-pp']
     if (DTW.has(m.dtw)) args.push('-nfa', '--dtw', m.dtw)
+    // -ac: el codificador (lo más caro) trabaja siempre sobre una ventana de 30 s; para un audio corto alcanza con
+    // lo que dura más 3 s de silencio (con DTW tiene que cubrirlo entero: 50 posiciones por segundo). Un clip de
+    // 10 s costaba como uno de 30 (y sin idioma, el doble: la primera ventana se escucha también para detectarlo).
+    const secs = job.bytes / 32000
+    const ctx = audioCtx(secs)
+    if (ctx) args.push('-ac', String(ctx))
     const t0 = Date.now()
     let err = '', audioSec = 0, last = -1
+    const timing = { ctx: ctx || 1500 } // lo que midió whisper.cpp (whisper_print_timings), para los detalles
     log('whisper', id, model, lang, job.sample ? 'muestra' : `${Math.round(job.bytes / 32000)} s`)
     const child = spawn(WBIN, args, { cwd: TMP, stdio: ['ignore', 'ignore', 'pipe'] })
     job.child = child
@@ -428,6 +444,10 @@ function whisperRun(m) {
       if (p && +p[1] !== last) { last = +p[1]; send({ t: 'wprog', job: id, pct: last }) }
       const a = /\((\d+) samples, ([\d.]+) sec\)/.exec(l)
       if (a) audioSec = +a[2]
+      const tm = /whisper_print_timings:\s+(\w+) time =\s*([\d.]+) ms(?:\s*\/\s*(\d+) runs)?/.exec(l)
+      if (tm) { timing[tm[1]] = Math.round(+tm[2]); if (tm[3]) timing[`${tm[1]}Runs`] = +tm[3] }
+      const fb = /fallbacks =\s*(\d+) p \/\s*(\d+) h/.exec(l)
+      if (fb) timing.fallbacks = +fb[1] + +fb[2]
     })
     child.on('error', (e) => { err += `\n${e.message}` })
     child.on('close', (code, signal) => {
@@ -438,8 +458,8 @@ function whisperRun(m) {
         // Si no pudo leer el audio, whisper-cli 1.9.4 igual termina con 0: manda que exista el resultado.
         if (!fs.existsSync(json)) throw new Error(`Whisper falló (${signal || code}): ${lastLines(err) || 'sin detalles'}`)
         const r = whisperResult(lenientJson(fs.readFileSync(json, 'utf8')))
-        log('whisper listo', id, `${r.words.length} palabras`, `${Date.now() - t0} ms`)
-        resolve({ ...r, ms: Date.now() - t0, audioSec: audioSec || job.bytes / 32000 })
+        log('whisper listo', id, `${r.words.length} palabras`, `${Date.now() - t0} ms`, JSON.stringify(timing))
+        resolve({ ...r, ms: Date.now() - t0, audioSec: audioSec || job.bytes / 32000, timing })
       } catch (e) { log('whisper', id, e.message); reject(e) } finally { fs.rmSync(json, { force: true }) }
     })
   })

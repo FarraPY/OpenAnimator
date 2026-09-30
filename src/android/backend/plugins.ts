@@ -406,6 +406,13 @@ function speedText(audioSec: number, ms: number) {
   return f >= 1 ? `${dec1(f)}× más rápido que el audio` : `tarda ${dec1(1 / f)} veces lo que dura el audio`
 }
 
+/** En qué se fue el tiempo, según whisper.cpp: cargar el modelo, escuchar (el codificador) y escribir. */
+function timingText(t?: { load?: number; encode?: number; encodeRuns?: number; decode?: number; batchd?: number; fallbacks?: number }) {
+  if (!t || t.encode == null) return ''
+  const s = (ms?: number) => `${dec1((ms || 0) / 1000)} s`
+  return `: cargar el modelo ${s(t.load)} · escuchar ${s(t.encode)}${t.encodeRuns && t.encodeRuns > 1 ? ` en ${t.encodeRuns} pasadas` : ''} · escribir ${s((t.decode || 0) + (t.batchd || 0))}${t.fallbacks ? ` · ${t.fallbacks} reintentos` : ''}`
+}
+
 /** Errores conocidos de whisper.cpp, con lo que hay que hacer. */
 function whisperHint(msg: string) {
   if (/failed to (initialize|load)|invalid model|bad magic/i.test(msg)) return `El modelo de Whisper parece dañado: borralo y descargalo de nuevo en Ajustes › Plugins › Whisper. (${msg})`
@@ -422,7 +429,9 @@ async function whisperFile(rel: string, o: { maxSec?: number; lang?: string }) {
   try {
     const r = await T.whisperTranscribe({ model: w.model, lang: o.lang, pcm: pcm16k(rel, o.maxSec) })
     const speed = speedText(r.audioSec, r.ms)
-    return { text: r.text, words: r.words, provider: `Whisper en la tablet (${w.model.label}${speed ? `, ${speed}` : ''})`, lang: r.lang || undefined }
+    // Sin idioma, Whisper escucha el comienzo una vez más para detectarlo: se le avisa a Claude para la próxima.
+    const auto = !o.lang && r.lang ? `; detectó el idioma (${r.lang}): con idioma tarda menos` : ''
+    return { text: r.text, words: r.words, provider: `Whisper en la tablet (${w.model.label}${speed ? `, ${speed}` : ''}${auto})`, lang: r.lang || undefined }
   } catch (e: any) { throw new Error(whisperHint(String(e?.message || e))) } finally { release() }
 }
 
@@ -438,7 +447,7 @@ export async function whisperTest(model?: string): Promise<string> {
   try {
     const r = await T.whisperTranscribe({ model: m, sample: true, lang: 'en' })
     const said = r.text.length > 90 ? r.text.slice(0, 88) + '…' : r.text
-    return `${m.label}: transcribió ${dec1(r.audioSec)} s de voz en ${dec1(r.ms / 1000)} s (${speedText(r.audioSec, r.ms)}), ${r.words.length} palabras con su tiempo: «${said}»`
+    return `${m.label}: transcribió ${dec1(r.audioSec)} s de voz en ${dec1(r.ms / 1000)} s (${speedText(r.audioSec, r.ms)}${timingText(r.timing)}), ${r.words.length} palabras con su tiempo: «${said}»`
   } catch (e: any) { throw new Error(whisperHint(String(e?.message || e))) } finally { release() }
 }
 

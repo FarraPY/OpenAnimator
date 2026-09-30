@@ -121,7 +121,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   SHA-1 de los modelos fijados; base/small/large-v3-turbo-q5_0). El audio viaja como PCM 16 kHz por el puente
   (`whisper.put`), `whisper.run` corre `whisper-cli -ojf --dtw <modelo> -nfa -bs 1 -sns -pp` y arma las palabras con
   `t_dtw`. Trampas de 1.9.4: sin `-l` asume inglés (usar `auto`); flash attention (por defecto) desactiva DTW; si no
-  puede leer el audio termina con 0 sin JSON; el JSON no escapa caracteres de control (`lenientJson`).
+  puede leer el audio termina con 0 sin JSON; el JSON no escapa caracteres de control (`lenientJson`). Velocidad: el
+  codificador (lo más caro) trabaja sobre una ventana de 30 s aunque el audio dure 5, y con `-l auto` escucha la
+  primera ventana dos veces (detectar el idioma y transcribir): un clip de 10 s sin idioma tardaba ~3 veces lo que
+  dura. Para menos de 27 s se pasa `-ac` (lo que dura + 3 s, ≥ 512, múltiplo de 64: con DTW tiene que cubrir todo el
+  audio o aborta, `n_frames <= n_audio_ctx * 2`) y `oa_transcribir` le pide a Claude el `idioma`. `whisper.run`
+  devuelve lo que midió whisper.cpp (`whisper_print_timings`: cargar, escuchar y sus pasadas, escribir, reintentos).
 - Tarjeta SD: `Fs.java` (una instancia por proceso, `Fs.get`) junta en `projects/<id>/…` los proyectos de la tablet
   (`files/data/projects`) y de la tarjeta (`getExternalFilesDirs()[1+]/projects`, sin permisos; se borra con la app);
   `@sd/…` es la carpeta de la app en la tarjeta. Lo nuevo va donde elige el usuario (SharedPreferences `storage`);

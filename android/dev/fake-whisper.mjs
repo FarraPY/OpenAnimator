@@ -4,7 +4,9 @@
  * en el Termux imitado). Respeta lo que usa el puente de whisper.cpp 1.9.4: lee el WAV (16 kHz, 16 bits,
  * mono), busca los tramos con sonido y pone una palabra en cada uno, escribe <-of>.json como -ojf (tokens
  * con offsets en ms y t_dtw en centésimas) y el avance como -pp. Igual que el de verdad: sin -nfa, --dtw
- * no se aplica (t_dtw = -1), y si no puede leer el audio termina con 0 y sin resultado.
+ * no se aplica (t_dtw = -1), y si no puede leer el audio termina con 0 y sin resultado. Con -ac, como el de
+ * verdad con DTW: si el contexto no cubre el audio, aborta (WHISPER_ASSERT). Al final, los tiempos como
+ * whisper_print_timings (el codificador corre dos veces sin idioma: una para detectarlo).
  */
 import fs from 'node:fs'
 
@@ -41,6 +43,12 @@ try {
 }
 
 const sec = pcm.length / 16000
+const ctx = +(opt('-ac', '--audio-ctx') || 0) || 1500
+if (ctx > 1500) { console.error(`whisper_full_with_state: audio_ctx is larger than the maximum allowed (${ctx} > 1500)`); process.exit(10) }
+if (dtw && Math.min(3000, Math.round(sec * 100)) > ctx * 2) {
+  console.error('whisper.cpp:9119: WHISPER_ASSERT: n_frames <= n_audio_ctx * 2')
+  process.kill(process.pid, 'SIGABRT')
+}
 console.error(`main: processing '${file}' (${pcm.length} samples, ${sec.toFixed(1)} sec), ${opt('-t', '--threads') || 4} threads, 1 processors, 1 beams + best of 5, lang = ${lang}, task = transcribe, timestamps = 1 ...`)
 
 // Tramos con sonido, en ventanas de 20 ms.
@@ -92,3 +100,17 @@ const result = {
 }
 fs.writeFileSync(`${out}.json`, JSON.stringify(result, null, '\t'))
 console.error(`output_json: saving output to '${out}.json'`)
+// Tiempos inventados pero con la forma de los de verdad: el codificador cuesta según el contexto.
+const windows = Math.max(1, Math.ceil(sec / 30)) + (lang === 'auto' ? 1 : 0)
+const enc = windows * 9000 * (ctx / 1500)
+const T = (name, v, runs) => console.error(`whisper_print_timings: ${name} time = ${v.toFixed(2).padStart(8)} ms${runs ? ` / ${String(runs).padStart(5)} runs ( ${(v / runs).toFixed(2).padStart(8)} ms per run)` : ''}`)
+console.error('')
+T('    load', 1200)
+console.error('whisper_print_timings:     fallbacks =   0 p /   0 h')
+T('     mel', 30)
+T('  sample', 40, 60)
+T('  encode', enc, windows)
+T('  decode', 900, 60)
+T('  batchd', 300, 4)
+T('  prompt', 0, 1)
+T('   total', 1200 + 30 + 40 + enc + 900 + 300)
