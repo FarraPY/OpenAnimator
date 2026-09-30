@@ -27,6 +27,8 @@ export class Renderer {
   private onFail!: (e: Error) => void
   private busy: Promise<unknown> = Promise.resolve()
   timer = 0
+  /** Último pedido (empezado o terminado): el pool no cierra un compositor que se está usando. */
+  usedAt = Date.now()
 
   constructor(readonly projectId: string, readonly tlId: string, width: number, height: number) {
     this.iframe = document.createElement('iframe')
@@ -68,9 +70,13 @@ export class Renderer {
 
   private request<T = any>(type: string, msg: any, timeout = 120000): Promise<T> {
     const id = `r${++seq}`
+    this.usedAt = Date.now()
     return new Promise<T>((resolve, reject) => {
+      // Ya cerrado: fallar enseguida en vez de esperar el plazo con un iframe que no está.
+      if (!this.iframe.isConnected) { reject(new Error('cancelado')); return }
       const t = setTimeout(() => { if (this.pending.delete(id)) reject(new Error('El compositor tardó demasiado')) }, timeout)
-      this.pending.set(id, { type, resolve: (v) => { clearTimeout(t); resolve(v) }, reject: (e) => { clearTimeout(t); reject(e) } })
+      const settle = () => { clearTimeout(t); this.usedAt = Date.now() }
+      this.pending.set(id, { type, resolve: (v) => { settle(); resolve(v) }, reject: (e) => { settle(); reject(e) } })
       this.post({ ...msg, type, id })
     })
   }
@@ -138,8 +144,16 @@ async function getRenderer(projectId: string, tlId: string) {
     try { await r.ready } catch (e) { r.destroy(); pool.delete(key); throw e }
   }
   const cur = r
+  cur.usedAt = Date.now()
   clearTimeout(cur.timer)
-  cur.timer = window.setTimeout(() => { cur.destroy(); if (pool.get(key) === cur) pool.delete(key) }, 90_000)
+  // Se cierra a los 90 s sin uso, no a los 90 s de pedirlo: en la tablet una hoja de contactos con escenas
+  // pesadas tarda más que eso y perdía el compositor a mitad («cancelado», o 120 s esperando a uno cerrado).
+  const expire = () => {
+    const left = cur.usedAt + 90_000 - Date.now()
+    if (!cur.idle || left > 0) { cur.timer = window.setTimeout(expire, Math.max(1000, left)); return }
+    cur.destroy(); if (pool.get(key) === cur) pool.delete(key)
+  }
+  cur.timer = window.setTimeout(expire, 90_000)
   return cur
 }
 
@@ -149,7 +163,8 @@ export function closeFramePool(projectId?: string) {
 
 /** Poca memoria: cierra los compositores ocultos que no están dibujando nada (se vuelven a abrir al pedirlos). */
 export function trimFramePool() {
-  for (const [k, r] of pool) if (r.idle) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
+  // Entre dos fotogramas de un mismo trabajo el compositor queda libre un instante: no cerrar uno recién usado.
+  for (const [k, r] of pool) if (r.idle && Date.now() - r.usedAt > 10_000) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
 }
 
 /**

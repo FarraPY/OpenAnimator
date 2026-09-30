@@ -223,6 +223,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   imagen, codificado; `Encoder.wallMs`), qué era cada imagen (la esperada, cambiando, vieja, posterior) y una muestra.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
   nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
+- Pool de compositores ocultos (frames.ts): se cierra a los 90 s *sin uso* (`usedAt`), no a los 90 s de pedirlo; en la
+  tablet una hoja de contactos con escenas pesadas tarda más (~12 s por fotograma) y perdía el compositor a mitad
+  («cancelado», o 120 s esperando a uno ya cerrado). `trimFramePool` no cierra uno usado en los últimos 10 s.
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles
   (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
   `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.
