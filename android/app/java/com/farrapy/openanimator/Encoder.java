@@ -41,13 +41,14 @@ import java.util.concurrent.Future;
 /**
  * Video export with the tablet's hardware encoder (the Android counterpart of NVENC on the PC).
  *
- * JavaScript renders each frame, sends it as a JPEG and this class draws it with OpenGL onto the
- * encoder's input surface (with an exact timestamp). The timeline audio arrives first as 16-bit PCM,
- * is encoded to AAC and interleaved with the video in an MP4 (MediaMuxer).
+ * Each frame arrives as a bitmap captured natively by Capture (or, as a fallback, a JPEG rendered by
+ * JavaScript) and this class draws it with OpenGL onto the encoder's input surface (with an exact
+ * timestamp). The timeline audio arrives first as 16-bit PCM, is encoded to AAC and interleaved with
+ * the video in an MP4 (MediaMuxer).
  *
  *   start({out, width, height, fps, bitrate, codec: avc|hevc, keyframeSec, audio: {sampleRate, channels, bitrate}})
  *   audio(pcm16le)   (all the audio, before the first frame)
- *   frame(jpeg) …    finish() → {path, size, frames}     cancel()
+ *   frame(jpeg) | frameBitmap(bitmap) …    finish() → {path, size, frames}     cancel()
  */
 final class Encoder {
     private static final String TAG = "OpenAnimator";
@@ -91,6 +92,23 @@ final class Encoder {
             @Override
             public Object call() throws Exception {
                 j.frame(jpeg);
+                return null;
+            }
+        });
+    }
+
+    /**
+     * A frame already in a bitmap: it's queued on the encoder's thread and returns at once (the caller
+     * doesn't touch the bitmap until the Future is done, so it can capture the next frame meanwhile).
+     */
+    Future<?> frameBitmap(final Bitmap bmp) throws IOException {
+        final Job j = job;
+        final ExecutorService t = thread;
+        if (j == null || t == null) throw new IOException("No hay una exportación en curso");
+        return t.submit(new Callable<Object>() {
+            @Override
+            public Object call() throws Exception {
+                j.frame(bmp);
                 return null;
             }
         });
@@ -277,37 +295,41 @@ final class Encoder {
         // ── video ────────────────────────────────────────────────────────────────
 
         void frame(byte[] jpeg) throws Exception {
-            if (cancelled) throw new IOException("cancelado");
-            if (hasAudio && !audioEncoded) encodeAudio();
             BitmapFactory.Options o = new BitmapFactory.Options();
             o.inPreferredConfig = Bitmap.Config.ARGB_8888;
             Bitmap bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, o);
             if (bmp == null) throw new IOException("Fotograma inválido");
             try {
-                drain(false);
-                GLES20.glViewport(0, 0, width, height);
-                GLES20.glClearColor(0f, 0f, 0f, 1f);
-                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-                GLES20.glUseProgram(program);
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-                GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-                GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0);
-                quad.position(0);
-                GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, quad);
-                GLES20.glEnableVertexAttribArray(aPos);
-                quad.position(2);
-                GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, quad);
-                GLES20.glEnableVertexAttribArray(aTex);
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-                checkGl("draw");
-                long ptsNs = Math.round(frames * 1e9 / fps);
-                EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
-                if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) throw new IOException("eglSwapBuffers falló: 0x" + Integer.toHexString(EGL14.eglGetError()));
-                frames++;
-                drain(false);
+                frame(bmp);
             } finally {
                 bmp.recycle();
             }
+        }
+
+        void frame(Bitmap bmp) throws Exception {
+            if (cancelled) throw new IOException("cancelado");
+            if (hasAudio && !audioEncoded) encodeAudio();
+            drain(false);
+            GLES20.glViewport(0, 0, width, height);
+            GLES20.glClearColor(0f, 0f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            GLES20.glUseProgram(program);
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bmp, 0);
+            quad.position(0);
+            GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, quad);
+            GLES20.glEnableVertexAttribArray(aPos);
+            quad.position(2);
+            GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, quad);
+            GLES20.glEnableVertexAttribArray(aTex);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+            checkGl("draw");
+            long ptsNs = Math.round(frames * 1e9 / fps);
+            EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, ptsNs);
+            if (!EGL14.eglSwapBuffers(eglDisplay, eglSurface)) throw new IOException("eglSwapBuffers falló: 0x" + Integer.toHexString(EGL14.eglGetError()));
+            frames++;
+            drain(false);
         }
 
         /** Moves encoded video to the muxer; with eos, waits until the encoder is empty. */

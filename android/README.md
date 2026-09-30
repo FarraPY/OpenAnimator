@@ -96,7 +96,9 @@ puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo 
   Claude). Si Android cierra la página por falta de memoria, la app vuelve sola al proyecto y, con tu
   plan, retoma la conversación que siguió corriendo en Termux.
 - **Exportar**: presets (Recomendado 1080p, 4K HEVC, Liviano 720p, Para editar), calidad, códec y
-  audio. El video se guarda en *Galería › Movies/OpenAnimator* (en la galería de la tarjeta si el
+  audio. Cada fotograma se copia directo de lo que dibuja el motor web (*captura directa*); si en algún
+  equipo no funciona, la exportación sigue sola con el método compatible (más lento), y el diálogo dice
+  cuál usa. El video se guarda en *Galería › Movies/OpenAnimator* (en la galería de la tarjeta si el
   proyecto está en la tarjeta SD) y se puede compartir o abrir.
 - **Tarjeta SD**: cada proyecto puede estar en la tablet o en la tarjeta y se trabaja igual en los dos
   lugares (abrir, editar, Claude, exportar). En *Ajustes › Almacenamiento* se ve el espacio de cada lado,
@@ -189,6 +191,11 @@ Con `--sd <carpeta>`, esa carpeta hace de tarjeta SD (los proyectos de los dos l
 en `Fs.java`); `POST /__dev/sd {"present": false}` la "saca" y `window.__oaNativeEvent('storage')` le avisa a
 la página, como hace Java. `OA_DEV_SLOW_MOVE=60` demora cada archivo al mover (para ver el progreso y
 probar cancelar).
+
+La captura directa de la exportación (en la tablet, un WebView que Java dibuja en un bitmap) acá la hace
+el Chromium de Playwright, si está instalado, con una captura de pantalla por fotograma. Sin Playwright, o
+con `OA_DEV_NO_CAPTURE=1`, se usa el método compatible; `OA_DEV_CAPTURE_FAIL_AT=n` la hace fallar en el
+fotograma n para probar el cambio de método a mitad de la exportación.
 
 El servidor escucha sólo en `127.0.0.1` (su puente no tiene token). El audio que en la tablet
 decodifica Java (`AudioDecoder.java`: formas de onda, mezcla de la exportación, transcripción) acá

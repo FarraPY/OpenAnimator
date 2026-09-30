@@ -31,6 +31,7 @@ final class AppServer {
     static final String APP_HOST = "appassets.androidplatform.net";
     static final String PROJECT_HOST = "oaproject.androidplatform.net";
     static final String APP_ORIGIN = "https://" + APP_HOST;
+    static final String PROJECT_ORIGIN = "https://" + PROJECT_HOST;
     private static final Pattern RANGE = Pattern.compile("bytes=(\\d*)-(\\d*)");
 
     /** Token nuevo del puente para cada carga de la interfaz (ver Bridge.newPageToken). */

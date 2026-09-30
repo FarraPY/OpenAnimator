@@ -72,6 +72,7 @@ public final class Bridge {
     private final AtomicInteger reqCodes = new AtomicInteger(2000);
     private final AtomicBoolean moveCancel = new AtomicBoolean();
     private final Encoder encoder;
+    private final Capture capture;
     private final TermuxLink termux;
     private volatile String token;
 
@@ -91,6 +92,7 @@ public final class Bridge {
         this.fs = fs;
         this.secrets = secrets;
         this.encoder = new Encoder(fs);
+        this.capture = new Capture(act, encoder);
         this.termux = new TermuxLink(act, this);
         newPageToken();
     }
@@ -105,11 +107,14 @@ public final class Bridge {
         new SecureRandom().nextBytes(b);
         String t = Base64.encodeToString(b, Base64.NO_WRAP | Base64.URL_SAFE);
         token = t;
+        // La página se volvió a cargar: una captura de exportación que quedara abierta ya no la usa nadie.
+        if (capture != null) capture.close();
         return t;
     }
 
     void destroy() {
         for (Http.Handle h : requests.values()) h.cancel();
+        capture.close();
         encoder.cancel();
         termux.closeAll();
         pool.shutdownNow();
@@ -325,7 +330,11 @@ public final class Bridge {
                 encoder.audio(Base64.decode(a.getString("data"), Base64.DEFAULT));
                 return true;
             case "enc.cancel":
+                capture.close();
                 encoder.cancel();
+                return true;
+            case "cap.close":
+                capture.close();
                 return true;
             default:
                 throw new IllegalArgumentException("Método desconocido: " + method);
@@ -444,6 +453,17 @@ public final class Bridge {
                 return;
             case "enc.finish":
                 resolve(id, ok(encoder.finish()));
+                return;
+            // Captura nativa de la exportación (Capture): abrir el compositor, un fotograma, cerrar.
+            case "cap.start":
+                resolve(id, ok(capture.start(a.getString("url"), a.getInt("width"), a.getInt("height"))));
+                return;
+            case "cap.frame":
+                resolve(id, ok(capture.frame(a.getDouble("t"), a.optBoolean("preview"))));
+                return;
+            case "cap.stop":
+                capture.stop();
+                resolve(id, ok(true));
                 return;
             default:
                 throw new IllegalArgumentException("Método desconocido: " + method);

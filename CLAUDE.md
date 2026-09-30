@@ -126,8 +126,14 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `POST /__dev/sd {present}`; la lógica de Java se probó en la PC con el android-all de Robolectric.
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
-- Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
-  la exportación manda JPEG a `enc.frame` (MediaCodec + EGL) y el audio mezclado con Web Audio a `enc.audio`.
+- Exportación con captura directa (`Capture.java`): un WebView del tamaño del video, detrás de la app, abre el
+  compositor con `capture=1` (el escenario se escala a la vista; `__oaCap(t, n)` → `__oaCapDone`, sin interfaz JS);
+  Java espera con `postVisualStateCallback`, dibuja el WebView en un bitmap (dos que se turnan) y lo pasa a
+  `Encoder.frameBitmap` (sin JPEG ni base64). Redibujar el DOM con modern-screenshot era ~90 % del tiempo. Si el
+  primer fotograma sale vacío prueba `LAYER_TYPE_SOFTWARE`; si igual falla, sigue desde ese fotograma con el método
+  compatible. Esa vista nunca carga la página de la app (AppServer le daría otro token al puente).
+- Fotogramas (miniaturas, Claude y el método compatible): el compositor rasteriza el DOM con modern-screenshot
+  (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL); el audio, mezclado con Web Audio, a `enc.audio`.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
   nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles

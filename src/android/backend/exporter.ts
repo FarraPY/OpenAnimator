@@ -5,13 +5,17 @@
  *
  *  1. Mezcla del audio del timeline con Web Audio (por ventanas de 30 s; Java decodifica sólo el
  *     tramo de cada archivo que suena en la ventana) → PCM → Java.
- *  2. Fotograma a fotograma: compositor → JPEG → Java decodifica, dibuja en la superficie del
- *     codificador y lo muxea. Mientras Java codifica uno, acá ya se dibuja el siguiente.
+ *  2. Fotograma a fotograma, captura directa (Capture.java): un WebView del tamaño del video, escondido
+ *     detrás de la app, abre el compositor; Java lo mueve a cada t y copia lo que dibujó el motor a un
+ *     bitmap que va derecho al codificador. Si eso no anda en el equipo, se sigue (desde ese mismo
+ *     fotograma) con el método compatible: el compositor oculto redibuja el DOM (modern-screenshot, ~10
+ *     veces más lento) → JPEG → Java. En los dos, mientras se codifica uno ya se prepara el siguiente.
  *  3. El archivo queda en exports/ (o @sd/exports/ si el proyecto está en la tarjeta SD) y, si está activado, se copia a la galería.
  */
 import type { Clip, Timeline } from '../../api'
 import { autoBitrate, type ExportQuality } from '../bitrate'
 import { host } from '../host'
+import { compositorUrl } from '../../platform'
 import { Renderer } from './frames'
 import { decodeRange } from './media'
 import { basename, blobToBase64, fs, join, normalizeRel, uniqueName } from './fsx'
@@ -174,8 +178,16 @@ class Export {
     } finally {
       this.renderer?.destroy()
       this.renderer = null
+      try { host().call('cap.close') } catch { /* ignore */ }
       release()
     }
+  }
+
+  /** El compositor oculto que redibuja el DOM (cuando la captura directa no anda en el equipo). */
+  private async compatible(projectId: string, tlId: string, width: number, height: number) {
+    if (this.renderer) return
+    this.renderer = new Renderer(projectId, tlId, width, height)
+    await this.renderer.ready
   }
 
   private async inner(markStarted: () => void) {
@@ -201,15 +213,18 @@ class Export {
     const tlName = p.timelines.length > 1 ? ` - ${p.timelines.find((t) => t.id === tlId)?.name || tlId}` : ''
     const out = join(ex, uniqueName(ex, `${safeName(job.name || p.name + tlName)}.mp4`))
 
-    // Compositor dedicado (no el de la vista previa)
-    this.renderer = new Renderer(job.projectId, tlId, p.width, p.height)
-    const ready = this.renderer.ready
+    // Captura directa (ver arriba); si no se puede abrir, el compositor oculto de siempre.
+    let direct = false
+    const opening = host().callAsync('cap.start', { url: compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' }), width: W, height: H })
+      .then(() => { direct = true }, (e) => console.warn('Captura directa no disponible; se usa el método compatible:', e))
     this.check()
 
     // Audio: primero se ve qué suena y se puede leer, para saber si el MP4 lleva pista de audio
     const parts = job.audio ? await audioParts(job.projectId, tl, start, end) : []
     this.check()
-    await ready
+    await opening
+    this.check()
+    if (!direct) await this.compatible(job.projectId, tlId, p.width, p.height)
     this.check()
 
     const info = host().call<{ codec: string; profile: string }>('enc.start', {
@@ -217,7 +232,7 @@ class Export {
       audio: parts.length ? { sampleRate: SR, channels: 2, bitrate: Math.max(64, Math.min(320, job.audioBitrate || 192)) * 1000 } : undefined,
     })
     markStarted()
-    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''}`
+    let allDirect = direct
 
     if (parts.length) {
       this.emit({ phase: 'audio', message: 'Mezclando el audio…', done: 0, total: 1 })
@@ -232,27 +247,51 @@ class Export {
     for (let i = 0; i < frames; i++) {
       this.check()
       const t = start + i / fps
-      const f = await this.renderer.frame(t, W, H, 'jpeg', quality)
+      let shot: string | undefined
+      if (direct) {
+        try {
+          const r = await host().callAsync<{ preview?: string }>('cap.frame', { t, preview: performance.now() - lastPreview > 1200 })
+          shot = r?.preview
+        } catch (e: any) {
+          this.check()
+          // No anduvo en este equipo (o dejó de andar): este fotograma y los que siguen, con el compatible.
+          console.warn('La captura directa falló en el fotograma', i, e)
+          direct = false
+          allDirect = false
+          try { host().call('cap.close') } catch { /* ignore */ }
+          this.emit({ phase: 'render', message: 'Cambiando al método de captura compatible…', done: i, total: frames })
+          await this.compatible(job.projectId, tlId, p.width, p.height)
+          i--
+          continue
+        }
+      } else {
+        const f = await this.renderer!.frame(t, W, H, 'jpeg', quality)
+        this.check()
+        if (inflight) await inflight
+        inflight = host().callAsync('enc.frame', { data: f.data })
+        inflight.catch(() => {})
+        shot = f.data
+      }
       this.check()
-      if (inflight) await inflight
-      inflight = host().callAsync('enc.frame', { data: f.data })
-      inflight.catch(() => {})
       const now = performance.now()
       if (now - lastEmit > 250 || i === frames - 1) {
         lastEmit = now
         const rate = (i + 1) / Math.max(0.001, (now - tr0) / 1000)
         // Cada tanto, el fotograma que se está codificando (vista previa del diálogo).
-        const preview = now - lastPreview > 1200 ? `data:image/jpeg;base64,${f.data}` : undefined
+        const preview = shot && now - lastPreview > 1200 ? `data:image/jpeg;base64,${shot}` : undefined
         if (preview) lastPreview = now
-        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
+        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames}${direct ? ' · captura directa' : ''}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
       }
     }
     if (inflight) await inflight
+    // Los últimos fotogramas capturados terminan de codificarse y se cierra la vista de captura.
+    if (direct) await host().callAsync('cap.stop')
     this.check()
+    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${allDirect ? 'captura directa' : 'captura compatible'}`
 
     this.emit({ phase: 'final', message: 'Escribiendo el archivo…', done: 1, total: 1 })
     const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number }>('enc.finish')
-    this.renderer.destroy()
+    this.renderer?.destroy()
     this.renderer = null
 
     let gallery: string | undefined

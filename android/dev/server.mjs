@@ -22,6 +22,11 @@
  * El puente no tiene token: por defecto sólo escucha en 127.0.0.1 (con --host 0.0.0.0 cualquiera en
  * la red podría leer y escribir la carpeta de datos).
  *
+ * La captura directa de la exportación (Capture.java: un WebView del tamaño del video) se imita con el
+ * Chromium de Playwright si está instalado (una captura de pantalla por fotograma); sin Playwright, o con
+ * OA_DEV_NO_CAPTURE=1, la app usa el método compatible. OA_DEV_CAPTURE_FAIL_AT=n la hace fallar en el
+ * fotograma n (para probar el cambio de método a mitad de la exportación).
+ *
  * El codificador de video (MediaCodec) se imita con ffmpeg y los selectores de archivos con
  * POST /__dev/pick (la próxima selección devuelve esos archivos). Con --mock-claude, los pedidos a
  * api.anthropic.com los responde un Claude de mentira con un guion fijo (prueba del chat sin costo).
@@ -34,6 +39,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFile, execFileSync, spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -511,6 +517,43 @@ async function httpRequest(a, id, emit) {
   } finally { requests.delete(id) }
 }
 
+// ── captura directa (Capture.java en la tablet; acá, Chromium con Playwright) ──
+let cap = null
+async function playwright() {
+  try { return await import('playwright') } catch { /* no está en el proyecto */ }
+  return createRequire(path.join(execFileSync('npm', ['root', '-g']).toString().trim(), 'noop.js'))('playwright')
+}
+async function capClose() { const c = cap; cap = null; if (c) await c.browser.close().catch(() => {}) }
+async function capStart(a) {
+  await capClose()
+  if (process.env.OA_DEV_NO_CAPTURE === '1') throw new Error('Captura directa desactivada (OA_DEV_NO_CAPTURE)')
+  if (!/[?&]capture=1\b/.test(a.url)) throw new Error('Dirección de captura inválida')
+  let chromium
+  try { chromium = (await playwright()).chromium } catch { throw new Error('Captura directa no disponible en el servidor de desarrollo (falta Playwright)') }
+  const browser = await chromium.launch()
+  try {
+    const page = await browser.newPage({ viewport: { width: a.width, height: a.height }, deviceScaleFactor: 1 })
+    await page.goto(a.url)
+    await page.waitForFunction(() => window.__oaCapReady === true || /^error/.test(String(window.__oaCapReady)), null, { timeout: 60000 })
+    const r = await page.evaluate(() => String(window.__oaCapReady))
+    if (r !== 'true') throw new Error(r)
+    cap = { browser, page, seq: 0, frames: 0 }
+    return { width: a.width, height: a.height }
+  } catch (e) { await browser.close().catch(() => {}); throw e }
+}
+async function capFrame(a) {
+  if (!cap) throw new Error('La captura no está abierta')
+  if (+process.env.OA_DEV_CAPTURE_FAIL_AT === cap.frames) throw new Error('captura vacía (simulada)')
+  const n = ++cap.seq
+  await cap.page.evaluate(([t, n]) => window.__oaCap(t, n), [a.t, n])
+  const done = await cap.page.evaluate(() => String(window.__oaCapDone))
+  if (done !== String(n)) throw new Error(done)
+  const jpg = (await cap.page.screenshot({ type: 'jpeg', quality: 92 })).toString('base64')
+  encFrame(jpg)
+  cap.frames++
+  return a.preview ? { preview: jpg } : {}
+}
+
 // ── puente ────────────────────────────────────────────────────────────────────
 const info = () => ({
   platform: 'android', sdk: 34, release: '14', manufacturer: 'samsung', brand: 'samsung', model: 'SM-X806B (dev)', device: 'gts8p', soc: 'Qualcomm SM8450',
@@ -570,7 +613,8 @@ function sync(method, a) {
     case 'codec.caps': return { avc: true, hevc: true, aac: true, encoders: [{ name: 'c2.qti.avc.encoder (dev)', type: 'video/avc', hardware: true }, { name: 'c2.qti.hevc.encoder (dev)', type: 'video/hevc', hardware: true }] }
     case 'enc.start': return encStart(a)
     case 'enc.audio': encAudio(a.data); return true
-    case 'enc.cancel': encCancel(); return true
+    case 'enc.cancel': capClose(); encCancel(); return true
+    case 'cap.close': capClose(); return true
   }
   throw new Error('Método desconocido: ' + method)
 }
@@ -595,6 +639,9 @@ async function async(method, a, id, emit) {
     case 'audio.peaks': return await audioPeaks(a)
     case 'enc.frame': return encFrame(a.data)
     case 'enc.finish': return await encFinish()
+    case 'cap.start': return await capStart(a)
+    case 'cap.frame': return await capFrame(a)
+    case 'cap.stop': await capClose(); return true
   }
   throw new Error('Método desconocido: ' + method)
 }

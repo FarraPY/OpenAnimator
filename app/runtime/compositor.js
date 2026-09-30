@@ -4,7 +4,11 @@
  * La MISMA página se usa para la vista previa del editor y para exportar:
  * "un solo renderizador", así lo que se ve es exactamente lo que sale en el MP4.
  *
- *   oa://app/runtime/compositor.html?p=<proyecto>&tl=<timeline>&mode=preview|export
+ *   oa://app/runtime/compositor.html?p=<proyecto>&tl=<timeline>&mode=preview|export[&capture=1]
+ *
+ * capture=1 (exportación en Android): la página ocupa toda la vista (el escenario se escala al tamaño
+ * del video) y Java la captura directamente: __oaCap(t, n) deja el compositor en t y pone
+ * __oaCapDone = n; __oaCapReady avisa que cargó.
  *
  * Capas visuales: pistas "scene" (HTML), "video" (mp4/webm/imagen). La primera pista
  * visual del array se dibuja ADELANTE. Las pistas "audio" sólo suenan en la vista previa
@@ -16,6 +20,7 @@
   var projectId = qs.get('p');
   var timelineId = qs.get('tl');
   var mode = qs.get('mode') || 'preview';
+  var capture = qs.get('capture') === '1';
   // El compositor se sirve desde <origen>/p/<proyecto>/__oa/ (oa:// en la PC, https en Android):
   // la carpeta del proyecto es lo que está antes de __oa/.
   var base = location.href.split('?')[0].replace(/__oa\/[^/]*$/, '');
@@ -56,6 +61,22 @@
     stage.style.background = project.background || '#000';
     document.body.style.width = W + 'px';
     document.body.style.height = H + 'px';
+    if (capture) fitCapture();
+  }
+
+  // Captura: el escenario llena la vista (que Java crea del tamaño exacto del video), así lo que dibuja el
+  // motor ya es el fotograma. visualViewport da el ancho con decimales (innerWidth redondea).
+  function fitCapture() {
+    var W = project.width || 1920, H = project.height || 1080;
+    var vv = window.visualViewport;
+    var vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+    document.body.style.width = '100vw';
+    document.body.style.height = '100vh';
+    stage.style.transform = 'scale(' + (vw / W) + ',' + (vh / H) + ')';
+  }
+  if (capture) {
+    msgEl.style.display = 'none';
+    window.addEventListener('resize', function () { if (project) fitCapture(); });
   }
 
   function visualTracks() {
@@ -426,10 +447,20 @@
   window.__oaCompositor.ready = load().then(async function () {
     await renderAt(0, { force: true, skipPaint: true });
     post({ type: 'ready', duration: timeline.duration, width: project.width, height: project.height });
+    if (capture) window.__oaCapReady = true;
     return true;
   }).catch(function (err) {
     setMsg(String(err.message || err));
     post({ type: 'error', message: String(err.message || err) });
+    if (capture) window.__oaCapReady = 'error: ' + (err.message || err);
     throw err;
   });
+
+  // Sin esperar a que pinte: Java espera con postVisualStateCallback, que asegura que el próximo dibujo
+  // ya tiene este estado (los dos requestAnimationFrame costaban ~33 ms por fotograma).
+  if (capture) window.__oaCap = function (t, n) {
+    return renderAt(t, { force: true, skipPaint: true }).then(
+      function () { window.__oaCapDone = n; },
+      function (err) { window.__oaCapDone = 'error: ' + (err && err.message || err); });
+  };
 })();

@@ -31,6 +31,7 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import org.json.JSONObject;
 
@@ -52,6 +53,8 @@ public class MainActivity extends Activity {
     private static final int REQ_STORAGE = 1002;
 
     private WebView web;
+    /** La vista de la app arriba y, detrás, la de captura de la exportación cuando existe (Capture). */
+    private FrameLayout root;
     private Bridge bridge;
     private AppServer server;
     private Fs fs;
@@ -80,6 +83,9 @@ public class MainActivity extends Activity {
                 return bridge.newPageToken();
             }
         });
+        root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#0b0c0f"));
+        setContentView(root);
         createWebView();
         handleIntent(getIntent());
         IntentFilter media = new IntentFilter();
@@ -145,7 +151,7 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(bridge, "AndroidBridge");
         web.setWebViewClient(new Client());
         web.setWebChromeClient(new Chrome());
-        setContentView(web);
+        root.addView(web, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         // Después de que el motor web se cerró, la página se entera (vuelve al proyecto y retoma a Claude).
         web.loadUrl(recovered ? START_URL + "?recovered=1" : START_URL);
     }
@@ -428,12 +434,74 @@ public class MainActivity extends Activity {
             // Sin memoria u otro fallo del motor web: se vuelve a crear la página sin cerrar la app.
             Log.e(TAG, "El proceso del WebView terminó (crash=" + detail.didCrash() + ")");
             if (view == web) {
-                setContentView(new View(MainActivity.this));
+                root.removeView(web);
                 web.destroy();
                 web = null;
                 recovered = true;
                 createWebView();
             }
+            return true;
+        }
+    }
+
+    // ── captura de la exportación (Capture) ──────────────────────────────────────
+
+    /**
+     * A WebView of exactly width×height pixels, behind the app (the opaque page covers it; it stays
+     * "visible" so Chromium keeps drawing it). No JavaScript interface: it only loads project pages.
+     */
+    WebView newCaptureView(int width, int height) {
+        WebView v = new WebView(this);
+        v.setBackgroundColor(Color.BLACK);
+        WebSettings s = v.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setAllowFileAccess(false);
+        s.setAllowContentAccess(false);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        s.setSupportZoom(false);
+        s.setBuiltInZoomControls(false);
+        s.setTextZoom(100);
+        s.setSupportMultipleWindows(false);
+        s.setJavaScriptCanOpenWindowsAutomatically(false);
+        s.setOffscreenPreRaster(true);
+        v.setVerticalScrollBarEnabled(false);
+        v.setHorizontalScrollBarEnabled(false);
+        v.setFocusable(false);
+        v.setFocusableInTouchMode(false);
+        v.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+        v.setWebViewClient(new CaptureClient());
+        root.addView(v, 0, new FrameLayout.LayoutParams(width, height));
+        return v;
+    }
+
+    void removeCaptureView(WebView v) {
+        root.removeView(v);
+        v.destroy();
+    }
+
+    /**
+     * Project pages only: the app's own page is never loaded here (AppServer would hand it a new bridge
+     * token and the real app would lose its bridge), and nothing navigates elsewhere or opens other apps.
+     * Other hosts (fonts, CDNs a scene uses) load as in the preview.
+     */
+    private final class CaptureClient extends WebViewClient {
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (AppServer.APP_HOST.equals(request.getUrl().getHost())) {
+                return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", null, new java.io.ByteArrayInputStream(new byte[0]));
+            }
+            return server.handle(request);
+        }
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            return !AppServer.PROJECT_HOST.equals(request.getUrl().getHost());
+        }
+
+        @Override
+        public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+            // El proceso es el mismo que el de la app: la página se recrea sola (Client) y la captura se cierra.
             return true;
         }
     }
