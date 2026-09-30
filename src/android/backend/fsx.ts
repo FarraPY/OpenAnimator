@@ -1,9 +1,15 @@
-/** Archivos de la carpeta de datos de la app (proyectos, plantillas, ajustes), vía el puente nativo. */
+/**
+ * Archivos de la carpeta de datos de la app (proyectos, plantillas, ajustes), vía el puente nativo.
+ * "projects/<id>/…" es un proyecto esté en la tablet o en la tarjeta SD (Java sabe dónde);
+ * "@sd/…" es la carpeta de la app en la tarjeta (su papelera y sus videos exportados).
+ */
 import { host } from '../host'
 
-export type Entry = { name: string; dir: boolean; size: number; mtime: number; path?: string }
+/** `vol: 'sd'`: un proyecto que está en la tarjeta SD (sólo al listar "projects"). */
+export type Entry = { name: string; dir: boolean; size: number; mtime: number; path?: string; vol?: 'sd' }
 
 const call = <T = any>(m: string, a: Record<string, unknown>) => host().call<T>(m, a)
+export type Volume = 'internal' | 'sd'
 
 export const fs = {
   exists: (path: string) => call<boolean>('fs.exists', { path }),
@@ -15,7 +21,10 @@ export const fs = {
   readText: (path: string) => call<string>('fs.readText', { path }),
   readTextLimited: (path: string, max = 200000) => call<{ text: string; size: number; truncated: boolean }>('fs.readTextLimited', { path, max }),
   writeText: (path: string, text: string) => { call('fs.writeText', { path, text }) },
-  mkdir: (path: string) => { call('fs.mkdir', { path }) },
+  /** `volume`: dónde crear un proyecto que todavía no existe (si no, donde eligió el usuario). */
+  mkdir: (path: string, volume?: Volume) => { call('fs.mkdir', volume ? { path, volume } : { path }) },
+  /** 'sd' si la ruta está en la tarjeta SD, 'internal' si está en la tablet. */
+  volume: (path: string) => call<Volume>('fs.volume', { path }),
   delete: (path: string) => call<boolean>('fs.delete', { path }),
   deleteAsync: (path: string) => host().callAsync<boolean>('fs.delete', { path }),
   rename: (from: string, to: string) => { call('fs.rename', { from, to }) },

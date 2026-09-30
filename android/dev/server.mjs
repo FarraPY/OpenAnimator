@@ -8,7 +8,11 @@
  *   http://127.0.0.1:PORT      → los proyectos (como https://oaproject.androidplatform.net)
  *
  *   node android/dev/server.mjs [--port 5190] [--data carpeta] [--mock-claude] [--host 127.0.0.1]
- *                               [--termux-claude fake|real] [--termux-permission]
+ *                               [--termux-claude fake|real] [--termux-permission] [--sd carpeta]
+ *
+ * Con --sd, esa carpeta hace de tarjeta SD (como Fs.java: los proyectos de los dos lados se ven juntos
+ * en projects/, "@sd/…" es la carpeta de la app en la tarjeta). POST /__dev/sd {present} la saca o la
+ * pone (después, window.__oaNativeEvent('storage') le avisa a la página, como Java).
  *
  * Termux (Claude Code con el plan) también se imita: RUN_COMMAND corre con el bash de la PC y un HOME
  * propio (data/.dev-termux/home), así el puente de verdad (android/termux/bridge.mjs) arranca y lanza
@@ -51,14 +55,107 @@ const MIME = {
 }
 const mimeOf = (f) => MIME[path.extname(f).slice(1).toLowerCase()] || 'application/octet-stream'
 
-// ── carpeta de datos (como Fs.java: todo confinado a DATA) ────────────────────
-function resolve(rel) {
-  const clean = String(rel || '').replace(/\\/g, '/').replace(/^\/+/, '')
-  const p = path.resolve(DATA, clean)
-  if (p !== DATA && !p.startsWith(DATA + path.sep)) throw new Error('Ruta fuera de la carpeta de datos: ' + rel)
+// ── carpeta de datos (como Fs.java: todo confinado a DATA o a la tarjeta) ─────
+const SD_DIR = arg('sd', '') ? path.resolve(arg('sd')) : ''
+let sdPresent = !!SD_DIR
+if (SD_DIR) fs.mkdirSync(SD_DIR, { recursive: true })
+const INTERNAL_PROJECTS = path.join(DATA, 'projects')
+const card = () => (sdPresent ? { base: SD_DIR, projects: path.join(SD_DIR, 'projects'), label: 'Tarjeta SD SanDisk (dev)', uuid: 'DEV0-0001' } : null)
+const PREFS_FILE = path.join(DATA, '.dev-storage.json')
+const prefs = () => { try { return JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')) } catch { return {} } }
+const setPrefs = (p) => fs.writeFileSync(PREFS_FILE, JSON.stringify({ ...prefs(), ...p }))
+const NO_CARD = 'La tarjeta SD no está disponible.'
+function clean(rel) {
+  const out = []
+  for (const part of String(rel || '').replace(/\\/g, '/').split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') throw new Error('Ruta inválida: ' + rel)
+    out.push(part)
+  }
+  return out.join('/')
+}
+function insideOf(base, rel) {
+  const p = path.resolve(base, rel)
+  if (p !== base && !p.startsWith(base + path.sep)) throw new Error('Ruta fuera de los datos: ' + rel)
   return p
 }
-const relOf = (abs) => path.relative(DATA, abs).split(path.sep).join('/')
+const projectsWith = (id) => (fs.existsSync(path.join(INTERNAL_PROJECTS, id)) ? INTERNAL_PROJECTS : card() && fs.existsSync(path.join(card().projects, id)) ? card().projects : null)
+const newProjectsDir = () => (card() && prefs().newProjects === 'sd' ? card().projects : INTERNAL_PROJECTS)
+const onCard = (p) => !!card() && (p === card().base || p.startsWith(card().base + path.sep))
+const projectsBeside = (p) => (onCard(p) ? card().projects : INTERNAL_PROJECTS)
+function resolve(rel, near) {
+  rel = clean(rel)
+  if (rel === '@sd' || rel.startsWith('@sd/')) { if (!card()) throw new Error(NO_CARD); return insideOf(card().base, rel.slice(4)) }
+  if (rel.startsWith('projects/')) {
+    const rest = rel.slice(9), id = rest.split('/')[0]
+    return insideOf(projectsWith(id) || near || newProjectsDir(), rest)
+  }
+  return insideOf(DATA, rel)
+}
+const relOf = (abs) => (onCard(abs) ? ['@sd', path.relative(card().base, abs)].filter(Boolean).join('/') : path.relative(DATA, abs)).split(path.sep).join('/')
+function rememberCard() {
+  const c = card()
+  if (!c) return
+  const ids = (fs.existsSync(c.projects) ? fs.readdirSync(c.projects) : []).filter((n) => !n.startsWith('.') && fs.statSync(path.join(c.projects, n)).isDirectory())
+  setPrefs({ cardProjects: ids, cardLabel: c.label })
+}
+const onMissingCard = (id) => !card() && (prefs().cardProjects || []).includes(id)
+function listProjects() {
+  const seen = new Set(), out = []
+  for (const [dir, vol] of [[INTERNAL_PROJECTS, null], [card()?.projects, 'sd']]) {
+    if (!dir || !fs.existsSync(dir)) continue
+    for (const n of fs.readdirSync(dir)) if (!seen.has(n)) { seen.add(n); out.push({ ...entry(n, path.join(dir, n)), ...(vol ? { vol } : {}) }) }
+  }
+  rememberCard()
+  return out
+}
+function storageInfo() {
+  const c = card()
+  const st = (p) => { try { const s = fs.statfsSync(p); return { free: s.bavail * s.bsize, total: s.blocks * s.bsize } } catch { return { free: 0, total: 0 } } }
+  const p = prefs()
+  return {
+    internal: st(DATA), ...(c ? { sd: { label: c.label, uuid: c.uuid, ...st(c.base) } } : {}),
+    newProjects: p.newProjects === 'sd' ? 'sd' : 'internal', missing: c ? 0 : (p.cardProjects || []).length, cardLabel: p.cardLabel || '',
+  }
+}
+let moveCancel = false
+/** Como Fs.moveProject: copia con nombre oculto, verifica, cambia nombres y recién ahí borra el original. */
+async function moveProject(a, emit) {
+  const id = String(a.id || '')
+  if (!id || id.startsWith('.') || clean(id) !== id || id.includes('/')) throw new Error('Proyecto inválido')
+  const from = projectsWith(id)
+  if (!from) throw new Error('No existe el proyecto')
+  if (a.to === 'sd' && !card()) throw new Error(NO_CARD)
+  const dest = a.to === 'sd' ? card().projects : INTERNAL_PROJECTS
+  if (from === dest) return { moved: false }
+  const src = path.join(from, id), dst = path.join(dest, id), tmp = path.join(dest, '.moving-' + id), old = path.join(from, '.moved-' + id)
+  if (fs.existsSync(dst)) throw new Error(`Ya hay un proyecto «${id}» ${dest === INTERNAL_PROJECTS ? 'en la tablet' : 'en la tarjeta SD'}.`)
+  const files = []
+  const scan = (d, r) => { for (const n of fs.readdirSync(d)) { const p = path.join(d, n), q = r ? `${r}/${n}` : n; if (fs.statSync(p).isDirectory()) { files.push({ dir: true, q }); scan(p, q) } else files.push({ q, size: fs.statSync(p).size }) } }
+  scan(src, '')
+  const total = files.reduce((n, f) => n + (f.size || 0), 0)
+  const slow = +(process.env.OA_DEV_SLOW_MOVE || 0)
+  fs.rmSync(tmp, { recursive: true, force: true })
+  fs.mkdirSync(tmp, { recursive: true })
+  let done = 0
+  try {
+    for (const f of files) {
+      if (moveCancel) throw new Error('Cancelado')
+      if (f.dir) { fs.mkdirSync(path.join(tmp, f.q), { recursive: true }); continue }
+      fs.copyFileSync(path.join(src, f.q), path.join(tmp, f.q))
+      done += f.size
+      emit({ event: 'progress', done, total })
+      if (slow) await new Promise((r) => setTimeout(r, slow))
+    }
+    if (moveCancel) throw new Error('Cancelado')
+  } catch (e) { fs.rmSync(tmp, { recursive: true, force: true }); throw e }
+  fs.rmSync(old, { recursive: true, force: true })
+  fs.renameSync(src, old)
+  fs.renameSync(tmp, dst)
+  fs.rmSync(old, { recursive: true, force: true })
+  rememberCard()
+  return { moved: true, size: total }
+}
 const entry = (name, p, st = fs.statSync(p)) => ({ name, dir: st.isDirectory(), size: st.isDirectory() ? 0 : st.size, mtime: Math.round(st.mtimeMs) })
 function walk(d, prefix, depth, maxDepth, max, skipHidden, skip, out) {
   if (depth > maxDepth || out.length >= max) return
@@ -423,9 +520,13 @@ const info = () => ({
 function sync(method, a) {
   switch (method) {
     case 'fs.stat': { const p = resolve(a.path); return fs.existsSync(p) ? entry(path.basename(p), p) : null }
-    case 'fs.list': { const p = resolve(a.path); return fs.existsSync(p) ? fs.readdirSync(p).map((n) => entry(n, path.join(p, n))) : [] }
+    case 'fs.list': { if (clean(a.path) === 'projects') return listProjects(); const p = resolve(a.path); return fs.existsSync(p) ? fs.readdirSync(p).map((n) => entry(n, path.join(p, n))) : [] }
     case 'fs.walk': { const out = []; walk(resolve(a.path), '', 0, a.depth ?? 8, a.max ?? 10000, a.skipHidden ?? true, new Set(a.skipDirs || []), out); return out }
-    case 'fs.exists': return fs.existsSync(resolve(a.path))
+    case 'fs.exists': { const r = clean(a.path); if (/^projects\/[^/]+$/.test(r) && onMissingCard(r.slice(9))) return true; return fs.existsSync(resolve(r)) }
+    case 'fs.volume': return onCard(resolve(a.path)) ? 'sd' : 'internal'
+    case 'storage.info': return storageInfo()
+    case 'storage.setNew': setPrefs({ newProjects: a.volume === 'sd' ? 'sd' : 'internal' }); return true
+    case 'storage.cancel': moveCancel = a.on !== false; return true
     case 'fs.readText': return fs.readFileSync(resolve(a.path), 'utf8')
     case 'fs.readTextLimited': {
       const p = resolve(a.path), size = fs.statSync(p).size, max = a.max ?? 200000
@@ -434,11 +535,18 @@ function sync(method, a) {
     }
     case 'fs.writeText': writeAtomic(resolve(a.path), String(a.text)); return true
     case 'fs.writeBase64': { const p = resolve(a.path); fs.mkdirSync(path.dirname(p), { recursive: true }); (a.append ? fs.appendFileSync : fs.writeFileSync)(p, Buffer.from(a.data || '', 'base64')); return true }
-    case 'fs.mkdir': fs.mkdirSync(resolve(a.path), { recursive: true }); return true
-    case 'fs.delete': { const p = resolve(a.path); if (p === DATA) throw new Error('No se puede borrar la raíz'); const ex = fs.existsSync(p); fs.rmSync(p, { recursive: true, force: true }); return ex }
-    case 'fs.rename': { const to = resolve(a.to); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.renameSync(resolve(a.from), to); return true }
-    case 'fs.copy': { const to = resolve(a.to); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(resolve(a.from), to, { recursive: true }); return true }
-    case 'fs.du': return du(resolve(a.path))
+    case 'fs.mkdir': {
+      const near = a.volume === 'sd' ? (card() || (() => { throw new Error(NO_CARD) })()).projects : a.volume === 'internal' ? INTERNAL_PROJECTS : undefined
+      fs.mkdirSync(resolve(a.path, near), { recursive: true }); rememberCard(); return true
+    }
+    case 'fs.delete': {
+      const p = resolve(a.path)
+      if ([DATA, INTERNAL_PROJECTS, card()?.base, card()?.projects].includes(p)) throw new Error('No se puede borrar esa carpeta')
+      const ex = fs.existsSync(p); fs.rmSync(p, { recursive: true, force: true }); return ex
+    }
+    case 'fs.rename': { const from = resolve(a.from); if (!fs.existsSync(from)) throw new Error('No existe: ' + a.from); const to = resolve(a.to, projectsBeside(from)); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.renameSync(from, to); rememberCard(); return true }
+    case 'fs.copy': { const from = resolve(a.from); const to = resolve(a.to, projectsBeside(from)); fs.mkdirSync(path.dirname(to), { recursive: true }); fs.cpSync(from, to, { recursive: true }); return true }
+    case 'fs.du': return clean(a.path) === 'projects' ? du(INTERNAL_PROJECTS) + (card() ? du(card().projects) : 0) : du(resolve(a.path))
     case 'secrets.set': {
       if (!SECRET_HOSTS[a.name]) throw new Error('Clave desconocida')
       const s = secrets(); if (a.value) s[a.name] = String(a.value).trim(); else delete s[a.name]
@@ -477,7 +585,8 @@ async function async(method, a, id, emit) {
     case 'file.save': console.log('[guardar como]', a.path); return { saved: true, uri: 'content://dev/' + path.basename(a.path) }
     case 'file.share': console.log('[compartir]', a.path); return true
     case 'file.open': console.log('[abrir archivo]', a.path); return true
-    case 'gallery.save': { const src = resolve(a.path); const dir = path.join(DATA, '.dev-gallery'); fs.mkdirSync(dir, { recursive: true }); fs.copyFileSync(src, path.join(dir, a.name || path.basename(src))); return { uri: 'content://dev/gallery/' + (a.name || path.basename(src)), folder: 'Movies/OpenAnimator' } }
+    case 'gallery.save': { const src = resolve(a.path); const dir = path.join(DATA, '.dev-gallery'); fs.mkdirSync(dir, { recursive: true }); fs.copyFileSync(src, path.join(dir, a.name || path.basename(src))); return { uri: 'content://dev/gallery/' + (a.name || path.basename(src)), folder: onCard(src) ? 'Movies/OpenAnimator (tarjeta SD)' : 'Movies/OpenAnimator' } }
+    case 'storage.move': return await moveProject(a, emit)
     case 'clipboard.image': return true
     case 'termux.permission': termuxPerm = true; return true
     case 'termux.run': return await termuxRun(a)
@@ -549,6 +658,7 @@ const server = http.createServer(async (req, res) => {
         res.end(); return
       }
       if (req.method === 'POST' && p === '/__dev/pick') { nextPick = JSON.parse((await readBody(req)).toString('utf8')).files || []; res.writeHead(200); res.end('ok'); return }
+      if (req.method === 'POST' && p === '/__dev/sd') { sdPresent = !!SD_DIR && !!JSON.parse((await readBody(req)).toString('utf8')).present; if (sdPresent) rememberCard(); res.writeHead(200); res.end(String(sdPresent)); return }
       if (p.startsWith('/fs/')) { const f = resolve(p.slice(4)); sendFile(req, res, f); return }
       const f = inside(WWW, '.' + (p === '/' ? '/index.html' : p))
       if (f) { sendFile(req, res, f); return }

@@ -79,8 +79,11 @@ puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo 
 
 - **Inicio**: proyectos, plantillas, *Importar proyecto (.zip)* y la papelera. Mantener apretada una
   tarjeta (o tocar `⋯`) abre sus opciones: renombrar, duplicar, compartir como .zip, guardar como plantilla…
-- **Editor**: arriba, las pestañas **Editor** y **Claude**. En el editor quedan el visor, los controles y
-  el timeline; **Medios** y **Propiedades** se abren como paneles que se deslizan cuando los necesitás.
+- **Editor**: arriba, las pestañas **Editor** y **Claude**. En el editor quedan el visor y el timeline; con la
+  tablet horizontal, reproducción y herramientas del timeline van en una sola barra y los botones del visor
+  flotan a los costados del video. **Medios** (a toda la altura) y **Propiedades** se abren como paneles que
+  se deslizan; mientras están abiertos el video se corre para verse entero. En pantalla completa, tocar el
+  video muestra u oculta los controles.
 - **Timeline**: tocar un clip lo selecciona; con el clip seleccionado, arrastrarlo lo mueve y las
   manijas blancas lo recortan. Doble toque abre sus propiedades; mantener apretado, su menú. Deslizar
   desplaza el timeline, **pellizcar hace zoom** y la regla de arriba mueve el cursor.
@@ -93,7 +96,15 @@ puede correr a mano: `bash ~/.openanimator/whisper-install.sh small`) y todo lo 
   Claude). Si Android cierra la página por falta de memoria, la app vuelve sola al proyecto y, con tu
   plan, retoma la conversación que siguió corriendo en Termux.
 - **Exportar**: presets (Recomendado 1080p, 4K HEVC, Liviano 720p, Para editar), calidad, códec y
-  audio. El video se guarda en *Galería › Movies/OpenAnimator* y se puede compartir o abrir.
+  audio. El video se guarda en *Galería › Movies/OpenAnimator* (en la galería de la tarjeta si el
+  proyecto está en la tarjeta SD) y se puede compartir o abrir.
+- **Tarjeta SD**: cada proyecto puede estar en la tablet o en la tarjeta y se trabaja igual en los dos
+  lugares (abrir, editar, Claude, exportar). En *Ajustes › Almacenamiento* se ve el espacio de cada lado,
+  dónde se crean los proyectos nuevos (también se elige al crear cada uno) y *Mover todo*; para uno solo,
+  menú del proyecto › *Mover a la tarjeta SD* / *Mover a la tablet*. Se copia, se comprueba la copia y
+  recién ahí se borra el original (cancelar o un corte lo deja donde estaba). Sus videos exportados y su
+  papelera quedan en la tarjeta. Si sacás la tarjeta, sus proyectos no aparecen hasta que la vuelvas a
+  poner. Como la carpeta interna, la de la tarjeta (`Android/data/…`) se borra al desinstalar la app.
 - Con teclado físico (funda con teclado o Samsung DeX) funcionan los mismos atajos que en la PC.
 
 ### Pasar proyectos entre la PC y la tablet
@@ -173,6 +184,11 @@ Claude Code instalado en la PC). Un mensaje `[transcribir] assets/voz/x.mp3` lo 
 `oa_transcribir` y uno `[pensar]`, razonar con el texto oculto (sólo tokens estimados). Instalar Whisper
 no compila nada: deja `android/dev/fake-whisper.mjs` como `whisper-cli` (lee el WAV, pone una palabra
 por tramo con sonido y escribe el JSON como whisper.cpp).
+
+Con `--sd <carpeta>`, esa carpeta hace de tarjeta SD (los proyectos de los dos lados se ven juntos, como
+en `Fs.java`); `POST /__dev/sd {"present": false}` la "saca" y `window.__oaNativeEvent('storage')` le avisa a
+la página, como hace Java. `OA_DEV_SLOW_MOVE=60` demora cada archivo al mover (para ver el progreso y
+probar cancelar).
 
 El servidor escucha sólo en `127.0.0.1` (su puente no tiene token). El audio que en la tablet
 decodifica Java (`AudioDecoder.java`: formas de onda, mezcla de la exportación, transcripción) acá

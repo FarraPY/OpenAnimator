@@ -45,6 +45,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -69,6 +70,7 @@ public final class Bridge {
     private final Map<String, Http.Handle> requests = new ConcurrentHashMap<>();
     private final Map<Integer, Pending> pending = new ConcurrentHashMap<>();
     private final AtomicInteger reqCodes = new AtomicInteger(2000);
+    private final AtomicBoolean moveCancel = new AtomicBoolean();
     private final Encoder encoder;
     private final TermuxLink termux;
     private volatile String token;
@@ -230,8 +232,10 @@ public final class Bridge {
                 fs.writeBytes(a.getString("path"), Base64.decode(a.getString("data"), Base64.DEFAULT), a.optBoolean("append"));
                 return true;
             case "fs.mkdir":
-                fs.mkdirs(a.getString("path"));
+                fs.mkdirs(a.getString("path"), a.optString("volume", null));
                 return true;
+            case "fs.volume":
+                return fs.volume(a.getString("path"));
             case "fs.delete":
                 return fs.delete(a.getString("path"));
             case "fs.rename":
@@ -242,6 +246,15 @@ public final class Bridge {
                 return true;
             case "fs.du":
                 return fs.du(a.getString("path"));
+            case "storage.info":
+                return fs.info();
+            case "storage.setNew":
+                fs.setNewProjects(a.getString("volume"));
+                return true;
+            case "storage.cancel":
+                // {on: false} al empezar una tanda de proyectos; {on: true} para cortar la copia en curso.
+                moveCancel.set(a.optBoolean("on", true));
+                return true;
             case "secrets.set":
                 if (!SECRET_HOSTS.containsKey(a.getString("name"))) throw new IOException("Clave desconocida");
                 secrets.set(a.getString("name"), a.optString("value", "").trim());
@@ -342,6 +355,10 @@ public final class Bridge {
             }
             case "zip.import":
                 resolve(id, ok(Zip.unzipProject(fs.resolve(a.getString("zip")), fs.resolve(a.getString("dest")), progress(id))));
+                return;
+            case "storage.move":
+                // De a un proyecto por vez (la interfaz espera cada uno); storage.cancel corta la copia.
+                resolve(id, ok(fs.moveProject(a.getString("id"), a.getString("to"), progress(id), moveCancel)));
                 return;
             case "pick.files": {
                 Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -684,9 +701,19 @@ public final class Bridge {
         JSONObject o = new JSONObject();
         if (Build.VERSION.SDK_INT >= 29) {
             ContentResolver cr = act.getContentResolver();
-            Uri collection = video ? MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    : image ? MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                    : MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            // Lo que está en la tarjeta SD va a la galería de la tarjeta (no ocupa la memoria de la tablet).
+            String volume = MediaStore.VOLUME_EXTERNAL_PRIMARY;
+            Fs.Card card = fs.card();
+            if (card != null && !card.uuid.isEmpty() && fs.onCard(src)) {
+                String v = card.uuid.toLowerCase(Locale.ROOT);
+                if (MediaStore.getExternalVolumeNames(act).contains(v)) {
+                    volume = v;
+                    o.put("sd", true);
+                }
+            }
+            Uri collection = video ? MediaStore.Video.Media.getContentUri(volume)
+                    : image ? MediaStore.Images.Media.getContentUri(volume)
+                    : MediaStore.Downloads.getContentUri(volume);
             ContentValues v = new ContentValues();
             v.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
             v.put(MediaStore.MediaColumns.MIME_TYPE, mime);
@@ -718,7 +745,7 @@ public final class Bridge {
             MediaScannerConnection.scanFile(act, new String[]{dst.getPath()}, new String[]{mime}, null);
             o.put("uri", Uri.fromFile(dst).toString());
         }
-        o.put("folder", folder);
+        o.put("folder", o.optBoolean("sd") ? folder + " (tarjeta SD)" : folder);
         return o;
     }
 

@@ -132,8 +132,12 @@ export function Menu({ anchor, items, onClose, align = 'start', width, placement
     window.addEventListener('blur', onClose)
     return () => { window.removeEventListener('mousedown', down, true); window.removeEventListener('keydown', key, true); window.removeEventListener('blur', onClose) }
   })
+  // El menú está en un portal, pero React igual pasa sus eventos a los padres del disparador: sin
+  // cortarlos, tocar «Duplicar» en el menú de una tarjeta también abría el proyecto.
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation()
   return createPortal(
-    <div ref={ref} className="menu" style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, minWidth: width }} onContextMenu={(e) => e.preventDefault()}>
+    <div ref={ref} className="menu" style={{ left: pos?.left ?? -9999, top: pos?.top ?? -9999, minWidth: width }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+      onClick={stop} onDoubleClick={stop} onMouseDown={stop} onPointerDown={stop} onTouchStart={stop}>
       {items.map((it, i) => {
         if ('sep' in it) return <div key={i} className="menu-sep" />
         if ('header' in it) return <div key={i} className="menu-header">{it.header}</div>

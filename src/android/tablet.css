@@ -24,6 +24,18 @@ html.touch button, html.touch .b, html.touch .select, html.touch .seg-btn, html.
 html.touch img { -webkit-user-drag: none; }
 
 /* ── botones: tamaño de dedo y respuesta al tocar ─────────────────────── */
+/* Respuesta al tocar: [data-pressed] se pone en el mismo pointerdown (ui/press.ts), porque Chrome marca
+   :active recién ~100 ms después; y sin transiciones de color, así lo elegido (una pestaña, lista o
+   cuadrícula…) cambia en el mismo momento que la acción. Sólo se anima el volver del "apretado". */
+html.touch .b, html.touch .tb-tab, html.touch .xp-preset, html.touch .tcard { transition: transform .12s var(--ease); }
+html.touch .seg-btn, html.touch .side-item, html.touch .tab, html.touch .chip-f, html.touch .menu-item, html.touch .select,
+html.touch .prow, html.touch .fmt, html.touch .preset, html.touch .suggest button, html.touch .sys-btn { transition: none; }
+html.touch [data-pressed], html.touch [data-pressed] * { transition: none !important; }
+html.touch .seg-btn:hover:not(.on) { color: var(--t2); }
+html.touch .seg-btn:is(:active, [data-pressed]):not(.on) { background: var(--tap); color: var(--t1); }
+html.touch .chip-f:is(:active, [data-pressed]) { background: var(--tap); }
+html.touch .tab:is(:active, [data-pressed]) { color: var(--t1); }
+html.touch .prow:is(:active, [data-pressed]), html.touch .fmt:is(:active, [data-pressed]) { background: var(--tap); }
 html.touch .b { gap: 8px; padding: 0 16px; font-weight: 550; }
 html.touch .b-sm { padding: 0 12px; font-size: 14px; gap: 7px; border-radius: 9px; }
 html.touch .b-xs { padding: 0 10px; font-size: 13px; border-radius: 8px; }
@@ -35,10 +47,10 @@ html.touch .b-ghost.is-active:hover:not(:disabled) { background: var(--accent-so
 html.touch .b-secondary:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-2); }
 html.touch .b-primary:hover:not(:disabled) { background: var(--accent); }
 html.touch .b-subtle:hover:not(:disabled) { background: rgba(255, 255, 255, .045); }
-html.touch .b:active:not(:disabled) { transform: scale(.96); transition: transform .06s; }
-html.touch .b-ghost:active:not(:disabled) { background: var(--tap); color: var(--t1); }
-html.touch .b-secondary:active:not(:disabled) { background: var(--bg-5); }
-html.touch .b-primary:active:not(:disabled) { background: var(--accent-press); }
+html.touch .b:is(:active, [data-pressed]):not(:disabled) { transform: scale(.96); }
+html.touch .b-ghost:is(:active, [data-pressed]):not(:disabled) { background: var(--tap); color: var(--t1); }
+html.touch .b-secondary:is(:active, [data-pressed]):not(:disabled) { background: var(--bg-5); }
+html.touch .b-primary:is(:active, [data-pressed]):not(:disabled) { background: var(--accent-press); }
 html.touch .kbd { display: none; }
 html.touch .badge { height: 26px; padding: 0 10px; font-size: 12.5px; }
 
@@ -55,7 +67,7 @@ html.touch .select { padding: 0 12px 0 14px; gap: 9px; }
 html.touch .select-sm { padding: 0 10px 0 12px; font-size: 14px; border-radius: 10px; }
 html.touch .select:hover:not(:disabled) { background: var(--bg-3); border-color: var(--line-2); }
 html.touch .select-ghost:hover:not(:disabled) { background: none; color: var(--t2); }
-html.touch .select:active:not(:disabled) { background: var(--bg-5); }
+html.touch .select:is(:active, [data-pressed]):not(:disabled) { background: var(--bg-5); }
 html.touch .switch { width: 48px; height: 28px; }
 html.touch .switch span { top: 4px; left: 4px; width: 20px; height: 20px; }
 html.touch .switch.on span { transform: translateX(20px); }
@@ -76,8 +88,8 @@ html.touch .caps { font-size: 11.5px; }
 html.touch .menu { padding: 8px; border-radius: 16px; min-width: 260px; max-height: 78vh; }
 html.touch .menu-item { min-height: 48px; padding: 6px 14px 6px 12px; gap: 14px; border-radius: 10px; font-size: 15px; }
 html.touch .menu-item.hi { background: none; }
-html.touch .menu-item:active { background: var(--tap); }
-html.touch .menu-item.danger:active { background: var(--err-soft); }
+html.touch .menu-item:is(:active, [data-pressed]) { background: var(--tap); }
+html.touch .menu-item.danger:is(:active, [data-pressed]) { background: var(--err-soft); }
 html.touch .menu-check { width: 20px; }
 html.touch .menu-desc { font-size: 13px; }
 html.touch .menu-hint { font-size: 13px; }
@@ -105,13 +117,13 @@ html.touch .titlebar { padding: 0 14px; gap: 10px; }
 html.touch .brand { font-size: 16px; gap: 11px; }
 html.touch .tb-touch { gap: 6px; padding: 0 10px 0 8px; }
 .tb-project { display: flex; align-items: center; gap: 10px; min-width: 0; max-width: 34vw; height: 48px; padding: 0 12px 0 10px; border-radius: 12px; border: 0; background: none; text-align: left; }
-.tb-project:active { background: var(--tap); }
+.tb-project:is(:active, [data-pressed]) { background: var(--tap); }
 .tb-project-txt { display: flex; flex-direction: column; min-width: 0; }
 .tb-project-name { font: 600 16px/1.2 var(--font-display); color: var(--t1); }
 .tb-project-sub { font-size: 12.5px; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tb-tabs { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex; gap: 4px; padding: 4px; border-radius: 16px; background: var(--bg-2); border: 1px solid var(--line-2); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .03); }
 .tb-tab { position: relative; display: flex; align-items: center; gap: 9px; height: 42px; padding: 0 20px 0 16px; border: 0; border-radius: 12px; background: none; color: var(--t2); font: 600 14.5px var(--font); transition: background .18s var(--ease), color .18s; }
-.tb-tab:active { transform: scale(.97); }
+.tb-tab:is(:active, [data-pressed]) { transform: scale(.97); }
 .tb-tab.on { color: #fff; background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, #fff), var(--accent)); box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent), inset 0 1px 0 rgba(255, 255, 255, .2); }
 .tb-tab.claude.on { background: linear-gradient(135deg, #e0845f, #c05f3f); box-shadow: 0 4px 14px rgba(217, 119, 87, .35), inset 0 1px 0 rgba(255, 255, 255, .2); }
 .tb-tab-dot { position: absolute; top: 7px; right: 8px; width: 9px; height: 9px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--bg-2); }
@@ -128,7 +140,7 @@ html.touch .side { padding: 14px 12px; gap: 4px; }
 html.touch .side-item { height: 48px; padding: 0 14px; gap: 14px; font-size: 15px; border-radius: 12px; }
 html.touch .side-item:hover { background: none; color: var(--t2); }
 html.touch .side-item.on, html.touch .side-item.on:hover { background: rgba(255, 255, 255, .075); color: var(--t1); }
-html.touch .side-item:active { background: var(--tap); }
+html.touch .side-item:is(:active, [data-pressed]) { background: var(--tap); }
 html.touch .side-item .count { font-size: 13px; }
 html.touch .side-label { padding: 18px 14px 8px; }
 html.touch .side-cta .b { height: 50px; font-size: 15.5px; border-radius: 14px; }
@@ -144,19 +156,20 @@ html.touch .section-h h3 { font-size: 17px; }
 html.touch .pgrid { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 22px; }
 html.touch .pcard-thumb { border-radius: 16px; }
 html.touch .pcard:hover .pcard-thumb { transform: none; box-shadow: var(--shadow-1); border-color: var(--line-2); }
-html.touch .pcard:active .pcard-thumb { transform: scale(.985); }
+html.touch .pcard:is(:active, [data-pressed]) .pcard-thumb { transform: scale(.985); }
 html.touch .pcard-play { display: none; }
 html.touch .pcard-more { opacity: 1; top: 10px; right: 10px; }
 html.touch .pcard-more .b { width: 40px; height: 40px; border-radius: 12px; }
 html.touch .pcard-name { font-size: 15.5px; }
 html.touch .pcard-meta { font-size: 13px; }
 html.touch .pcard-res, html.touch .pcard-dur { font-size: 12.5px; padding: 3px 8px; border-radius: 7px; }
+html.touch .pcard-sd { font-size: 12px; padding: 3px 8px; border-radius: 7px; top: 10px; left: 10px; }
 html.touch .prow { grid-template-columns: 96px minmax(0, 2.2fr) 1fr .7fr .8fr 1fr 52px; padding: 10px 14px; font-size: 14px; }
 html.touch .prow-thumb { width: 96px; border-radius: 8px; }
 html.touch .tgrid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 22px; }
 html.touch .tcard { border-radius: 18px; }
 html.touch .tcard:hover { transform: none; box-shadow: none; border-color: var(--line-2); }
-html.touch .tcard:active { transform: scale(.99); }
+html.touch .tcard:is(:active, [data-pressed]) { transform: scale(.99); }
 html.touch .tcard.sel { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 html.touch .tcard-more { opacity: 1; }
 html.touch .tcard-name { font-size: 15px; }
@@ -201,15 +214,41 @@ html.touch .path { font-size: 13px; padding: 8px 10px; border-radius: 9px; }
 .dev-grid .v { font-weight: 600; margin-top: 3px; word-break: break-word; }
 .trash-row { display: flex; align-items: center; gap: 14px; padding: 12px 20px; border-top: 1px solid var(--line); }
 .trash-row:first-child { border-top: 0; }
+
+/* Ajustes › Almacenamiento: la tablet y la tarjeta SD */
+.vol-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; padding: 18px 20px; }
+.vol-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--bg-1); min-width: 0; }
+.vol-card.on { border-color: var(--accent-line); box-shadow: 0 0 0 1px var(--accent-soft) inset; }
+.vol-card.empty-vol { justify-content: center; align-items: flex-start; border-style: dashed; background: transparent; }
+.vol-ico { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-t); flex: none; }
+.vol-bar { display: flex; height: 8px; border-radius: 5px; overflow: hidden; background: var(--bg-0); }
+.vol-bar > div { min-width: 0; }
 .notes-edit { font-family: var(--mono); font-size: 13.5px !important; min-height: 220px; }
 
 /* ── Editor: estructura táctil ───────────────────────────────────────── */
 .editor-shell { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
 .editor-shell > .editor { flex: 1; }
 .ed-work.touch { position: relative; display: flex; min-height: 0; overflow: hidden; }
+/* El panel de Medios va a toda la altura del editor (sobre el timeline): lista y vista previa entran juntas. */
+.editor.touch { position: relative; }
+html.touch .mprev { max-height: 42%; }
+html.touch .mprev-text { max-height: 260px; font-size: 12.5px; }
 .ed-work.touch > .viewer { flex: 1; }
 html.touch .viewer-bar { height: 52px; gap: 6px; padding: 0 10px; }
 html.touch .viewer-bar .vdiv { margin: 10px 4px; }
+.vb-l, .vb-r { display: flex; align-items: center; gap: inherit; }
+.vb-zoom { font-size: 13px; padding: 0 6px; }
+/* Tablet horizontal: el video siempre deja franjas libres a los costados; los botones del visor flotan ahí,
+   en dos columnas angostas (caben aunque haya un panel abierto) y la vista previa usa toda la altura. */
+.viewer.float-bar { position: relative; }
+.viewer.float-bar > .viewer-bar { position: absolute; z-index: 5; inset: 0; height: auto; align-items: flex-start; padding: 12px; border: 0; background: none; pointer-events: none; }
+.viewer.float-bar .vb-l, .viewer.float-bar .vb-r { flex-direction: column; gap: 4px; padding: 5px; border-radius: 14px; pointer-events: auto;
+  background: color-mix(in srgb, var(--bg-1) 82%, transparent); border: 1px solid var(--line); backdrop-filter: blur(8px); }
+.viewer.float-bar .vb-btn-label, .viewer.float-bar .vb-r .vdiv { display: none; }
+.viewer.float-bar .vb-zoom { font-size: 11.5px; padding: 4px 0 2px; }
+/* Con un panel abierto, el video se corre al lado libre (se ve entero mientras elegís medios). */
+.viewer.float-bar.push-l { padding-left: var(--drawer); }
+.viewer.float-bar.push-r { padding-right: var(--drawer); }
 .vb-btn-label { display: inline-flex; }
 @media (max-width: 1000px) { .vb-btn-label { display: none; } }
 html.touch .transport { height: 68px; padding: 0 14px; }
@@ -242,11 +281,11 @@ html.touch .media-group-h { padding: 14px 16px 6px; }
 html.touch .mgrid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; padding: 6px 12px 12px; }
 html.touch .mtile-img { border-radius: 12px; }
 html.touch .mtile-name { font-size: 13px; padding-top: 7px; }
-html.touch .mtile:active .mtile-img { transform: scale(.97); }
+html.touch .mtile:is(:active, [data-pressed]) .mtile-img { transform: scale(.97); }
 html.touch .mtile.sel .mtile-img { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 html.touch .mlist-item { height: 48px; font-size: 14px; border-radius: 10px; margin: 0 8px; }
 .madd { position: absolute; right: 6px; top: 6px; width: 34px; height: 34px; border-radius: 11px; border: 0; display: grid; place-items: center; color: #fff; background: rgba(10, 11, 14, .66); backdrop-filter: blur(6px); z-index: 2; }
-.madd:active { background: var(--accent); }
+.madd:is(:active, [data-pressed]) { background: var(--accent); }
 html.touch .mtile { position: relative; }
 html.touch .mprev { font-size: 14px; }
 
@@ -268,6 +307,10 @@ html.touch .fs-row .b-icon { width: 48px; height: 48px; }
 
 /* ── Timeline táctil ─────────────────────────────────────────────────── */
 html.touch .tl-bar { height: 56px; gap: 6px; padding: 0 10px; overflow-x: auto; overflow-y: hidden; }
+html.touch .tl-bar.merged { height: 64px; overflow: hidden; }
+html.touch .tl-bar.merged .play-btn { width: 48px !important; height: 48px !important; margin: 0 8px; }
+html.touch .tl-bar.merged .tlb-c .b-icon:not(.play-btn) { width: 42px; height: 42px; border-radius: 12px; }
+html.touch .tl-bar.merged .timecode { margin-right: 8px; font-size: 16.5px; }
 html.touch .tl-bar > * { flex: none; }
 html.touch .tl-bar .vdiv { margin: 12px 4px; }
 html.touch .tl-heads { width: 196px; }
@@ -299,7 +342,7 @@ html.touch .tl-resize { position: relative; top: 0; flex: none; height: 18px; ba
 html.touch .tl-resize::before { content: ''; position: absolute; left: 50%; top: 6px; width: 56px; height: 5px; margin-left: -28px; border-radius: 3px; background: var(--line-3); }
 /* Sin :hover/:active en la agarradera: Chrome "atrae" los toques cercanos hacia los elementos con efecto
    al tocar, y le robaría los toques al borde de la regla. La regla sí lo tiene (así gana los suyos). */
-html.touch .tl-ruler:active { background: var(--bg-2); }
+html.touch .tl-ruler:is(:active, [data-pressed]) { background: var(--bg-2); }
 
 /* ── Vista de Claude (pantalla propia) ───────────────────────────────── */
 .claude-view { position: absolute; inset: 0; z-index: 50; display: flex; background: var(--bg-1); animation: viewIn .22s var(--ease); }
@@ -344,7 +387,7 @@ html.touch .notice { font-size: 14px; padding: 12px 14px; border-radius: 12px; }
 html.touch .turn-meta { font-size: 12.5px; }
 html.touch .suggest button { padding: 14px 16px; border-radius: 14px; font-size: 14.5px; gap: 12px; }
 html.touch .suggest button:hover { border-color: var(--line); background: var(--bg-2); color: var(--t2); }
-html.touch .suggest button:active { background: var(--bg-3); }
+html.touch .suggest button:is(:active, [data-pressed]) { background: var(--bg-3); }
 html.touch .chat-hello { padding: 36px 6px 10px; }
 html.touch .chat-hello-title { font-size: 22px; margin: 14px 0 6px; }
 html.touch .composer-wrap { padding: 12px 20px 18px; }
@@ -361,7 +404,7 @@ html.touch .hist-row { min-height: 64px; }
 /* ── Exportar (Android) ──────────────────────────────────────────────── */
 .xp-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
 .xp-preset { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; border-radius: 16px; border: 1px solid var(--line-2); background: var(--bg-2); text-align: left; transition: border-color .15s, background .15s; }
-.xp-preset:active { transform: scale(.98); }
+.xp-preset:is(:active, [data-pressed]) { transform: scale(.98); }
 .xp-preset.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-soft); }
 .xp-preset .ic { color: var(--accent-t); }
 .xp-preset b { font-size: 15px; } .xp-preset span { color: var(--t3); font-size: 13px; }
@@ -405,4 +448,4 @@ html.touch .hist-row { min-height: 64px; }
 
 /* Fila del estado del sistema que se puede tocar (lleva a Ajustes) */
 .sys-btn { border: 0; background: none; padding: 0; width: 100%; text-align: left; font: inherit; color: var(--t2); cursor: pointer; }
-.sys-btn:active { opacity: .7; }
+.sys-btn:is(:active, [data-pressed]) { opacity: .7; }

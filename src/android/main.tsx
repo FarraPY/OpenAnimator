@@ -4,6 +4,7 @@
  */
 import { createRoot } from 'react-dom/client'
 import { installBackend } from './backend'
+import { installPressFeedback } from './ui/press'
 import '../styles.css'
 import './tablet.css'
 
@@ -21,6 +22,7 @@ function fatal(e: unknown) {
 
 try {
   installBackend()
+  installPressFeedback()
   // La interfaz se importa después: algunos módulos miran la plataforma al cargarse (modelos de Claude…).
   import('../App').then(({ default: App }) => createRoot(document.getElementById('root')!).render(<App />), fatal)
 } catch (e) { fatal(e) }

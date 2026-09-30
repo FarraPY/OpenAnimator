@@ -2,16 +2,19 @@
  * Proyectos de OpenAnimator en Android: el mismo formato abierto que en la PC (docs/formato-proyecto.md),
  * así un proyecto se puede pasar de un equipo al otro como .zip.
  *
- *   data/projects/<id>/project.json · timelines/*.json · scenes/ · assets/ · renders/
- *   data/templates/u-<id>/               plantillas del usuario
- *   data/.trash/                       papelera (se vacía sola a los 30 días)
+ *   projects/<id>/project.json · timelines/*.json · scenes/ · assets/ · renders/
+ *                                      en la tablet o en la tarjeta SD (Fs.java los junta)
+ *   templates/u-<id>/                  plantillas del usuario
+ *   .trash/ y @sd/.trash/              papelera de cada lugar (se vacía sola a los 30 días)
+ *   exports/ y @sd/exports/            videos y .zip exportados, del lado del proyecto
  */
 import type { Asset, Clip, Project, ProjectSummary, Template, Timeline, TimelineRef, Track } from '../../api'
-import { basename, dirname, extname, fs, join, normalizeRel, slugify, stem, uid, uniqueName } from './fsx'
+import { basename, dirname, Entry, extname, fs, join, normalizeRel, slugify, stem, uid, uniqueName, Volume } from './fsx'
 
 export const PROJECTS = 'projects'
 export const USER_TEMPLATES = 'templates'
-const TRASH = '.trash'
+/** Lo borrado de la tarjeta SD queda en la tarjeta: pasarlo a la tablet la llenaría (y tardaría). */
+const TRASH = '.trash', SD_TRASH = '@sd/.trash', SD_ITEM = 'sd~'
 
 // ── recursos incluidos en la app (plantillas, guías para la IA) ────────────────
 type Manifest = { templates: Record<string, string[]>; ai: string[]; version?: string }
@@ -91,42 +94,61 @@ export function listProjects(): ProjectSummary[] {
       for (const ref of p.timelines || []) {
         try { duration += fs.readJSON<Timeline>(join(PROJECTS, e.name, normalizeRel(ref.file))).duration || 0 } catch { /* ignore */ }
       }
-      out.push({ id: e.name, name: p.name, width: p.width, height: p.height, fps: p.fps, timelines: (p.timelines || []).length, duration, updatedAt: p.updatedAt, thumb: thumbUrl(e.name) })
+      out.push({ id: e.name, name: p.name, width: p.width, height: p.height, fps: p.fps, timelines: (p.timelines || []).length, duration, updatedAt: p.updatedAt, thumb: thumbUrl(e.name), volume: e.vol === 'sd' ? 'sd' : 'internal' })
     } catch { /* proyecto roto: se ignora en la lista */ }
   }
   return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
 }
 
 // ── papelera ──────────────────────────────────────────────────────────────────
-/** Mueve a data/.trash (se puede recuperar desde Ajustes durante 30 días). */
+/** Mueve a la papelera de su lugar (se puede recuperar desde Ajustes durante 30 días). */
 export function moveToTrash(rel: string, label?: string) {
   if (!fs.exists(rel)) return
   const id = `${Date.now().toString(36)}-${slugify(basename(rel)).slice(0, 30)}`
-  const dir = join(TRASH, id)
+  const dir = join(fs.volume(rel) === 'sd' ? SD_TRASH : TRASH, id)
   fs.mkdir(dir)
   fs.writeJSON(join(dir, 'trash.json'), { from: rel, name: basename(rel), label: label || basename(rel), at: new Date().toISOString() })
   fs.rename(rel, join(dir, 'item'))
 }
-export type TrashItem = { id: string; from: string; name: string; label: string; at: string; size: number }
+/** Carpeta de un elemento de la papelera (los de la tarjeta SD tienen id «sd~…»). */
+export function trashDir(id: string) {
+  const sd = id.startsWith(SD_ITEM), name = sd ? id.slice(SD_ITEM.length) : id
+  if (!/^[\w-][\w.-]*$/.test(name)) throw new Error('Elemento inválido')
+  return join(sd ? SD_TRASH : TRASH, name)
+}
+/** Lista una carpeta que puede no estar (la de la tarjeta SD, si la sacaron). */
+export function listMaybe(dir: string): Entry[] {
+  try { return fs.list(dir) } catch { return [] }
+}
+export type TrashItem = { id: string; from: string; name: string; label: string; at: string; size: number; sd?: boolean }
 export function listTrash(): TrashItem[] {
   const out: TrashItem[] = []
-  for (const e of fs.list(TRASH)) {
-    try { out.push({ ...fs.readJSON<Omit<TrashItem, 'id' | 'size'>>(join(TRASH, e.name, 'trash.json')), id: e.name, size: fs.du(join(TRASH, e.name)) }) } catch { /* ignore */ }
+  for (const [root, prefix] of [[TRASH, ''], [SD_TRASH, SD_ITEM]]) {
+    for (const e of listMaybe(root)) {
+      try { out.push({ ...fs.readJSON<Omit<TrashItem, 'id' | 'size'>>(join(root, e.name, 'trash.json')), id: prefix + e.name, size: fs.du(join(root, e.name)), ...(prefix ? { sd: true } : {}) }) } catch { /* ignore */ }
+    }
   }
   return out.sort((a, b) => b.at.localeCompare(a.at))
 }
 export function restoreTrash(id: string) {
-  const meta = fs.readJSON<{ from: string }>(join(TRASH, id, 'trash.json'))
+  const dir = trashDir(id)
+  const meta = fs.readJSON<{ from: string }>(join(dir, 'trash.json'))
   let to = meta.from
   if (fs.exists(to)) to = join(dirname(to), uniqueName(dirname(to), basename(to)))
-  fs.rename(join(TRASH, id, 'item'), to)
-  fs.delete(join(TRASH, id))
+  fs.rename(join(dir, 'item'), to)
+  fs.delete(dir)
   return to
 }
 export async function emptyTrash(olderThanDays = 0) {
   const limit = Date.now() - olderThanDays * 86400000
-  for (const t of listTrash()) if (!olderThanDays || new Date(t.at).getTime() < limit) await fs.deleteAsync(join(TRASH, t.id))
+  for (const t of listTrash()) if (!olderThanDays || new Date(t.at).getTime() < limit) await fs.deleteAsync(trashDir(t.id))
 }
+
+// ── dónde está cada proyecto ──────────────────────────────────────────────────
+/** 'sd' si el proyecto está en la tarjeta SD. */
+export function projectVolume(id: string): Volume { return fs.volume(mustDir(id)) }
+/** Exportaciones del lado del proyecto: un video de un proyecto de la tarjeta no llena la tablet. */
+export function exportsDir(id: string) { return projectVolume(id) === 'sd' ? '@sd/exports' : 'exports' }
 
 // ── plantillas ────────────────────────────────────────────────────────────────
 const templateCache = new Map<string, any>()
@@ -191,8 +213,8 @@ export function updateTemplate(id: string, patch: { name?: string; description?:
 const TEMPLATE_SKIP = /^(renders|timelines|\.oa-cache|\.claude|\.oa-chat|\.trash|node_modules|\.git|seg|\.migration-backup|_analisis)(\/|$)|^(project\.json|coanimator-project\.json|thumbnail\.jpg)$/
 
 /** Copia una carpeta de datos a otra, archivo por archivo, salteando lo que `skip` indique. */
-function copyFiltered(src: string, dst: string, skip: (rel: string) => boolean) {
-  fs.mkdir(dst)
+function copyFiltered(src: string, dst: string, skip: (rel: string) => boolean, volume?: Volume) {
+  fs.mkdir(dst, volume)
   for (const e of fs.walk(src, { skipHidden: false, depth: 12, max: 20000 })) {
     const rel = e.path!
     if (skip(rel) || rel.split('/').some((_, i, a) => skip(a.slice(0, i + 1).join('/')))) continue
@@ -226,12 +248,12 @@ export function saveProjectAsTemplate(projectId: string, o: { name: string; desc
 }
 
 // ── crear / duplicar / borrar ─────────────────────────────────────────────────
-export async function createProject(opts: { name: string; template: string; width?: number; height?: number; fps?: number }): Promise<Project> {
+export async function createProject(opts: { name: string; template: string; width?: number; height?: number; fps?: number; volume?: Volume }): Promise<Project> {
   const tpl = await getTemplate(opts.template)
   const id = uniqueDir(PROJECTS, slugify(opts.name))
   const dir = join(PROJECTS, id)
   const udir = userTemplateDir(opts.template)
-  fs.mkdir(dir)
+  fs.mkdir(dir, opts.volume === 'sd' || opts.volume === 'internal' ? opts.volume : undefined)
   if (udir) {
     if (fs.exists(join(udir, 'files'))) copyFiltered(join(udir, 'files'), dir, () => false)
   } else {
@@ -281,7 +303,8 @@ export function duplicateProject(id: string): Project {
   const src = mustDir(id)
   const p = readProject(id)
   const nid = uniqueDir(PROJECTS, `${id}-copia`)
-  copyFiltered(src, join(PROJECTS, nid), (rel) => rel.startsWith('renders/') || rel === 'renders' || rel.startsWith('.oa-cache') || rel.startsWith('.oa-chat'))
+  // La copia queda al lado del original (en la tablet o en la tarjeta SD).
+  copyFiltered(src, join(PROJECTS, nid), (rel) => rel.startsWith('renders/') || rel === 'renders' || rel.startsWith('.oa-cache') || rel.startsWith('.oa-chat'), fs.volume(src))
   const np: any = { ...p, id: nid, name: `${p.name} (copia)`, createdAt: new Date().toISOString() }
   fs.writeJSON(join(PROJECTS, nid, 'project.json'), np)
   return np
@@ -410,13 +433,14 @@ export async function importZip(zipPath: string, onProgress?: (p: number) => voi
   }
 }
 
-/** Arma data/exports/<nombre>.zip con el proyecto (sin cachés; las exportaciones, opcionales). */
+/** Arma exports/<nombre>.zip (o @sd/exports/, si el proyecto está en la tarjeta) sin cachés; las exportaciones, opcionales. */
 export async function exportZip(id: string, o: { includeRenders?: boolean } = {}, onProgress?: (p: number) => void) {
   const dir = mustDir(id)
   const p = readProject(id)
   const name = `${(p.name || id).replace(/[<>:"/\\|?*]+/g, '-').trim() || id}.zip`
-  fs.mkdir('exports')
-  const out = join('exports', name)
+  const ex = exportsDir(id)
+  fs.mkdir(ex)
+  const out = join(ex, name)
   const { host } = await import('../host')
   const skip = `^(\\.oa-cache|\\.oa-chat|\\.trash|node_modules|\\.git${o.includeRenders ? '' : '|renders'})(/|$)|(^|/)\\.[^/]*\\.tmp$`
   await host().callAsync('zip.export', { dir, out, prefix: id, skip }, (e) => { if (e.event === 'progress' && e.total) onProgress?.(e.done / e.total) })

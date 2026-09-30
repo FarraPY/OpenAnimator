@@ -7,7 +7,7 @@
  *     tramo de cada archivo que suena en la ventana) → PCM → Java.
  *  2. Fotograma a fotograma: compositor → JPEG → Java decodifica, dibuja en la superficie del
  *     codificador y lo muxea. Mientras Java codifica uno, acá ya se dibuja el siguiente.
- *  3. El archivo queda en data/exports/ y, si está activado, se copia a la galería.
+ *  3. El archivo queda en exports/ (o @sd/exports/ si el proyecto está en la tarjeta SD) y, si está activado, se copia a la galería.
  */
 import type { Clip, Timeline } from '../../api'
 import { autoBitrate, type ExportQuality } from '../bitrate'
@@ -15,7 +15,7 @@ import { host } from '../host'
 import { Renderer } from './frames'
 import { decodeRange } from './media'
 import { basename, blobToBase64, fs, join, normalizeRel, uniqueName } from './fsx'
-import { projectDir, readProject, readTimeline } from './projects'
+import { exportsDir, listMaybe, projectDir, readProject, readTimeline } from './projects'
 import { getSettings } from './settings'
 import { holdAwake } from './wake'
 
@@ -196,9 +196,10 @@ class Export {
     const bitrate = job.bitrate && job.bitrate > 0 ? Math.round(job.bitrate * 1000) : autoBitrate(W, H, fps, job.quality, codec)
 
     // Nombre del archivo final
-    fs.mkdir('exports')
+    const ex = exportsDir(job.projectId) // del lado del proyecto: tablet o tarjeta SD
+    fs.mkdir(ex)
     const tlName = p.timelines.length > 1 ? ` - ${p.timelines.find((t) => t.id === tlId)?.name || tlId}` : ''
-    const out = join('exports', uniqueName('exports', `${safeName(job.name || p.name + tlName)}.mp4`))
+    const out = join(ex, uniqueName(ex, `${safeName(job.name || p.name + tlName)}.mp4`))
 
     // Compositor dedicado (no el de la vista previa)
     this.renderer = new Renderer(job.projectId, tlId, p.width, p.height)
@@ -275,10 +276,12 @@ export async function startExport(job: AndroidExportJob, onProgress: (p: Android
 }
 
 export function cancelExport(id: string) { jobs.get(id)?.cancel() }
+export const exporting = () => jobs.size > 0
 
-/** Exportaciones guardadas en data/exports (para la lista de la pantalla de exportar). */
+/** Exportaciones guardadas en la app (tablet y tarjeta SD), para la lista de la pantalla de exportar. */
 export function listExports() {
-  return fs.list('exports').filter((e) => !e.dir && /\.mp4$/i.test(e.name) && !e.name.startsWith('.'))
-    .map((e) => ({ path: join('exports', e.name), name: e.name, size: e.size, mtime: e.mtime }))
+  return ['exports', '@sd/exports'].flatMap((dir) => listMaybe(dir)
+    .filter((e) => !e.dir && /\.mp4$/i.test(e.name) && !e.name.startsWith('.'))
+    .map((e) => ({ path: join(dir, e.name), name: e.name, size: e.size, mtime: e.mtime, ...(dir === 'exports' ? {} : { sd: true }) })))
     .sort((a, b) => b.mtime - a.mtime)
 }

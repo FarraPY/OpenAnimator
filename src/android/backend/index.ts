@@ -3,7 +3,7 @@
  * electron/main.ts (call('projects:list'), on('project:changed'…)), así la interfaz React es la misma
  * en la PC y en la tablet. Lo que en Windows hace Node/FFmpeg acá lo hacen Java (host) y el WebView.
  */
-import type { AppInfo, Project, Timeline } from '../../api'
+import type { AppInfo, Project, ProjectSummary, Timeline } from '../../api'
 import { recoveredBoot } from '../../platform'
 import { host } from '../host'
 import * as P from './projects'
@@ -81,11 +81,20 @@ function applyAndroidPrefs(s = S.getSettings()) {
 // ── proyectos ─────────────────────────────────────────────────────────────────
 const thumbTried = new Set<string>()
 let thumbing = false
+/** Miniaturas en curso: se escriben dentro del proyecto, así que mover proyectos las espera. */
+let thumbJobs = 0
+async function makeThumb(id: string) {
+  thumbJobs++
+  try { await F.makeThumb(id) } finally { thumbJobs-- }
+}
 async function thumbsInBackground(ids: string[]) {
   if (thumbing) return
   thumbing = true
   try {
-    for (const id of ids) { thumbTried.add(id); await F.makeThumb(id); F.closeFramePool(id) }
+    for (const id of ids) {
+      if (moving) break // se están moviendo proyectos: las que faltan se hacen la próxima vez
+      thumbTried.add(id); await makeThumb(id); F.closeFramePool(id)
+    }
   } finally { thumbing = false }
   send('projects:changed', null)
 }
@@ -127,17 +136,84 @@ h('app:takePendingOpen', () => host().call('app.takePendingOpen'))
 h('trash:list', () => P.listTrash())
 h('trash:restore', (id) => { const to = P.restoreTrash(id); send('projects:changed', null); return to })
 h('trash:empty', () => P.emptyTrash())
-h('trash:delete', (id: string) => { if (!/^[\w.-]+$/.test(id)) throw new Error('Elemento inválido'); return fs.deleteAsync(join('.trash', id)) })
-h('storage:usage', () => ({ projects: fs.du(P.PROJECTS), exports: fs.du('exports'), trash: fs.du('.trash'), cache: fs.du('cache'), templates: fs.du(P.USER_TEMPLATES) }))
+h('trash:delete', (id: string) => fs.deleteAsync(P.trashDir(String(id))))
+
+// ── almacenamiento: la tablet y la tarjeta SD ─────────────────────────────────
+type RawStorage = { internal: { free: number; total: number }; sd?: { label: string; uuid: string; free: number; total: number }; newProjects: 'internal' | 'sd'; missing: number; cardLabel: string }
+const du = (p: string) => { try { return fs.du(p) } catch { return 0 } }
+h('storage:info', () => {
+  const r = host().call<RawStorage>('storage.info')
+  const count = { internal: 0, sd: 0 }
+  for (const e of fs.list(P.PROJECTS)) if (e.dir && !e.name.startsWith('.')) count[e.vol === 'sd' ? 'sd' : 'internal']++
+  const sdProjects = r.sd ? du('@sd/projects') : 0
+  return {
+    newProjects: r.newProjects, missing: r.missing, cardLabel: r.cardLabel,
+    internal: { ...r.internal, projects: count.internal, used: { projects: du(P.PROJECTS) - sdProjects, exports: du('exports'), templates: du(P.USER_TEMPLATES), cache: du('cache'), trash: du('.trash') } },
+    sd: r.sd ? { ...r.sd, projects: count.sd, used: { projects: sdProjects, exports: du('@sd/exports'), trash: du('@sd/.trash') } } : null,
+  }
+})
+h('storage:setNew', (volume: 'internal' | 'sd') => { host().call('storage.setNew', { volume }); send('storage:changed', null); return true })
+/** Proyectos abiertos en el editor: no se mueven mientras tanto. */
+const openProjects = new Map<string, number>()
+let moving: { cancel: boolean } | null = null
+/**
+ * Mueve proyectos entre la tablet y la tarjeta, de a uno (Java copia, verifica y recién ahí borra el
+ * original). El progreso de todos juntos llega por storage:progress.
+ */
+h('storage:move', async (ids: string[], to: 'internal' | 'sd') => {
+  if (moving) throw new Error('Ya se están moviendo proyectos: esperá a que termine.')
+  const cur = { cancel: false }
+  moving = cur
+  let moved = 0, todo: ProjectSummary[] = []
+  try {
+    if ((await import('./exporter')).exporting()) throw new Error('Hay una exportación en curso: esperá a que termine para mover proyectos.')
+    todo = P.listProjects().filter((p) => ids.includes(p.id) && p.volume !== to)
+    for (const p of todo) {
+      if (openProjects.get(p.id)) throw new Error(`«${p.name}» está abierto: cerralo para moverlo.`)
+      if (await chatBusy(p.id)) throw new Error(`Claude está trabajando en «${p.name}»: esperá a que termine para moverlo.`)
+    }
+    host().call('storage.cancel', { on: false })
+    // Las miniaturas se escriben dentro de los proyectos: se espera la que esté en curso (las demás paran).
+    for (let i = 0; thumbJobs > 0 && i < 300; i++) await new Promise((r) => setTimeout(r, 100))
+    const sizes = todo.map((p) => du(join(P.PROJECTS, p.id)))
+    const total = sizes.reduce((a, b) => a + b, 0)
+    let base = 0
+    for (let i = 0; i < todo.length && !cur.cancel; i++) {
+      const p = todo[i]
+      const tell = (done: number) => send('storage:progress', { to, id: p.id, name: p.name, index: i, count: todo.length, done: base + done, total })
+      tell(0)
+      F.closeFramePool(p.id)
+      await host().callAsync('storage.move', { id: p.id, to }, (e) => { if (e.event === 'progress') tell(Math.min(e.done, sizes[i])) })
+      base += sizes[i]
+      moved++
+    }
+  } catch (e: any) {
+    if (e?.message === 'Cancelado') return { moved, count: todo.length, cancelled: true }
+    throw new Error(moved ? `${e?.message || e} (ya se habían movido ${moved} de ${todo.length})` : String(e?.message || e))
+  } finally {
+    moving = null
+    send('projects:changed', null)
+    send('storage:changed', null)
+  }
+  return { moved, count: todo.length, cancelled: cur.cancel }
+})
+h('storage:cancel', () => {
+  if (moving) moving.cancel = true
+  try { host().call('storage.cancel', { on: true }) } catch { /* sin puente */ }
+  return true
+})
 h('app:toast', (text: string) => { try { host().call('app.toast', { text: String(text) }) } catch { /* sin puente */ } })
 
 // ── proyecto abierto ──────────────────────────────────────────────────────────
-h('project:open', (id) => P.readProject(id))
+h('project:open', (id) => { const p = P.readProject(id); openProjects.set(id, (openProjects.get(id) || 0) + 1); return p })
 h('project:close', async (id) => {
+  const n = (openProjects.get(id) || 1) - 1
+  if (n > 0) openProjects.set(id, n)
+  else openProjects.delete(id)
   // Si Claude sigue trabajando en el proyecto, el compositor no se cierra (se cierra solo cuando deja de usarse).
   const busy = await chatBusy(id)
   if (!busy) F.closeFramePool(id)
-  await F.makeThumb(id)
+  await makeThumb(id)
   if (!busy) F.closeFramePool(id)
   send('projects:changed', null)
 })
@@ -216,7 +292,7 @@ h('export:exists', (file: string) => !!file && fs.exists(file))
 h('export:start', async (job) => (await import('./exporter')).startExport(job, (p: unknown) => send('export:progress', p)))
 h('export:cancel', async (id) => (await import('./exporter')).cancelExport(id))
 h('export:list', async () => (await import('./exporter')).listExports())
-h('export:delete', (path: string) => { if (/^exports\/[^/]+$/.test(path)) fs.delete(path); return true })
+h('export:delete', (path: string) => { if (/^(@sd\/)?exports\/[^/]+$/.test(path)) fs.delete(path); return true })
 h('export:clearCache', (id) => { const d = P.projectDir(id); if (d && fs.exists(join(d, '.oa-cache'))) return fs.deleteAsync(join(d, '.oa-cache')) })
 h('export:gallery', (path: string) => host().callAsync('gallery.save', { path }))
 h('export:share', (path: string) => host().callAsync('file.share', { path, title: 'Compartir video' }))
@@ -263,7 +339,7 @@ h('clipboard:text', (text: string) => host().call('clipboard.text', { text: Stri
 
 // ── plantillas del usuario ────────────────────────────────────────────────────
 h('templates:saveProject', async (projectId, o) => {
-  if (!fs.exists(join(P.projectDir(projectId)!, 'thumbnail.jpg'))) await F.makeThumb(projectId)
+  if (!fs.exists(join(P.projectDir(projectId)!, 'thumbnail.jpg'))) await makeThumb(projectId)
   return P.saveProjectAsTemplate(projectId, o)
 })
 h('templates:get', (id) => P.getTemplate(id))
@@ -393,6 +469,8 @@ export function installBackend() {
   hst.onEvent('pause', () => send('app:pause', null))
   hst.onEvent('resume', () => send('app:resume', null))
   hst.onEvent('memory', () => F.trimFramePool())
+  // Pusieron o sacaron la tarjeta SD: cambia la lista de proyectos.
+  hst.onEvent('storage', () => { send('storage:changed', null); send('projects:changed', null) })
   adoptAfterRestart()
   return oa
 }

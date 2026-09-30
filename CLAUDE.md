@@ -115,6 +115,15 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`whisper.put`), `whisper.run` corre `whisper-cli -ojf --dtw <modelo> -nfa -bs 1 -sns -pp` y arma las palabras con
   `t_dtw`. Trampas de 1.9.4: sin `-l` asume inglés (usar `auto`); flash attention (por defecto) desactiva DTW; si no
   puede leer el audio termina con 0 sin JSON; el JSON no escapa caracteres de control (`lenientJson`).
+- Tarjeta SD: `Fs.java` (una instancia por proceso, `Fs.get`) junta en `projects/<id>/…` los proyectos de la tablet
+  (`files/data/projects`) y de la tarjeta (`getExternalFilesDirs()[1+]/projects`, sin permisos; se borra con la app);
+  `@sd/…` es la carpeta de la app en la tarjeta. Lo nuevo va donde elige el usuario (SharedPreferences `storage`);
+  un `rename` a un proyecto que no existe queda del mismo lado que el origen. Papelera y exportaciones van del lado
+  del proyecto (`.trash`/`@sd/.trash`, ids `sd~…`; `exports`/`@sd/exports`) para no llenar la tablet. Mover
+  (`storage.move`): copia a `.moving-<id>`, verifica bytes y archivos, renombra el original a `.moved-<id>` y
+  recién ahí borra; `recover()` arregla un corte. Sin la tarjeta, los nombres de sus proyectos siguen ocupados
+  (`cardProjects`). Poner/sacar la tarjeta → evento `storage`. Probar: `server.mjs --sd <carpeta>` y
+  `POST /__dev/sd {present}`; la lógica de Java se probó en la PC con el android-all de Robolectric.
 - El backend le devuelve a la interfaz copias (`copy` en events.ts, como el IPC de Electron): sin eso los
   objetos vivos (p. ej. la lista del chat) se duplicaban en pantalla.
 - Fotogramas/exportación: el compositor rasteriza el DOM con modern-screenshot (`rasterAt`, mensaje `frame`);
@@ -124,6 +133,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Interfaz táctil: `html.touch` + `src/android/tablet.css`; editor con pestañas Editor | Claude y paneles
   (`drawer`), timeline con toques (seleccionar, arrastrar el seleccionado, pellizcar zoom); botón atrás con
   `useBack()` (`src/android/ui/back.ts`). En WebView no hay `window.confirm`/`prompt`: usar `useDialogs()`.
+  Chrome marca `:active` ~100 ms tarde: `ui/press.ts` pone `[data-pressed]` en el pointerdown y el CSS táctil
+  no anima colores (lo elegido cambia junto con la acción). En horizontal (≥ 1100 px) reproducción y herramientas
+  del timeline van en una sola barra (`.tl-bar.merged`), los botones del visor flotan a los costados (`float-bar`)
+  y Medios ocupa toda la altura; con un panel abierto el video se corre (`push-l`/`push-r`). En pantalla
+  completa el video (iframe) se queda con los toques: `.fs-tap` encima los recibe.
+- Los menús están en un portal pero React igual propaga sus eventos a los padres del disparador: `Menu` los corta
+  (sin eso, «Duplicar» en el menú de una tarjeta también abría el proyecto).
 - Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`
   (Termux se imita con el puente real, `android/dev/fake-claude.mjs` y, para Whisper, `fake-whisper.mjs`).
   APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.

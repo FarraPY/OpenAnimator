@@ -18,7 +18,7 @@ import java.io.IOException;
  * ("Compartir", "Abrir con…"). Read-only, not exported: access only through the
  * temporary permission that goes with each share intent.
  *
- *   content://com.farrapy.openanimator.files/d/<path inside data>?name=<display name>
+ *   content://com.farrapy.openanimator.files/d/<path inside data, or @sd/… on the SD card>?name=<display name>
  */
 public final class SharedFileProvider extends ContentProvider {
     static final String AUTHORITY = BuildInfo.APPLICATION_ID + ".files";
@@ -40,9 +40,9 @@ public final class SharedFileProvider extends ContentProvider {
             rel.append(seg.get(i));
         }
         try {
-            File root = new File(getContext().getFilesDir(), "data").getCanonicalFile();
-            File f = new File(root, rel.toString()).getCanonicalFile();
-            if (!f.getPath().startsWith(root.getPath() + File.separator) || !f.isFile()) throw new FileNotFoundException(uri.toString());
+            // Las mismas rutas que la página (también las de la tarjeta SD, con @sd/), siempre dentro de los datos.
+            File f = Fs.get(getContext()).resolve(rel.toString());
+            if (!f.isFile()) throw new FileNotFoundException(uri.toString());
             return f;
         } catch (IOException e) {
             throw new FileNotFoundException(uri.toString());

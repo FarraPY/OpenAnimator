@@ -3,10 +3,13 @@ package com.farrapy.openanimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ContentResolver;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
@@ -66,7 +69,7 @@ public class MainActivity extends Activity {
         immersive = prefs.getBoolean("immersive", true);
         WebView.setWebContentsDebuggingEnabled(prefs.getBoolean("debug", false));
         try {
-            fs = new Fs(new File(getFilesDir(), "data"));
+            fs = Fs.get(this);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -79,6 +82,42 @@ public class MainActivity extends Activity {
         });
         createWebView();
         handleIntent(getIntent());
+        IntentFilter media = new IntentFilter();
+        media.addAction(Intent.ACTION_MEDIA_MOUNTED);
+        media.addAction(Intent.ACTION_MEDIA_UNMOUNTED);
+        media.addAction(Intent.ACTION_MEDIA_REMOVED);
+        media.addAction(Intent.ACTION_MEDIA_BAD_REMOVAL);
+        media.addAction(Intent.ACTION_MEDIA_EJECT);
+        media.addDataScheme("file");
+        // Android 14 exige decir si el receptor es exportado; los avisos del sistema llegan igual.
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(cardWatcher, media, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(cardWatcher, media);
+    }
+
+    /** Pusieron o sacaron la tarjeta SD: se vuelve a mirar y la página actualiza la lista de proyectos. */
+    private final BroadcastReceiver cardWatcher = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent i) {
+            checkCard(true);
+        }
+    };
+
+    /** {@code always}: avisa aunque no haya cambiado (un aviso del sistema); si no, sólo si cambió (al volver a la app). */
+    private void checkCard(final boolean always) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                Fs.Card before = fs.card(), now = fs.refreshCard();
+                boolean changed = before == null ? now != null : now == null || !before.base.equals(now.base);
+                if (!always && !changed) return;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        emit("storage", null);
+                    }
+                });
+            }
+        }, "oa-card").start();
     }
 
     /** El motor web se cerró y la página se volvió a crear (se le avisa con ?recovered=1). */
@@ -134,6 +173,7 @@ public class MainActivity extends Activity {
         super.onResume();
         applyImmersive();
         emit("resume", null);
+        checkCard(false); // por si sacaron o pusieron la tarjeta con la app en segundo plano
     }
 
     /** Android pide memoria: la página suelta lo que puede volver a armar (compositores ocultos sin uso). */
@@ -151,6 +191,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        try {
+            unregisterReceiver(cardWatcher);
+        } catch (IllegalArgumentException ignored) {
+        }
         if (bridge != null) bridge.destroy();
         if (web != null) {
             web.removeJavascriptInterface("AndroidBridge");

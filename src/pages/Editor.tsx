@@ -61,6 +61,18 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   const [tab, setTab] = useState<'edit' | 'claude'>(() => { try { return recoveredBoot && localStorage.getItem('oa.editorTab') === 'claude' ? 'claude' : 'edit' } catch { return 'edit' } })
   useEffect(() => { try { localStorage.setItem('oa.editorTab', tab) } catch { /* sin almacenamiento */ } }, [tab])
   const [drawer, setDrawer] = useState<'media' | 'props' | null>(null)
+  // Tablet horizontal: reproducción y herramientas del timeline en una sola barra (la vista previa gana una
+  // fila). En vertical no entran: quedan en dos.
+  const [wide, setWide] = useState(false)
+  const tlWrapRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = tlWrapRef.current
+    if (!touch || !el) return
+    const ro = new ResizeObserver(([e]) => setWide(e.contentRect.width >= 1100))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [touch, !!tl])
+  const merged = touch && wide
   const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0 })
   const [seen, setSeen] = useState(0)
   const [inject, setInject] = useState<{ text: string; n: number } | null>(null)
@@ -235,12 +247,20 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
     document.addEventListener('fullscreenchange', f)
     return () => document.removeEventListener('fullscreenchange', f)
   }, [])
+  // Controles de pantalla completa: se esconden solos mientras reproduce; tocar el video los muestra o los
+  // esconde (el video es un iframe que se queda con los toques: por eso hay una capa encima, .fs-tap). En la
+  // tablet no se mira mousemove: Android lo simula después de cada toque y volvería a mostrarlos.
   const wake = () => {
     setFsIdle(false)
     window.clearTimeout(idleTimer.current)
-    idleTimer.current = window.setTimeout(() => setFsIdle(true), 2200)
+    if (playing) idleTimer.current = window.setTimeout(() => setFsIdle(true), 2200)
   }
-  useEffect(() => { if (full) wake() }, [full])
+  useEffect(() => { if (full) wake() }, [full, playing])
+  const tapFull = (e: React.PointerEvent) => {
+    e.stopPropagation()
+    if (fsIdle) wake()
+    else { window.clearTimeout(idleTimer.current); setFsIdle(true) }
+  }
 
   // ── teclado ───────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -419,23 +439,46 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
       </div>
   )
 
+  const timecode = <span className="timecode">{fmtTime(t, true, fps)}<span className="t3"> / {fmtTime(tl.duration, true, fps)}</span></span>
+  const playControls = <>
+    <Button variant="ghost" icon="skip-back" tip="Inicio" kbd="Inicio" onClick={() => seek(0)} />
+    <Button variant="ghost" icon="step-back" tip="Fotograma anterior" kbd="←" onClick={() => seek(t - 1 / fps)} />
+    <Button variant="primary" className="play-btn" icon={playing ? 'pause' : 'play'} tip={playing ? 'Pausa' : 'Reproducir'} kbd="Espacio" onClick={() => setPlaying((p) => !p)} />
+    <Button variant="ghost" icon="step-fwd" tip="Fotograma siguiente" kbd="→" onClick={() => seek(t + 1 / fps)} />
+    <Button variant="ghost" icon="skip-fwd" tip="Final" kbd="Fin" onClick={() => seek(tl.duration)} />
+  </>
+  const loopRate = <>
+    <Button size="sm" variant="ghost" icon="repeat" active={loop} tip="Repetir" kbd="L" onClick={() => setLoop((x) => !x)} />
+    <Select size="sm" variant="ghost" value={rate} tip="Velocidad" onChange={(v) => setRate(+v)} options={[0.25, 0.5, 1, 1.5, 2].map((r) => ({ value: r, label: `${r}×` }))} />
+  </>
+  const mediaDrawer = touch && (
+    <div className={`drawer left tall ${drawer === 'media' ? 'open' : ''}`}>
+      <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onClose={() => setDrawer(null)}
+        onAdd={(a) => { addAsset(a, null, tRef.current); toast(`«${a.name}» agregado en ${fmtTime(tRef.current, true, fps)}`, 'info') }} />
+    </div>
+  )
+
   const body = (
-      <div className="editor" onClick={() => menu && setMenu(null)}>
+      <div className={`editor ${touch ? 'touch' : ''}`} onClick={() => menu && setMenu(null)}>
         <div className={`ed-work ${touch ? 'touch' : ''}`} style={touch ? undefined : { gridTemplateColumns: cols }}>
           {!touch && <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={(a) => addAsset(a, null, tRef.current)} />}
 
-          <div className={`viewer ${full ? 'is-full' : ''} ${full && fsIdle && playing ? 'idle' : ''}`} ref={viewerRef} onMouseMove={full ? wake : undefined} onPointerDown={full ? wake : undefined}>
+          <div className={`viewer ${full ? 'is-full' : ''} ${full && fsIdle ? 'idle' : ''} ${merged ? 'float-bar' : ''} ${merged && !full && drawer === 'media' ? 'push-l' : ''} ${merged && !full && drawer === 'props' ? 'push-r' : ''}`} ref={viewerRef} onMouseMove={full && !touch ? wake : undefined} onPointerDown={full ? wake : undefined}>
             <div className="viewer-bar">
               {touch ? <>
-                <Button size="sm" variant="ghost" icon="folder" active={drawer === 'media'} tip="Medios del proyecto" onClick={() => setDrawer(drawer === 'media' ? null : 'media')}><span className="vb-btn-label">Medios</span></Button>
-                <Button size="sm" variant="ghost" icon="sliders" active={drawer === 'props'} disabled={!sel.length && drawer !== 'props'} tip="Propiedades del clip" onClick={() => setDrawer(drawer === 'props' ? null : 'props')}><span className="vb-btn-label">Propiedades</span></Button>
+                <div className="vb-l">
+                  <Button size="sm" variant="ghost" icon="folder" active={drawer === 'media'} tip="Medios del proyecto" onClick={() => setDrawer(drawer === 'media' ? null : 'media')}><span className="vb-btn-label">Medios</span></Button>
+                  <Button size="sm" variant="ghost" icon="sliders" active={drawer === 'props'} disabled={!sel.length && drawer !== 'props'} tip="Propiedades del clip" onClick={() => setDrawer(drawer === 'props' ? null : 'props')}><span className="vb-btn-label">Propiedades</span></Button>
+                </div>
                 <div className="grow" />
-                <span className="t3 tabnum" style={{ fontSize: 13, padding: '0 6px' }}>{Math.round(scale * 100)} %</span>
-                <Divider vertical />
-                <Button size="sm" variant="ghost" icon="safe-area" active={ed!.safeAreas} tip="Zonas seguras" onClick={() => updateSettings({ editor: { safeAreas: !ed!.safeAreas } })} />
-                <Button size="sm" variant="ghost" icon="thirds" active={ed!.thirds} tip="Guía de tercios" onClick={() => updateSettings({ editor: { thirds: !ed!.thirds } })} />
-                <Button size="sm" variant="ghost" icon="note" tip="Nota para la IA en este instante" onClick={() => setNoteEdit({ t, text: '' })} />
-                <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" onClick={toggleFull} />
+                <div className="vb-r">
+                  <span className="vb-zoom t3 tabnum">{Math.round(scale * 100)} %</span>
+                  <Divider vertical />
+                  <Button size="sm" variant="ghost" icon="safe-area" active={ed!.safeAreas} tip="Zonas seguras" onClick={() => updateSettings({ editor: { safeAreas: !ed!.safeAreas } })} />
+                  <Button size="sm" variant="ghost" icon="thirds" active={ed!.thirds} tip="Guía de tercios" onClick={() => updateSettings({ editor: { thirds: !ed!.thirds } })} />
+                  <Button size="sm" variant="ghost" icon="note" tip="Nota para la IA en este instante" onClick={() => setNoteEdit({ t, text: '' })} />
+                  <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" onClick={toggleFull} />
+                </div>
               </> : <>
               <span className="caps" style={{ padding: '0 6px' }}>Visor</span>
               <span className="t3 tabnum" style={{ fontSize: 11.5 }}>{Math.round(scale * 100)} %</span>
@@ -456,6 +499,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
             {!touch || tab === 'edit' ? <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
               onError={(m) => toast(m, true)} bg={full ? 'black' : ed!.stageBg} safeAreas={!full && ed!.safeAreas} thirds={!full && ed!.thirds} onScale={setScale} pad={full ? 0 : 20} />
               : <div className="stage-wrap" />}
+            {full && <div className="fs-tap" onPointerDown={tapFull} />}
             {full && (
               <div className="fs-bar" onMouseMove={(e) => e.stopPropagation()} onMouseEnter={() => { window.clearTimeout(idleTimer.current); setFsIdle(false) }} onMouseLeave={wake}>
                 <input type="range" className="fs-scrub" min={0} max={tl.duration} step={1 / fps} value={t} style={{ ['--pct' as any]: `${(t / Math.max(0.001, tl.duration)) * 100}%` }}
@@ -474,22 +518,11 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
                 </div>
               </div>
             )}
-            <div className="transport">
-              <div className="transport-l">
-                <span className="timecode">{fmtTime(t, true, fps)}<span className="t3"> / {fmtTime(tl.duration, true, fps)}</span></span>
-              </div>
-              <div className="transport-c">
-                <Button variant="ghost" icon="skip-back" tip="Inicio" kbd="Inicio" onClick={() => seek(0)} />
-                <Button variant="ghost" icon="step-back" tip="Fotograma anterior" kbd="←" onClick={() => seek(t - 1 / fps)} />
-                <Button variant="primary" className="play-btn" icon={playing ? 'pause' : 'play'} tip={playing ? 'Pausa' : 'Reproducir'} kbd="Espacio" onClick={() => setPlaying((p) => !p)} />
-                <Button variant="ghost" icon="step-fwd" tip="Fotograma siguiente" kbd="→" onClick={() => seek(t + 1 / fps)} />
-                <Button variant="ghost" icon="skip-fwd" tip="Final" kbd="Fin" onClick={() => seek(tl.duration)} />
-              </div>
-              <div className="transport-r">
-                <Button size="sm" variant="ghost" icon="repeat" active={loop} tip="Repetir" kbd="L" onClick={() => setLoop((x) => !x)} />
-                <Select size="sm" variant="ghost" value={rate} tip="Velocidad" onChange={(v) => setRate(+v)} options={[0.25, 0.5, 1, 1.5, 2].map((r) => ({ value: r, label: `${r}×` }))} />
-              </div>
-            </div>
+            {!merged && <div className="transport">
+              <div className="transport-l">{timecode}</div>
+              <div className="transport-c">{playControls}</div>
+              <div className="transport-r">{loopRate}</div>
+            </div>}
           </div>
 
           {!touch && (
@@ -506,10 +539,6 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
           </div>
           )}
           {touch && <>
-            <div className={`drawer left ${drawer === 'media' ? 'open' : ''}`}>
-              <MediaPanel projectId={projectId} assets={assets} onRefresh={refreshAssets} onClose={() => setDrawer(null)}
-                onAdd={(a) => { addAsset(a, null, tRef.current); toast(`«${a.name}» agregado en ${fmtTime(tRef.current, true, fps)}`, 'info') }} />
-            </div>
             <div className={`drawer right ${drawer === 'props' ? 'open' : ''}`}>
               <div className="drawer-head"><div className="drawer-title"><Icon name="sliders" size={18} />Propiedades</div><div className="grow" /><Button variant="ghost" icon="x" tip="Cerrar" onClick={() => setDrawer(null)} /></div>
               {inspector}
@@ -517,8 +546,9 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
           </>}
         </div>
 
-        <div className="tl-wrap">
-          <div className="tl-bar">
+        <div className="tl-wrap" ref={tlWrapRef}>
+          <div className={`tl-bar ${merged ? 'merged' : ''}`}>
+            <div className="tlb-l">
             <Button size="sm" variant="ghost" icon="plus" iconRight="chevron-down" onClick={addMenu.open}>Pista</Button>
             {addMenu.render([
               { label: 'Pista de escenas', icon: 'code', iconColor: TYPE_COLOR.scene, desc: 'HTML/SVG animado', onSelect: () => addTrack('scene') },
@@ -537,14 +567,18 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
             <Button size="sm" variant="ghost" icon="magnet" active={ed!.snap} tip={ed!.snap ? 'Imán activado' : 'Imán desactivado'} kbd="M" onClick={toggleSnap} />
             <Button size="sm" variant="ghost" icon="note" tip="Agregar nota para la IA" kbd="N" onClick={() => setNoteEdit({ t, text: '' })} />
             {(tl.notes?.length || 0) > 0 && <Badge tone="warn" icon="message" tip="Notas para la IA en este timeline">{tl.notes!.length}</Badge>}
-            <div className="grow" />
-            <span className="t3" style={{ fontSize: 12 }}>Duración</span>
-            <NumberInput size="sm" width={104} value={+tl.duration.toFixed(2)} step={1} min={0.1} decimals={2} suffix="s" onChange={(v) => change({ ...tl, duration: Math.max(0.1, v) })} />
+            </div>
+            {merged && <div className="tlb-c">{timecode}{playControls}</div>}
+            <div className="tlb-r">
+            {merged && loopRate}
+            {merged ? <span className="tlb-dur t3" data-tip="Duración del timeline"><Icon name="clock" size={17} /></span> : <span className="t3" style={{ fontSize: touch ? 13.5 : 12 }}>Duración</span>}
+            <NumberInput size="sm" width={touch ? 136 : 104} value={+tl.duration.toFixed(2)} step={1} min={0.1} decimals={2} suffix="s" onChange={(v) => change({ ...tl, duration: Math.max(0.1, v) })} />
             <Divider vertical />
-            <Button size="sm" variant="ghost" icon="zoom-out" tip="Alejar" onClick={() => setPps((p) => Math.max(2, p / 1.4))} />
+            {!merged && <Button size="sm" variant="ghost" icon="zoom-out" tip="Alejar" onClick={() => setPps((p) => Math.max(2, p / 1.4))} />}
             <Slider value={Math.log(pps)} min={Math.log(2)} max={Math.log(600)} step={0.01} width={110} onChange={(v) => setPps(Math.exp(v))} tip="Zoom (Ctrl + rueda)" />
-            <Button size="sm" variant="ghost" icon="zoom-in" tip="Acercar" onClick={() => setPps((p) => Math.min(600, p * 1.4))} />
+            {!merged && <Button size="sm" variant="ghost" icon="zoom-in" tip="Acercar" onClick={() => setPps((p) => Math.min(600, p * 1.4))} />}
             <Button size="sm" variant="ghost" icon="fit" tip="Ajustar a la ventana" kbd="Shift+Z" onClick={() => fitRef.current?.()} />
+            </div>
           </div>
           <Timeline projectId={projectId} tl={tl} t={t} fps={fps} playing={playing} pps={pps} setPps={setPps} selected={sel} setSelected={setSel}
             onSeek={(x) => { setPlaying(false); seek(x) }} onChange={change} onDropAsset={addAsset}
@@ -554,6 +588,8 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
             height={tlH} setHeight={setTlH} fitRef={fitRef}
             snapOn={ed!.snap} snapFrames={ed!.snapFrames} followPlayhead={ed!.followPlayhead} waveforms={ed!.waveforms} />
         </div>
+        {/* Medios en la tablet: a toda la altura (sobre el timeline), así la lista y la vista previa entran juntas. */}
+        {mediaDrawer}
       </div>
   )
 

@@ -8,7 +8,8 @@ export type Note = { id: string; t: number; text: string }
 export type Timeline = { format: 'oa-timeline/1'; duration: number; tracks: Track[]; notes?: Note[]; rev?: number }
 export type TimelineRef = { id: string; name: string; file: string }
 export type Project = { format: 'openanimator/1'; id: string; name: string; width: number; height: number; fps: number; background?: string; timelines: TimelineRef[]; activeTimeline: string; template?: string; updatedAt?: string }
-export type ProjectSummary = { id: string; name: string; width: number; height: number; fps: number; timelines: number; duration: number; updatedAt?: string; thumb?: string }
+/** `volume` (Android): 'sd' si el proyecto está en la tarjeta SD. */
+export type ProjectSummary = { id: string; name: string; width: number; height: number; fps: number; timelines: number; duration: number; updatedAt?: string; thumb?: string; volume?: 'internal' | 'sd' }
 export type Template = { id: string; name: string; description: string; defaults?: { duration: number }; preview?: string; user?: boolean; createdAt?: string; width?: number; height?: number; fps?: number; tags?: string[]; hasAnalysis?: boolean; fromProject?: string }
 export type Asset = { path: string; name: string; kind: 'scene' | 'video' | 'audio' | 'image' | 'doc' | 'other'; size: number; mtime?: number }
 

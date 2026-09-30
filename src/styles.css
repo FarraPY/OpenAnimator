@@ -269,6 +269,7 @@ a { color: var(--accent-t); text-decoration: none; } a:hover { text-decoration: 
 .pcard-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--t4); }
 .pcard-dur { position: absolute; right: 8px; bottom: 8px; z-index: 1; font: 500 11px var(--mono); padding: 2px 6px; border-radius: 5px; background: rgba(0, 0, 0, .65); color: #e9eaee; backdrop-filter: blur(4px); }
 .pcard-res { position: absolute; left: 8px; bottom: 8px; z-index: 1; font-size: 11px; padding: 2px 6px; border-radius: 5px; background: rgba(0, 0, 0, .55); color: #cfd1d8; backdrop-filter: blur(4px); }
+.pcard-sd { position: absolute; left: 8px; top: 8px; z-index: 1; display: flex; align-items: center; gap: 4px; font-size: 10.5px; font-weight: 600; letter-spacing: .04em; padding: 2px 6px; border-radius: 5px; background: rgba(0, 0, 0, .6); color: #e9eaee; backdrop-filter: blur(4px); }
 .pcard-play { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; opacity: 0; transition: opacity .15s; }
 .pcard-play span { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .92); color: #111; box-shadow: 0 6px 20px rgba(0, 0, 0, .45); transform: scale(.9); transition: transform .2s var(--ease); }
 .pcard:hover .pcard-play { opacity: 1; } .pcard:hover .pcard-play span { transform: none; }
@@ -387,6 +388,14 @@ a { color: var(--accent-t); text-decoration: none; } a:hover { text-decoration: 
 /* ── Timeline ──────────────────────────────────────────────────────────── */
 .tl-wrap { position: relative; background: var(--bg-0); border-top: 1px solid var(--line); }
 .tl-bar { height: 40px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; border-bottom: 1px solid var(--line); background: var(--bg-0); }
+.tlb-l, .tlb-c, .tlb-r { display: flex; align-items: center; gap: inherit; min-width: 0; }
+.tlb-l > *, .tlb-c > *, .tlb-r > * { flex: none; }
+.tlb-r > .slider { flex: 0 1 auto; min-width: 64px; } /* si falta lugar se achica el zoom, no la duración */
+.tlb-r { margin-left: auto; justify-content: flex-end; }
+/* Tablet horizontal: herramientas | reproducción (centrada) | duración y zoom, en una sola barra. */
+.tl-bar.merged { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.tl-bar.merged .tlb-r { margin-left: 0; }
+.tlb-dur { display: grid; place-items: center; padding: 0 2px; }
 .tl { display: flex; flex-direction: column; min-height: 0; position: relative; background: var(--bg-1); }
 .tl-resize { position: absolute; left: 0; right: 0; top: -4px; height: 8px; cursor: ns-resize; z-index: 8; }
 html:not(.touch) .tl-resize:hover::after { content: ''; position: absolute; left: 0; right: 0; top: 3px; height: 2px; background: var(--accent-line); }
@@ -555,6 +564,7 @@ html:not(.touch) .tl-resize:hover::after { content: ''; position: absolute; left
   padding: 10px 12px 8px; border-radius: 16px; background: rgba(14, 15, 19, .78); backdrop-filter: blur(14px) saturate(1.2); border: 1px solid rgba(255, 255, 255, .08);
   box-shadow: 0 20px 50px -12px rgba(0, 0, 0, .7); transition: opacity .25s, transform .25s; }
 .viewer.is-full.idle .fs-bar { opacity: 0; transform: translate(-50%, 10px); pointer-events: none; }
+.fs-tap { position: absolute; inset: 0; z-index: 4; } /* sobre el video (iframe), debajo de los controles */
 .fs-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
 .fs-title { color: var(--t3); font-size: 12.5px; max-width: 34%; }
 .fs-scrub { -webkit-appearance: none; appearance: none; width: 100%; height: 16px; background: none; margin: 0; cursor: pointer; display: block; }

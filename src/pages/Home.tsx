@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { call, on, fmtTime, ProjectSummary, Template } from '../api'
+import { call, on, fmtSize, fmtTime, ProjectSummary, Template } from '../api'
 import { isAndroid, isTouch, userTemplateUrl } from '../platform'
 import { useApp } from '../App'
 import Modal from '../components/Modal'
@@ -8,6 +8,7 @@ import SaveTemplate from '../components/SaveTemplate'
 import Analyzer, { AnalysisReport } from '../components/Analyzer'
 import { Icon, IconName, Logo } from '../ui/icons'
 import { Badge, Button, Empty, Segmented, Select, TextInput, useMenu } from '../ui/kit'
+import { StorageInfo, useMoveProjects, useStorage, Volume } from '../android/ui/Storage'
 
 const FORMATS = [
   { name: 'Horizontal', sub: '16:9', w: 1920, h: 1080 },
@@ -42,6 +43,10 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
   const [saveTpl, setSaveTpl] = useState<ProjectSummary | null>(null)
   const [detail, setDetail] = useState<Template | null>(null)
   const dlg = useDialogs()
+  // Tablet: proyectos en la tablet o en la tarjeta SD.
+  const storage = useStorage()
+  const mover = useMoveProjects()
+  const sd = !!storage.info?.sd
   const view = settings?.ui.homeView || 'grid'
   const sort = settings?.ui.homeSort || 'recent'
 
@@ -132,8 +137,12 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
                 <SysRow icon="tablet" label={info?.gpu || 'Tablet'} state={info ? 'ok' : undefined} tip={(info as any)?.soc || 'Equipo'} />
                 <SysRow icon="zap" label={info ? `${(info as any).codecs?.hevc ? 'H.264 · HEVC' : 'H.264'} por hardware` : 'Codificadores…'} state={info ? ((info as any).codecs?.avc !== false ? 'ok' : 'warn') : undefined} tip="Codificación de video" />
                 <button className="sys-row sys-btn" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'home' } })}>
-                  <Icon name="sparkles" size={14} /><span className="ellipsis">{info ? (info.claude ? 'Claude conectado (API)' : 'Falta la clave de Claude') : 'Claude…'}</span>{info && <span className={`sys-dot ${info.claude ? 'ok' : 'err'}`} />}
+                  <Icon name="sparkles" size={14} /><span className="ellipsis">{info ? (info.claude ? (info.claude === 'termux' ? 'Claude con tu plan' : 'Claude con clave de API') : 'Falta conectar Claude') : 'Claude…'}</span>{info && <span className={`sys-dot ${info.claude ? 'ok' : 'err'}`} />}
                 </button>
+                {storage.info && <button className="sys-row sys-btn" data-tip="Dónde se guardan los proyectos" onClick={() => go({ page: 'settings', section: 'almacenamiento', from: { page: 'home' } })}>
+                  <Icon name={storage.info.sd ? 'sd' : 'drive'} size={14} /><span className="ellipsis">{storage.info.sd ? `Tarjeta SD · ${fmtSize(storage.info.sd.free)} libres` : `Tablet · ${fmtSize(storage.info.internal.free)} libres`}</span>
+                  <span className={`sys-dot ${storage.info.missing ? 'warn' : 'ok'}`} />
+                </button>}
               </> : <>
               <SysRow icon="gpu" label={info?.gpu || 'Detectando GPU…'} state={info ? (info.gpu ? 'ok' : 'warn') : undefined} tip="Tarjeta gráfica" />
               <SysRow icon="zap" label={info ? (nvencList.length ? `NVENC ${nvencList.join(' · ')}` : 'Sin NVENC (se usa CPU)') : 'Codificadores…'} state={info ? (nvencList.length ? 'ok' : 'warn') : undefined} tip="Codificación por hardware" />
@@ -177,6 +186,10 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
                 <Segmented size="sm" value={view} onChange={(v) => updateSettings({ ui: { homeView: v } })}
                   options={[{ value: 'grid', icon: 'grid', tip: 'Cuadrícula' }, { value: 'list', icon: 'list', tip: 'Lista' }]} />
               </div>
+              {storage.info && !sd && storage.info.missing > 0 && <div className="notice warn" style={{ marginBottom: 16, fontSize: 13 }}>
+                <Icon name="sd" size={16} style={{ flex: 'none' }} />
+                <span>La tarjeta SD{storage.info.cardLabel ? ` (${storage.info.cardLabel})` : ''} no está puesta: {storage.info.missing === 1 ? 'el proyecto guardado en ella no aparece' : `los ${storage.info.missing} proyectos guardados en ella no aparecen`} hasta que la vuelvas a poner.{storage.info.newProjects === 'sd' ? ' Mientras tanto, los proyectos nuevos se guardan en la tablet.' : ''}</span>
+              </div>}
 
               {projects && !list.length && (q
                 ? <Empty icon="search" title="Sin resultados" desc={`Ningún proyecto coincide con «${q}».`} />
@@ -192,12 +205,12 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
 
               {view === 'grid' ? (
                 <div className="pgrid">
-                  {list.map((p) => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} />)}
+                  {list.map((p) => <ProjectCard key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} sd={sd} onMove={(to) => mover.move([p.id], to)} />)}
                 </div>
               ) : list.length > 0 && (
                 <div className="ptable">
                   <div className="prow head caps"><span /><span>Nombre</span><span>Formato</span><span>Timelines</span><span>Duración</span><span>Modificado</span><span /></div>
-                  {list.map((p) => <ProjectRow key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} />)}
+                  {list.map((p) => <ProjectRow key={p.id} p={p} onOpen={() => onOpen(p.id)} onRename={() => ren(p)} onDup={() => dup(p)} onDel={() => del(p)} onTemplate={() => setSaveTpl(p)} onShare={(a) => shareZip(p, a)} sd={sd} onMove={(to) => mover.move([p.id], to)} />)}
                 </div>
               )}
             </div>
@@ -244,8 +257,9 @@ export default function Home({ onOpen }: { onOpen: (id: string) => void }) {
       {analyzer && <Analyzer onClose={() => setAnalyzer(false)} onSaved={() => { setAnalyzer(false); loadTemplates(); setSection('templates') }} />}
       {saveTpl && <SaveTemplate projectId={saveTpl.id} projectName={saveTpl.name} onClose={() => setSaveTpl(null)} onSaved={() => loadTemplates()} />}
       {detail && <TemplateDetail t={detail} onClose={() => setDetail(null)} onUse={() => { setDetail(null); setNewTpl(detail.id) }} />}
-      {newTpl !== null && <NewProject templates={templates} initial={newTpl} onClose={() => setNewTpl(null)} onCreated={(id) => { setNewTpl(null); onOpen(id) }} />}
+      {newTpl !== null && <NewProject templates={templates} initial={newTpl} storage={storage.info} onClose={() => setNewTpl(null)} onCreated={(id) => { setNewTpl(null); onOpen(id) }} />}
       {dlg.element}
+      {mover.element}
     </>
   )
 }
@@ -254,8 +268,12 @@ function SysRow({ icon, label, state, tip }: { icon: IconName; label: string; st
   return <div className="sys-row" data-tip={tip}><Icon name={icon} size={14} /><span className="ellipsis">{label}</span>{state && <span className={`sys-dot ${state}`} />}</div>
 }
 
-type CardProps = { p: ProjectSummary; onOpen: () => void; onRename: () => void; onDup: () => void; onDel: () => void; onTemplate: () => void; onShare: (action: 'share' | 'save') => void }
-function useProjectMenu({ p, onOpen, onRename, onDup, onDel, onTemplate, onShare }: CardProps) {
+type CardProps = {
+  p: ProjectSummary; onOpen: () => void; onRename: () => void; onDup: () => void; onDel: () => void; onTemplate: () => void; onShare: (action: 'share' | 'save') => void
+  /** Tablet con tarjeta SD: se puede mover el proyecto de un lado al otro. */
+  sd?: boolean; onMove?: (to: Volume) => void
+}
+function useProjectMenu({ p, onOpen, onRename, onDup, onDel, onTemplate, onShare, sd, onMove }: CardProps) {
   const m = useMenu()
   const items = [
     { label: 'Abrir', icon: 'arrow-right' as IconName, onSelect: onOpen },
@@ -266,6 +284,9 @@ function useProjectMenu({ p, onOpen, onRename, onDup, onDel, onTemplate, onShare
       { sep: true as const },
       { label: 'Compartir (.zip)', icon: 'share' as IconName, desc: 'Para abrirlo en la PC o en otra tablet', onSelect: () => onShare('share') },
       { label: 'Guardar en Archivos (.zip)', icon: 'download' as IconName, onSelect: () => onShare('save') },
+      ...(sd && onMove ? [p.volume === 'sd'
+        ? { label: 'Mover a la tablet', icon: 'tablet' as IconName, desc: 'Sale de la tarjeta SD', onSelect: () => onMove('internal') }
+        : { label: 'Mover a la tarjeta SD', icon: 'sd' as IconName, desc: 'Libera espacio en la tablet', onSelect: () => onMove('sd') }] : []),
     ] : [{ label: 'Mostrar en carpeta', icon: 'folder-open' as IconName, onSelect: () => call('projects:openFolder', p.id) }]),
     { sep: true as const },
     { label: 'Mover a la papelera', icon: 'trash' as IconName, danger: true, onSelect: onDel },
@@ -281,6 +302,7 @@ function ProjectCard(props: CardProps) {
       <div className="pcard-thumb" style={p.thumb ? { backgroundImage: `url("${p.thumb}?${p.updatedAt}")` } : undefined}>
         {!p.thumb && <div className="pcard-empty"><Icon name="film" size={28} stroke={1.3} /></div>}
         <div className="pcard-play"><span><Icon name="play" size={18} /></span></div>
+        {p.volume === 'sd' && <span className="pcard-sd" data-tip="Guardado en la tarjeta SD"><Icon name="sd" size={12} />SD</span>}
         <span className="pcard-res">{p.width}×{p.height}</span>
         <span className="pcard-dur">{fmtTime(p.duration)}</span>
       </div>
@@ -300,7 +322,7 @@ function ProjectRow(props: CardProps) {
   return (
     <div className="prow" onClick={onOpen} onContextMenu={(e) => { e.preventDefault(); m.openAt(e.clientX, e.clientY) }}>
       <div className="prow-thumb" style={p.thumb ? { backgroundImage: `url("${p.thumb}?${p.updatedAt}")` } : undefined} />
-      <span className="ellipsis" style={{ fontWeight: 600 }}>{p.name}</span>
+      <span className="ellipsis" style={{ fontWeight: 600 }}>{p.name}{p.volume === 'sd' && <Icon name="sd" size={13} className="t3" style={{ marginLeft: 6, verticalAlign: -2 }} />}</span>
       <span className="t2">{p.width}×{p.height} · {p.fps} fps</span>
       <span className="t2 tabnum">{p.timelines}</span>
       <span className="t2 mono">{fmtTime(p.duration)}</span>
@@ -311,8 +333,10 @@ function ProjectRow(props: CardProps) {
   )
 }
 
-function NewProject({ templates, initial, onClose, onCreated }: { templates: Template[]; initial: string; onClose: () => void; onCreated: (id: string) => void }) {
+function NewProject({ templates, initial, storage, onClose, onCreated }: { templates: Template[]; initial: string; storage?: StorageInfo | null; onClose: () => void; onCreated: (id: string) => void }) {
   const { toast } = useApp()
+  // Con tarjeta SD: dónde se guarda (arranca en lo elegido en Ajustes › Almacenamiento).
+  const [vol, setVol] = useState<Volume>(storage?.sd ? storage.newProjects : 'internal')
   const [tpl, setTpl] = useState(initial || templates[0]?.id || '')
   const [name, setName] = useState('Mi video')
   const [fmt, setFmt] = useState(0)
@@ -330,13 +354,16 @@ function NewProject({ templates, initial, onClose, onCreated }: { templates: Tem
     setBusy(true)
     try {
       const f = FORMATS[fmt]
-      const p = await call('projects:create', { name: name.trim() || 'Mi video', template: tpl, width: f.w, height: f.h, fps })
+      const p = await call('projects:create', { name: name.trim() || 'Mi video', template: tpl, width: f.w, height: f.h, fps, ...(storage?.sd ? { volume: vol } : {}) })
       onCreated(p.id)
     } catch (e: any) { toast(e.message, true); setBusy(false) }
   }
   return (
     <Modal size="wide" icon="plus" title="Nuevo proyecto" subtitle="Elegí una plantilla y un formato. Podés cambiar todo después." onClose={onClose}
-      footer={<><span className="t3" style={{ fontSize: 12 }}>{FORMATS[fmt].w}×{FORMATS[fmt].h} · {fps} fps</span><div className="grow" /><Button onClick={onClose}>Cancelar</Button><Button variant="primary" icon="check" onClick={create} disabled={!tpl} loading={busy}>Crear proyecto</Button></>}>
+      footer={<><span className="t3" style={{ fontSize: 12 }}>{FORMATS[fmt].w}×{FORMATS[fmt].h} · {fps} fps</span>
+        {storage?.sd && <><span className="t3" style={{ fontSize: 12, marginLeft: 12 }}>Guardar en</span>
+          <Segmented size="sm" value={vol} onChange={setVol} options={[{ value: 'internal', icon: 'tablet', label: 'Tablet', tip: `${fmtSize(storage.internal.free)} libres` }, { value: 'sd', icon: 'sd', label: 'Tarjeta SD', tip: `${fmtSize(storage.sd.free)} libres` }]} /></>}
+        <div className="grow" /><Button onClick={onClose}>Cancelar</Button><Button variant="primary" icon="check" onClick={create} disabled={!tpl} loading={busy}>Crear proyecto</Button></>}>
       <div className="fields" style={{ gridTemplateColumns: '1fr auto', marginBottom: 18 }}>
         <div className="field"><label className="field-label">Nombre</label><TextInput autoFocus value={name} onChange={setName} onEnter={create} /></div>
         <div className="field"><label className="field-label">Cuadros por segundo</label>
