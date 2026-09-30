@@ -102,6 +102,11 @@ public final class Bridge {
      * previous one stops working. The bridge object is also visible to the project iframes, which
      * never see the document, so they cannot use it.
      */
+    /** What the app was doing, as far as Java knows (the record of why the web engine closed). */
+    String doing() {
+        return capture.active() ? "exportando" : "";
+    }
+
     String newPageToken() {
         byte[] b = new byte[24];
         new SecureRandom().nextBytes(b);
@@ -281,6 +286,8 @@ public final class Bridge {
                 return appInfo();
             case "app.takePendingOpen":
                 return act.takePendingOpen();
+            case "app.exits":
+                return Exits.take(act);
             case "app.toast":
                 toast(a.getString("text"));
                 return true;

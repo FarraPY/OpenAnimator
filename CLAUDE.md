@@ -46,6 +46,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   devuelve cuadros viejos (11 de 900 incorrectos). Verificar exportaciones con PSNR por cuadro contra una referencia.
 - Los segmentos de exportación se achican para repartir videos cortos entre workers (`segFrames` en exporter.ts).
 - Mezcla de audio: limitar cada entrada con `-ss/-t` y usar `apad=whole_dur`; si no, FFmpeg a veces se cuelga.
+- Animaciones CSS en el runtime (`syncAnimations`): leer `playState` de una `CSSAnimation` recalcula los estilos de
+  todo el documento, y el `currentTime` anterior los deja sucios: era cuadrático (1600 animaciones: ~1,2 s por
+  fotograma). Se pausan una sola vez (`cssPaused`) y queda en ~50 ms, con los mismos fotogramas; a las del script
+  (`el.animate`) sí se les pregunta (no recalcula nada). `document.getAnimations()` sigue siendo lo caro (las ordena
+  por su lugar en el árbol: 1600 hermanas, 30 ms) y pedirlas elemento por elemento es muchísimo peor.
 - Modelos verificados con Claude Code: claude-opus-5-5, claude-sonnet-5, claude-haiku-4-5 (Fable 5.1 pide créditos).
 
 ## Chat, consumo y medios
@@ -117,6 +122,19 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (`recoveredBoot` en platform.ts): la interfaz vuelve al proyecto y a la pestaña (`localStorage` oa.openProject,
   oa.editorTab) y el puente, en vez de cerrar las conversaciones (`fresh`), se las pasa a la app (`adopt`: historia,
   permisos pendientes; retiene lo nuevo hasta `flush`) y code.ts las retoma (`TermuxChat.adopt` + `replay`).
+- Por qué se cerró (`Exits.java`): el registro de Android de cómo terminó el proceso de la app (Android 11+,
+  `ApplicationExitInfo`: sin memoria, error de Java o nativo, no responde —con la pila del hilo principal—…; sólo
+  los que el usuario llamaría un cierre), el motor web que se cerró (`onRenderProcessGone`, con memoria libre y si
+  se estaba exportando) y los errores de Java sin atrapar con su pila (`files/exits.jsonl`). La página nueva pide
+  `app.exits` después de pintar y muestra cada cierre una vez (AndroidIntegration) con «Copiar detalles»; eso
+  reemplaza el aviso de `recoveredBoot` cuando hay registro. Probar: `POST /__dev/exits {records}` en server.mjs.
+- Costo de las escenas para Claude: con los fotogramas de `oa_ver_fotogramas` y `oa_hoja_contactos` (hasta 4 por
+  pedido) el compositor mide lo que tarda el hilo principal en pasar al fotograma siguiente (3 pasos: JS de la
+  escena + recalcular estilos y maquetar; uno solo si pasa de 150 ms) y cuenta lo caro de lo visible (elementos,
+  animaciones, `filter: blur` grandes, `backdrop-filter`, `mix-blend-mode`, sombras grandes, capas de GPU, MB de
+  imágenes y canvas, Babel). `costNote` (frames.ts) se lo resume con el presupuesto (~10 ms a 30 fps) y le pide
+  simplificar si pasa; la guía está en la skill escenas-html («Rendimiento»). Pintar no se puede medir ahí (el
+  compositor oculto está escalado casi a cero).
 - Whisper en la tablet: whisper.cpp 1.9.4 compilado en Termux por `android/termux/whisper-install.sh` (commit y
   SHA-1 de los modelos fijados; base/small/large-v3-turbo-q5_0). El audio viaja como PCM 16 kHz por el puente
   (`whisper.put`), `whisper.run` corre `whisper-cli -ojf --dtw <modelo> -nfa -bs 1 -sns -pp` y arma las palabras con
@@ -216,7 +234,8 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Los menús están en un portal pero React igual propaga sus eventos a los padres del disparador: `Menu` los corta
   (sin eso, «Duplicar» en el menú de una tarjeta también abría el proyecto).
 - Probar sin tablet: `node android/scripts/build-web.mjs && node android/dev/server.mjs --mock-claude`
-  (Termux se imita con el puente real, `android/dev/fake-claude.mjs` y, para Whisper, `fake-whisper.mjs`).
+  (Termux se imita con el puente real, `android/dev/fake-claude.mjs` y, para Whisper, `fake-whisper.mjs`; al Claude
+  de mentira, «[herramienta] nombre {json}» le hace llamar sólo a esa herramienta).
   APK: `bash android/build-apk.sh` (sin Gradle). Detalles en `android/README.md`.
 - Ícono de la app: fuentes en `android/icon/*.svg` (fondo, frente y silueta del ícono adaptable, e `icon.svg`
   completo); `node android/scripts/icons.mjs` genera los mipmaps, `build/icon.png` y `build/icon.ico`. El `Logo`

@@ -108,6 +108,11 @@ final class Capture {
         this.encoder = encoder;
     }
 
+    /** An export's capture is open (for the record of why the web engine closed). */
+    boolean active() {
+        return web != null;
+    }
+
     /**
      * Opens the compositor at width×height pixels and waits until it has loaded. mode "gpu" needs the
      * encoder already started (the virtual display draws into it); if it fails, the caller tries "draw".

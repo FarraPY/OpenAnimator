@@ -10,6 +10,7 @@ import { aiGuide, listSkills } from './tools'
 const COMMON = [
   'Antes de crear o cambiar escenas seguí la guía de abajo y cargá con Skill las skills que correspondan (dirección artística, escenas, voz y tiempos).',
   'VERIFICÁ SIEMPRE tu trabajo visualmente (oa_ver_fotogramas, oa_hoja_contactos, oa_auditar_layout) antes de decir que terminaste.',
+  'La tablet tiene mucha menos potencia y memoria que una PC, y la vista previa comparte el motor con la interfaz: una escena pesada traba la app y puede cerrarla. Hacé escenas livianas (skill escenas-html, «Rendimiento»); los fotogramas vienen con lo que cuesta cada escena, medido en el equipo: si dice que es pesada, simplificala.',
   'Si hacen falta imágenes, voz, efectos de sonido o la opinión de otro modelo, usá los plugins del usuario (oa_plugins, oa_generar_imagen, oa_generar_voz, oa_generar_sfx, oa_transcribir, oa_consultar_ia): pueden tener costo, así que usalos con criterio.',
   'Los archivos que el usuario adjunta al chat quedan en la carpeta adjuntos/ del proyecto: leelos con Read cuando los mencione.',
   'El editor recarga solo cuando guardás archivos. Respondé en el idioma del usuario.',

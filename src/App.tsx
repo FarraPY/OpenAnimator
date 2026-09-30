@@ -61,10 +61,8 @@ export default function App() {
       setSettings(s)
       if (!initialOpen && !chatWin && !recoveredTo && s.ui.openLastProject && s.lastProject) setRoute({ page: 'editor', id: s.lastProject })
     })
-    if (recoveredBoot) {
-      history.replaceState(null, '', location.pathname)
-      toast(recoveredTo ? 'Android reinició la app (seguramente por falta de memoria): volviste a tu proyecto.' : 'Android reinició la app (seguramente por falta de memoria).', 'info')
-    }
+    // El aviso (con lo que registró Android, si hay) lo da AndroidIntegration.
+    if (recoveredBoot) history.replaceState(null, '', location.pathname)
   }, [])
 
   // Tema: acento, densidad y animaciones.

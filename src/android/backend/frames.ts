@@ -8,6 +8,14 @@ import { base64ToBytes, fs, join } from './fsx'
 import { readProject, readTimeline } from './projects'
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; type: string }
+
+/** Lo que mide el compositor de una escena al dibujar un fotograma (measureCost en compositor.js). */
+export type SceneCost = {
+  seekMs: number; frameMs: number; loadMs: number; fps: number; scenes: string[]
+  /** Pasar al fotograma siguiente: el JS de la escena y recalcular estilos y maquetar (sin pasos si no se pudo medir). */
+  stepJsMs?: number; stepLayoutMs?: number
+  weight: { elements: number; filters: number; bigBlurs: number; svgFilters: number; backdrops: number; blends: number; shadows: number; layers: number; turbulence: number; babel: number; canvasPx: number; imagePx: number; videos: number; animations: number; ms: number }
+}
 let seq = 0
 
 export class Renderer {
@@ -80,11 +88,11 @@ export class Renderer {
     })
   }
 
-  /** Fotograma en t como base64 (jpeg o png) del tamaño pedido. */
-  frame(t: number, width: number, height: number, format: 'jpeg' | 'png' = 'png', quality = 0.92) {
+  /** Fotograma en t como base64 (jpeg o png) del tamaño pedido; con cost, además lo que le cuesta a la escena. */
+  frame(t: number, width: number, height: number, format: 'jpeg' | 'png' = 'png', quality = 0.92, cost = false) {
     return this.exclusive(async () => {
       await this.ready
-      const r = await this.request<{ data: string; mime: string; width: number; height: number }>('frame', { t, width, height, format, quality })
+      const r = await this.request<{ data: string; mime: string; width: number; height: number; cost?: SceneCost | null }>('frame', { t, width, height, format, quality, cost })
       return r
     })
   }
@@ -186,22 +194,27 @@ async function toBase64(cv: HTMLCanvasElement | OffscreenCanvas, mime = 'image/p
   return blobToBase64(blob)
 }
 
-/** Renderiza fotogramas en los instantes pedidos y devuelve PNG (base64). */
-export async function renderFrames(projectId: string, tlId: string | undefined, times: number[], width = 1280, withTime = false, format: 'png' | 'jpeg' = 'png') {
+/**
+ * Renderiza fotogramas en los instantes pedidos y devuelve PNG (base64). measure: en cuántos de ellos
+ * (repartidos) medir lo que le cuesta a la escena (para Claude; cada medición suma 3 pasos de un fotograma).
+ */
+export async function renderFrames(projectId: string, tlId: string | undefined, times: number[], width = 1280, withTime = false, format: 'png' | 'jpeg' = 'png', measure = 0) {
   const pr = readProject(projectId)
   const tid = tlId || pr.activeTimeline
   const { w, h } = sizeFor(projectId, width)
   const r = await getRenderer(projectId, tid)
-  const out: Array<{ t: number; data: string; mime: string }> = []
-  for (const t of times) {
-    const f = await r.frame(t, w, h, withTime ? 'png' : format, 0.9)
-    if (!withTime) { out.push({ t, data: f.data, mime: f.mime }); continue }
+  const out: Array<{ t: number; data: string; mime: string; cost?: SceneCost | null }> = []
+  const every = measure > 0 ? Math.max(1, Math.ceil(times.length / measure)) : 0
+  for (let i = 0; i < times.length; i++) {
+    const t = times[i]
+    const f = await r.frame(t, w, h, withTime ? 'png' : format, 0.9, every > 0 && i % every === 0)
+    if (!withTime) { out.push({ t, data: f.data, mime: f.mime, cost: f.cost }); continue }
     const bmp = await decode(f.data, f.mime)
     const cv = document.createElement('canvas'); cv.width = w; cv.height = h
     const g = cv.getContext('2d')!
     g.drawImage(bmp, 0, 0); bmp.close()
     drawLabel(g, label(t), w)
-    out.push({ t, data: await toBase64(cv, format === 'png' ? 'image/png' : 'image/jpeg', 0.9), mime: format === 'png' ? 'image/png' : 'image/jpeg' })
+    out.push({ t, data: await toBase64(cv, format === 'png' ? 'image/png' : 'image/jpeg', 0.9), mime: format === 'png' ? 'image/png' : 'image/jpeg', cost: f.cost })
   }
   return out
 }
@@ -223,7 +236,7 @@ export async function contactSheet(projectId: string, tlId: string | undefined, 
   // La hoja entera entra en 1990 px por lado (ver fitWidth).
   const fit = Math.floor(Math.min((1990 - pad) / cols - pad, (((1990 - pad) / rows - pad) * pr.width) / pr.height))
   const tw = Math.max(160, Math.min(opts.width || 480, fit))
-  const frames = await renderFrames(projectId, tid, times, tw, true, 'jpeg')
+  const frames = await renderFrames(projectId, tid, times, tw, true, 'jpeg', 4)
   const { w, h } = sizeFor(projectId, tw)
   const cv = document.createElement('canvas')
   cv.width = pad + cols * (w + pad); cv.height = pad + rows * (h + pad)
@@ -234,7 +247,57 @@ export async function contactSheet(projectId: string, tlId: string | undefined, 
     g.drawImage(bmp, pad + (i % cols) * (w + pad), pad + Math.floor(i / cols) * (h + pad), w, h)
     bmp.close()
   }
-  return { jpeg: await toBase64(cv, 'image/jpeg', 0.88), times }
+  return { jpeg: await toBase64(cv, 'image/jpeg', 0.88), times, costs: frames.map((f) => f.cost).filter((c): c is SceneCost => !!c) }
+}
+
+/**
+ * Para Claude, con los fotogramas: lo que le cuesta cada escena a la tablet (medido en el equipo) y, si es
+ * pesada, por qué. Presupuesto: a 30 fps hay 33 ms por fotograma para todo (el JS y los estilos de la escena,
+ * pintar y la interfaz de la app, que comparte el hilo): la escena no debería pasar de ~10 ms.
+ */
+export function costNote(costs: SceneCost[]): string {
+  const groups = new Map<string, SceneCost[]>()
+  for (const c of costs) {
+    const k = c.scenes.length ? c.scenes.join(' + ') : ''
+    if (k) groups.set(k, [...(groups.get(k) || []), c])
+  }
+  if (!groups.size) return ''
+  const ms = (v: number) => (v < 10 ? v.toFixed(1) : String(Math.round(v)))
+  const light: string[] = [], heavy: string[] = []
+  for (const [scenes, cs] of groups) {
+    const fps = cs[0].fps || 30
+    const budget = Math.round(Math.min(10, 300 / fps))
+    // El fotograma más lento de los medidos (con cuánto fue JS y cuánto estilos y maquetado).
+    const slow = cs.filter((c) => c.stepJsMs != null).sort((a, b) => (b.stepJsMs! + b.stepLayoutMs!) - (a.stepJsMs! + a.stepLayoutMs!))[0]
+    const step = slow ? slow.stepJsMs! + slow.stepLayoutMs! : null
+    const w = { ...cs[0].weight }
+    for (const c of cs) for (const k of Object.keys(w) as Array<keyof typeof w>) w[k] = Math.max(w[k], c.weight[k])
+    const load = Math.max(...cs.map((c) => c.loadMs || 0))
+    const flags: string[] = []
+    if (w.elements > 3000) flags.push(`${w.elements} elementos en el DOM`)
+    if (w.animations > 150) flags.push(`${w.animations} animaciones CSS/WAAPI (se posicionan una por una en cada fotograma)`)
+    if (w.bigBlurs) flags.push(`${w.bigBlurs} desenfoque(s) grande(s) (filter: blur sobre más del 10 % del cuadro)`)
+    else if (w.filters > 30) flags.push(`${w.filters} elementos con filter`)
+    if (w.backdrops) flags.push(`backdrop-filter en ${w.backdrops} elemento(s)`)
+    if (w.blends > 8) flags.push(`${w.blends} elementos con mix-blend-mode`)
+    if (w.shadows > 20) flags.push(`${w.shadows} sombras grandes (box-shadow con desenfoque de 24 px o más)`)
+    if (w.layers > 40) flags.push(`${w.layers} capas de GPU (will-change o 3D)`)
+    if (w.turbulence) flags.push(`feTurbulence ×${w.turbulence} (se dibuja en la CPU)`)
+    else if (w.svgFilters > 10) flags.push(`${w.svgFilters} elementos con filtros SVG`)
+    const mb = Math.round(((w.canvasPx + w.imagePx) * 4) / 2 ** 20)
+    if (mb > 250) flags.push(`~${mb} MB de imágenes y canvas decodificados`)
+    if (w.videos > 2) flags.push(`${w.videos} videos a la vez`)
+    if (w.babel) flags.push('Babel en el navegador (compila al cargar)')
+    if (load > 2500) flags.push(`tarda ${(load / 1000).toFixed(1)} s en cargar`)
+    const stepText = step == null ? '' : `${ms(step)} ms por fotograma de JS y estilos`
+    if ((step == null || step <= budget) && !flags.length) { light.push(`${scenes} ${stepText ? '~' + stepText : 'sin pasos medidos'}`); continue }
+    const split = slow ? ` (JS ${ms(slow.stepJsMs!)} + estilos y maquetado ${ms(slow.stepLayoutMs!)}; a ${fps} fps debería quedar bajo ~${budget} ms, y pintar va aparte)` : ''
+    heavy.push(`${scenes}: ${[step == null ? '' : stepText + split, ...flags].filter(Boolean).join(' · ')}`)
+  }
+  const out: string[] = []
+  if (heavy.length) out.push(`ATENCIÓN, escena pesada para la tablet (medido en el equipo): ${heavy.join(' | ')}. Así la vista previa se traba, la interfaz puede parpadear y la app puede cerrarse por falta de memoria: simplificala antes de seguir (skill escenas-html, «Rendimiento»).`)
+  if (light.length) out.push(`Costo en la tablet (medido): ${light.join(' · ')}: liviana${light.length > 1 ? 's' : ''}.`)
+  return out.join('\n')
 }
 
 export type AuditIssue = { kind: string; text: string; clip?: string; t: number; box?: number[] }

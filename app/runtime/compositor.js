@@ -152,6 +152,7 @@
       el = document.createElement('iframe');
       el.className = 'layer';
       el.setAttribute('scrolling', 'no');
+      var loadStart = performance.now();
       ready = new Promise(function (res) {
         el.addEventListener('load', function () {
           var w = el.contentWindow;
@@ -160,7 +161,7 @@
           (function wait() {
             if (w.__oaRuntime || tries++ > 200) {
               var f = w.document && w.document.fonts ? w.document.fonts.ready : Promise.resolve();
-              f.then(function () { setTimeout(res, 50); });
+              f.then(function () { if (L) L.loadMs = performance.now() - loadStart; setTimeout(res, 50); });
             } else setTimeout(wait, 25);
           })();
         }, { once: true });
@@ -385,8 +386,10 @@
   }
 
   /** Renderiza t y devuelve un canvas de width×height con todas las capas visibles. */
-  async function rasterAt(t, width, height) {
+  async function rasterAt(t, width, height, cost) {
+    var t0 = performance.now();
     await renderAt(t, { force: true, skipPaint: true });
+    if (cost) cost.seekMs = performance.now() - t0;
     var ms = await loadVendor();
     var PW = project.width || 1920, PH = project.height || 1080;
     var W = Math.round(width || PW), H = Math.round(height || Math.round(W * PH / PW));
@@ -424,6 +427,98 @@
     // Contextos de escenas que ya no existen.
     shotCtx.forEach(function (c, el) { if (!el.isConnected) { try { ms.destroyContext(c); } catch (e) {} shotCtx.delete(el); } });
     return cv;
+  }
+
+  // ── costo de la escena (Android: va con los fotogramas que mira Claude) ────
+  // La vista previa corre en el mismo motor (y el mismo hilo) que la interfaz: lo que tarda la escena en
+  // pasar al fotograma siguiente (su JS, más recalcular estilos y maquetar) traba toda la app, y lo que
+  // tiene de caro al pintar o en memoria (desenfoques, capas, imágenes enormes) la hace parpadear o cerrarse.
+  /** Las escenas HTML visibles en t, con su runtime y su tiempo interno. */
+  function scenesAt(t) {
+    var out = [];
+    visualTracks().forEach(function (tr) {
+      var c = activeClip(tr, t), L = c && layers.get(c.id);
+      if (!L || L.kind !== 'scene') return;
+      try {
+        var w = L.el.contentWindow, doc = L.el.contentDocument;
+        if (w && w.__oaRuntime && doc && doc.documentElement) out.push({ rt: w.__oaRuntime, doc: doc, src: L.src, loadMs: L.loadMs || 0, local: (c.in || 0) + (t - c.start) });
+      } catch (e) { /* otro origen */ }
+    });
+    return out;
+  }
+  /** Recalcula estilos y maqueta lo que cambió (leer una medida lo obliga); devuelve cuánto tardó. */
+  function flushLayout(scenes) {
+    var s = performance.now();
+    scenes.forEach(function (d) { try { void d.doc.documentElement.offsetHeight; } catch (e) {} });
+    return performance.now() - s;
+  }
+  /** El desenfoque más grande de un box-shadow calculado ("rgba(…) 0px 10px 40px 0px, …"). */
+  function maxShadowBlur(v) {
+    var m = 0;
+    v.split(/,(?![^(]*\))/).forEach(function (one) { var px = one.match(/-?[\d.]+px/g); if (px && px.length >= 3) m = Math.max(m, parseFloat(px[2])); });
+    return m;
+  }
+  /** Cuenta lo visible de una escena que cuesta al pintar o en memoria. */
+  function weigh(doc, w) {
+    var win = doc.defaultView;
+    if (!win) return;
+    var all = doc.getElementsByTagName('*');
+    var area = (win.innerWidth || 1920) * (win.innerHeight || 1080);
+    var n = Math.min(all.length, 20000);
+    w.elements += all.length;
+    for (var i = 0; i < n; i++) {
+      var el = all[i];
+      if (el.checkVisibility && !el.checkVisibility()) continue;
+      var cs = win.getComputedStyle(el), tag = el.localName;
+      var f = cs.filter;
+      if (f && f !== 'none') {
+        if (f.indexOf('url(') >= 0) w.svgFilters++; else w.filters++;
+        var b = /blur\(([\d.]+)px\)/.exec(f);
+        if (b && +b[1] >= 8) { var r = el.getBoundingClientRect(); if (r.width * r.height > area * 0.1) w.bigBlurs++; }
+      }
+      var bf = cs.backdropFilter || cs.webkitBackdropFilter;
+      if (bf && bf !== 'none') w.backdrops++;
+      if (cs.mixBlendMode && cs.mixBlendMode !== 'normal') w.blends++;
+      if (cs.boxShadow && cs.boxShadow !== 'none' && maxShadowBlur(cs.boxShadow) >= 24) w.shadows++;
+      if ((cs.willChange && cs.willChange !== 'auto') || cs.transform.indexOf('matrix3d') === 0) w.layers++;
+      if (tag === 'canvas') w.canvasPx += (el.width || 0) * (el.height || 0);
+      else if (tag === 'img') w.imagePx += (el.naturalWidth || 0) * (el.naturalHeight || 0);
+      else if (tag === 'video') w.videos++;
+    }
+    w.turbulence += doc.getElementsByTagName('feTurbulence').length;
+    w.babel += doc.querySelectorAll('script[type="text/babel"], script[type="text/jsx"]').length;
+    try { w.animations += doc.getAnimations().length; } catch (e) { /* sin Web Animations */ }
+  }
+  /**
+   * Después de un fotograma en t: lo que tarda el hilo principal en pasar al siguiente (3 pasos de un
+   * fotograma de cada escena visible, el del medio; uno solo si ya es muy lento) y el peso de lo que se ve.
+   * Sólo las escenas: los videos del timeline se reproducen solos en la vista previa.
+   */
+  async function measureCost(t, cost) {
+    var fps = (project && project.fps) || 30;
+    var scenes = scenesAt(t);
+    flushLayout(scenes);
+    if (scenes.length) {
+      var steps = [];
+      for (var i = 1; i <= 3; i++) {
+        var s = performance.now();
+        for (var k = 0; k < scenes.length; k++) await scenes[k].rt.renderAt(scenes[k].local + i / fps, { fps: fps, skipPaint: true });
+        var one = { js: performance.now() - s, layout: flushLayout(scenes) };
+        steps.push(one);
+        if (one.js + one.layout > 150) break;
+      }
+      steps.sort(function (a, b) { return (a.js + a.layout) - (b.js + b.layout); });
+      var mid = steps[Math.floor(steps.length / 2)];
+      cost.stepJsMs = mid.js; cost.stepLayoutMs = mid.layout;
+    }
+    var w = { elements: 0, filters: 0, bigBlurs: 0, svgFilters: 0, backdrops: 0, blends: 0, shadows: 0, layers: 0, turbulence: 0, babel: 0, canvasPx: 0, imagePx: 0, videos: 0, animations: 0 };
+    var s2 = performance.now();
+    scenes.forEach(function (d) { weigh(d.doc, w); });
+    w.ms = performance.now() - s2;
+    cost.weight = w;
+    cost.scenes = scenes.map(function (d) { return d.src; });
+    cost.loadMs = scenes.reduce(function (m, d) { return Math.max(m, d.loadMs); }, 0);
+    cost.fps = fps;
   }
 
   function canvasData(cv, mime, quality) {
@@ -478,10 +573,13 @@
       } else if (m.type === 'probe') {
         post({ type: 'probe', id: m.id, result: await probeScene(m.src) });
       } else if (m.type === 'frame') {
-        // Un fotograma como imagen (base64). format: jpeg | png.
-        var cv = await rasterAt(m.t, m.width, m.height);
+        // Un fotograma como imagen (base64). format: jpeg | png. cost: medir lo que le cuesta a la escena.
+        var cost = m.cost ? {} : null, f0 = performance.now();
+        var cv = await rasterAt(m.t, m.width, m.height, cost);
         var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
-        post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: await canvasData(cv, mime, m.quality || 0.92), width: cv.width, height: cv.height });
+        var data = await canvasData(cv, mime, m.quality || 0.92);
+        if (cost) { cost.frameMs = performance.now() - f0; await measureCost(m.t, cost); }
+        post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: data, width: cv.width, height: cv.height, cost: cost });
       }
     } catch (err) {
       post({ type: 'error', id: m.id, message: String(err && err.message || err) });

@@ -79,6 +79,8 @@
 
   // ── animaciones CSS / Web Animations ──────────────────────────────────────
   var animFirstSeen = new WeakMap();
+  var cssPaused = new WeakSet();
+  var CSSAnim = window.CSSAnimation, CSSTrans = window.CSSTransition;
   function syncAnimations() {
     if (!document.getAnimations) return;
     var list = document.getAnimations();
@@ -89,7 +91,13 @@
         animFirstSeen.set(a, virtualMs <= 0.5 ? 0 : virtualMs);
       }
       try {
-        if (a.playState !== 'paused') a.pause();
+        // En una animación CSS, leer playState recalcula los estilos de todo el documento (y el currentTime
+        // anterior los dejó sucios): con cientos era cuadrático (1600 animaciones: más de 1 s por fotograma).
+        // Se pausan una vez: pausadas ya no siguen a animation-play-state. Las del script (el.animate) pueden
+        // volver a arrancar con play(): a ésas se les pregunta, sin costo.
+        if ((CSSAnim && a instanceof CSSAnim) || (CSSTrans && a instanceof CSSTrans)) {
+          if (!cssPaused.has(a)) { a.pause(); cssPaused.add(a); }
+        } else if (a.playState !== 'paused') a.pause();
         a.currentTime = Math.max(0, virtualMs - animFirstSeen.get(a));
       } catch (e) { /* animación sin timeline */ }
     }

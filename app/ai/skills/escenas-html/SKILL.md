@@ -37,6 +37,24 @@ OpenAnimator inyecta un runtime ANTES de tus scripts:
 - El audio propio de la escena se silencia: el sonido va SIEMPRE en pistas de audio del timeline.
 - Aun así, **`window.__oa.render(t)` es lo más confiable**: preferilo en escenas nuevas.
 
+## Rendimiento (sobre todo en la tablet)
+
+La vista previa corre en el mismo motor que la interfaz de la app, y en el mismo hilo: una escena pesada traba
+todo, hace parpadear partes de la interfaz (se acaba la memoria de la GPU) y en la tablet puede cerrar la app.
+Presupuesto: a 30 fps, **~10 ms por fotograma** para el JS de la escena y recalcular estilos (el resto es pintar
+y la app).
+- Animá `transform` y `opacity`. Cambiar `top`/`left`/`width`/`height` de muchos elementos rehace el maquetado.
+- Muchas partículas o piezas iguales: un solo `<canvas>` dibujado en `render(t)`, no cientos de nodos del DOM
+  ni cientos de animaciones CSS (el runtime posiciona cada una en cada fotograma).
+- `filter: blur()`, `backdrop-filter`, `mix-blend-mode` y sombras grandes se vuelven a pintar en cada fotograma:
+  pocos y en elementos chicos. Para un resplandor, un degradado radial.
+- `will-change` y las transformaciones 3D crean una capa de GPU por elemento: sólo en unos pocos.
+- Imágenes del tamaño en que se ven (una foto de 6000×4000 ocupa ~90 MB decodificada) y canvas del tamaño
+  del cuadro.
+- Nada de Babel en el navegador (`type="text/babel"`): JS directo.
+- En la tablet, `oa_ver_fotogramas` y `oa_hoja_contactos` dicen lo que cuesta cada escena, medido en el
+  equipo. Si dicen que es pesada, simplificala antes de seguir.
+
 ## Trampas conocidas
 
 - Filtros SVG animados (`feTurbulence` con semilla que cambia) sobre capas grandes cuelgan Chromium: semilla fija,

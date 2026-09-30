@@ -131,6 +131,7 @@ h('projects:exportZip', async (id: string, o: { includeRenders?: boolean; action
   return r
 })
 h('app:takePendingOpen', () => host().call('app.takePendingOpen'))
+h('app:exits', () => host().call('app.exits'))
 
 // ── papelera ──────────────────────────────────────────────────────────────────
 h('trash:list', () => P.listTrashSizes())

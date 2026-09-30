@@ -4,7 +4,8 @@
  * fake). Habla el mismo protocolo que `claude -p --input-format stream-json --output-format
  * stream-json`: arranca el servidor MCP de --mcp-config (oa-mcp.mjs → puente → app), pide permiso
  * con control_request para lo que no está en --allowedTools y sigue un guion fijo (crea una escena, la
- * pone en el timeline y mira fotogramas). Guarda la conversación como .jsonl, igual que Claude Code.
+ * pone en el timeline y mira fotogramas; «[herramienta] nombre {json}» llama sólo a esa herramienta). Guarda
+ * la conversación como .jsonl, igual que Claude Code.
  */
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
@@ -104,8 +105,11 @@ async function turn(text) {
     return
   }
   // «[transcribir] ruta»: un solo paso con oa_transcribir (prueba de Whisper en la tablet).
+  // «[herramienta] nombre {json}»: un solo paso con esa herramienta y esa entrada.
   const tr = /^\[transcribir\]\s+(\S+)/.exec(text)
-  const steps = tr ? [{ text: 'Transcribo la narración.', tool: 'oa_transcribir', input: { path: tr[1], idioma: 'es' } }] : STEPS
+  const one = /^\[herramienta\]\s+(\S+)\s*(\{[\s\S]*\})?\s*$/.exec(text)
+  const steps = tr ? [{ text: 'Transcribo la narración.', tool: 'oa_transcribir', input: { path: tr[1], idioma: 'es' } }]
+    : one ? [{ tool: one[1], input: JSON.parse(one[2] || '{}') }] : STEPS
   let lastResult = ''
   for (const s of steps) {
     const blocks = []
@@ -146,7 +150,7 @@ async function turn(text) {
     out({ type: 'user', message: { role: 'user', content: [result] } })
     record({ type: 'user', message: { role: 'user', content: [result] } })
   }
-  const final = tr ? `Transcripción:\n${lastResult || '(sin resultado)'}` : 'Listo: creé **scenes/termux.html** y la puse en el timeline de 0 a 4 s. Revisé los fotogramas en 0,5 s y 2,5 s.'
+  const final = tr ? `Transcripción:\n${lastResult || '(sin resultado)'}` : one ? `Resultado:\n${lastResult || '(sin texto)'}` : 'Listo: creé **scenes/termux.html** y la puse en el timeline de 0 a 4 s. Revisé los fotogramas en 0,5 s y 2,5 s.'
   out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 18000, cache_creation_input_tokens: 200 } } } })
   out({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
   out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: final } } })

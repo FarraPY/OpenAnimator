@@ -31,7 +31,8 @@
  * gpu / draw en el fotograma n del video (para probar el cambio de método a mitad de la exportación).
  *
  * El codificador de video (MediaCodec) se imita con ffmpeg y los selectores de archivos con
- * POST /__dev/pick (la próxima selección devuelve esos archivos). Con --mock-claude, los pedidos a
+ * POST /__dev/pick (la próxima selección devuelve esos archivos); POST /__dev/exits {records}, los cierres que
+ * la app va a informar al abrirse (app.exits). Con --mock-claude, los pedidos a
  * api.anthropic.com los responde un Claude de mentira con un guion fijo (prueba del chat sin costo).
  */
 import http from 'node:http'
@@ -372,6 +373,8 @@ async function audioPeaks(a) {
 
 // ── selector de archivos de prueba ────────────────────────────────────────────
 let nextPick = []
+/** POST /__dev/exits {records}: lo que la app le contesta a app.exits la próxima vez (cierres simulados). */
+let devExits = []
 function pickFiles() {
   const files = nextPick
   nextPick = []
@@ -765,6 +768,7 @@ function sync(method, a) {
     case 'http.cancel': requests.get(a.id)?.abort(); return true
     case 'app.info': return info()
     case 'app.takePendingOpen': return null
+    case 'app.exits': { const x = devExits; devExits = []; return x }
     case 'app.toast': console.log('[toast]', a.text); return true
     case 'app.keepScreenOn': case 'app.immersive': case 'app.debug': return true
     case 'app.openUrl': console.log('[abrir]', a.url); return true
@@ -873,6 +877,7 @@ const server = http.createServer(async (req, res) => {
         res.end(); return
       }
       if (req.method === 'POST' && p === '/__dev/pick') { nextPick = JSON.parse((await readBody(req)).toString('utf8')).files || []; res.writeHead(200); res.end('ok'); return }
+      if (req.method === 'POST' && p === '/__dev/exits') { devExits = JSON.parse((await readBody(req)).toString('utf8')).records || []; res.writeHead(200); res.end('ok'); return }
       if (req.method === 'POST' && p === '/__dev/sd') { sdPresent = !!SD_DIR && !!JSON.parse((await readBody(req)).toString('utf8')).present; if (sdPresent) rememberCard(); res.writeHead(200); res.end(String(sdPresent)); return }
       if (p.startsWith('/fs/')) { const f = resolve(p.slice(4)); sendFile(req, res, f); return }
       const f = inside(WWW, '.' + (p === '/' ? '/index.html' : p))

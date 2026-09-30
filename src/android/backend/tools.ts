@@ -26,7 +26,7 @@ export const TOOL_DEFS: Array<{ name: string; description: string; input_schema:
   { name: 'Grep', kind: 'read', description: 'Busca texto (expresión regular de JavaScript) en los archivos de texto del proyecto.', input_schema: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string', description: 'Archivo o carpeta (por defecto, todo el proyecto)' }, glob: { type: 'string', description: 'Filtro de archivos, p. ej. "*.js"' }, output_mode: { type: 'string', enum: ['content', 'files_with_matches', 'count'], description: 'Por defecto files_with_matches' }, '-i': { type: 'boolean', description: 'Sin distinguir mayúsculas' }, '-C': { type: 'number', description: 'Líneas de contexto (con content)' }, head_limit: { type: 'number', description: 'Máximo de resultados (por defecto 100)' } }, required: ['pattern'] } },
   { name: 'Skill', kind: 'read', description: 'Carga una skill de OpenAnimator (guía detallada para una tarea). Leé la que corresponda antes de trabajar.', input_schema: { type: 'object', properties: { skill: { type: 'string', description: 'Nombre de la skill' } }, required: ['skill'] } },
   { name: 'oa_proyecto', kind: 'read', description: 'Resumen del proyecto: resolución, fps, timelines, pistas, clips y notas del usuario ancladas al tiempo.', input_schema: { type: 'object', properties: { project: P, timeline: TL } } },
-  { name: 'oa_ver_fotogramas', kind: 'read', description: 'Renderiza el video en los instantes indicados (segundos del timeline) y devuelve las imágenes para que las MIRES. Usalo después de cada cambio visual. Máx. 8 instantes.', input_schema: { type: 'object', properties: { project: P, timeline: TL, times: { type: 'array', items: { type: 'number' } }, width: { type: 'number', description: 'Ancho de la imagen (por defecto 960; subilo a 1280-1920 sólo para revisar detalles finos: cada imagen grande consume mucho contexto)' } }, required: ['times'] } },
+  { name: 'oa_ver_fotogramas', kind: 'read', description: 'Renderiza el video en los instantes indicados (segundos del timeline) y devuelve las imágenes para que las MIRES, con lo que le cuesta cada escena a la tablet. Usalo después de cada cambio visual. Máx. 8 instantes.', input_schema: { type: 'object', properties: { project: P, timeline: TL, times: { type: 'array', items: { type: 'number' } }, width: { type: 'number', description: 'Ancho de la imagen (por defecto 960; subilo a 1280-1920 sólo para revisar detalles finos: cada imagen grande consume mucho contexto)' } }, required: ['times'] } },
   { name: 'oa_hoja_contactos', kind: 'read', description: 'Hoja de contactos: N fotogramas repartidos en un rango (o instantes dados) en una sola imagen con la hora de cada uno. Ideal para revisar ritmo, variedad y consistencia de todo el video.', input_schema: { type: 'object', properties: { project: P, timeline: TL, count: { type: 'number', description: 'Cantidad de fotogramas (2-48, por defecto 12)' }, from: { type: 'number' }, to: { type: 'number' }, times: { type: 'array', items: { type: 'number' } }, cols: { type: 'number' }, width: { type: 'number', description: 'Ancho de cada miniatura (por defecto 480)' } } } },
   { name: 'oa_auditar_layout', kind: 'read', description: 'Recorre el timeline cada `step` segundos y reporta textos fuera de cuadro y textos superpuestos (con el rango de tiempo donde ocurre). Debe dar 0 incidencias antes de entregar. Un audit limpio NO reemplaza mirar fotogramas.', input_schema: { type: 'object', properties: { project: P, timeline: TL, step: { type: 'number', description: 'Paso en segundos (por defecto 0.5)' }, from: { type: 'number' }, to: { type: 'number' } } } },
   { name: 'oa_medios', kind: 'read', description: 'Lista los archivos del proyecto (escenas, video, audio, imágenes, documentos) con tamaño.', input_schema: { type: 'object', properties: { project: P } } },
@@ -281,14 +281,17 @@ export async function runTool(name: string, input: any, ctx: ToolCtx): Promise<T
     }
     case 'oa_ver_fotogramas': {
       const times: number[] = (input.times || [0]).slice(0, 8)
-      const frames = await F.renderFrames(project, input.timeline, times, F.fitWidth(project, input.width || 960), true, 'jpeg')
+      const frames = await F.renderFrames(project, input.timeline, times, F.fitWidth(project, input.width || 960), true, 'jpeg', 4)
       const out: ToolContent = []
       for (const f of frames) { out.push({ type: 'text', text: `t=${f.t}s` }); out.push({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: f.data } }) }
+      const note = F.costNote(frames.flatMap((f) => (f.cost ? [f.cost] : [])))
+      if (note) out.push({ type: 'text', text: note })
       return out
     }
     case 'oa_hoja_contactos': {
       const r = await F.contactSheet(project, input.timeline, input)
-      return [{ type: 'text', text: 'Instantes: ' + r.times.join(', ') + ' s' }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: r.jpeg } }]
+      const note = F.costNote(r.costs)
+      return [{ type: 'text', text: 'Instantes: ' + r.times.join(', ') + ' s' + (note ? '\n' + note : '') }, { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: r.jpeg } }]
     }
     case 'oa_auditar_layout': {
       const r = await F.auditLayout(project, input.timeline, input)

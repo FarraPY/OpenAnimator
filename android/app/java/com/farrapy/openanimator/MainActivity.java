@@ -67,6 +67,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Exits.install(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         prefs = getSharedPreferences("app", MODE_PRIVATE);
         immersive = prefs.getBoolean("immersive", true);
@@ -434,6 +435,8 @@ public class MainActivity extends Activity {
             // Sin memoria u otro fallo del motor web: se vuelve a crear la página sin cerrar la app.
             Log.e(TAG, "El proceso del WebView terminó (crash=" + detail.didCrash() + ")");
             if (view == web) {
+                // Queda anotado para mostrarlo en la página nueva (app.exits).
+                Exits.webGone(MainActivity.this, detail.didCrash(), detail.rendererPriorityAtExit(), bridge.doing());
                 root.removeView(web);
                 web.destroy();
                 web = null;
