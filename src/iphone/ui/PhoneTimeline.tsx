@@ -14,14 +14,14 @@ import { isNative, nativeCall } from '../host/native'
 
 const RULER = 26
 
-/** Cómo se ve el vidrio de la columna de pistas (GlassOverlay.swift): transparente o esmerilado y cuánto color de cada
- *  pista. Mientras se prueba se elige en Ajustes › Depuración. */
+/** Cómo se ve el vidrio de la columna de pistas (GlassOverlay.swift): esmerilado o transparente y cuánto color de cada
+ *  pista (con 0,2 se veía pálido). Mientras se prueba se elige en Ajustes › Depuración. */
 export type GlassLook = { style: 'clear' | 'regular'; tint: number }
 export function glassLook(): GlassLook {
-  const d: GlassLook = { style: 'clear', tint: 0.12 }
-  try { return { ...d, ...JSON.parse(localStorage.getItem('oa.glass') || '{}') } } catch { return d }
+  const d: GlassLook = { style: 'regular', tint: 0.5 }
+  try { return { ...d, ...JSON.parse(localStorage.getItem('oa.glass2') || '{}') } } catch { return d }
 }
-export const setGlassLook = (l: GlassLook) => { try { localStorage.setItem('oa.glass', JSON.stringify(l)) } catch { /* sin almacenamiento */ } }
+export const setGlassLook = (l: GlassLook) => { try { localStorage.setItem('oa.glass2', JSON.stringify(l)) } catch { /* sin almacenamiento */ } }
 const STEPS = [1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 const isImage = (src: string) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(src)
 const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')

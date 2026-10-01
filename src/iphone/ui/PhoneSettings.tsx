@@ -262,8 +262,8 @@ function DebugSection() {
         </div>
       </Group>
       <Group title="Vidrio de las pistas (prueba)" foot="Cómo se ve el Liquid Glass de la columna de pistas del timeline. Probá las opciones (se ve al volver al editor) y contale a Claude cuál te gusta.">
-        <Row label="Vidrio" stack><Chips value={look.style} onChange={(v) => pickLook({ ...look, style: v })} options={[{ value: 'clear' as const, label: 'Transparente' }, { value: 'regular' as const, label: 'Esmerilado' }]} /></Row>
-        <Row label="Color de cada pista" stack><Chips value={look.tint} onChange={(v) => pickLook({ ...look, tint: v })} options={[{ value: 0, label: 'Sin color' }, { value: 0.12, label: 'Leve' }, { value: 0.2, label: 'Medio' }, { value: 0.3, label: 'Fuerte' }]} /></Row>
+        <Row label="Vidrio" stack><Chips value={look.style} onChange={(v) => pickLook({ ...look, style: v })} options={[{ value: 'regular' as const, label: 'Esmerilado' }, { value: 'clear' as const, label: 'Transparente' }]} /></Row>
+        <Row label="Color de cada pista" stack><Chips value={look.tint} onChange={(v) => pickLook({ ...look, tint: v })} options={[{ value: 0.35, label: 'Suave' }, { value: 0.5, label: 'Medio' }, { value: 0.65, label: 'Fuerte' }, { value: 0.8, label: 'Intenso' }]} /></Row>
       </Group>
       {tail != null && <Group title="Lo último"><div className="prow2"><pre className="viewer-text" style={{ maxHeight: '60vh', overflow: 'auto', fontSize: 11 }}>{tail}</pre></div></Group>}
     </>
