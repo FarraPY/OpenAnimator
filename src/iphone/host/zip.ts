@@ -5,7 +5,7 @@ import type { WebFS } from './webfs'
 const STORED = /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|aac|ogg|opus|flac|jpg|jpeg|png|webp|gif|avif|zip|woff2?)$/i
 
 export async function unzipTo(fs: WebFS, zipPath: string, dest: string, ev: (e: any) => void) {
-  const blob = await fs.fileBlob(zipPath)
+  const total = fs.stat(zipPath)?.size || 0
   const writes: Promise<void>[] = []
   let files = 0
   const unzip = new Unzip((file) => {
@@ -20,14 +20,14 @@ export async function unzipTo(fs: WebFS, zipPath: string, dest: string, ev: (e: 
     file.start()
   })
   unzip.register(UnzipInflate)
-  const reader = blob.stream().getReader()
+  const reader = (await fs.fileStream(zipPath)).getReader()
   let done = 0
   for (;;) {
     const { done: end, value } = await reader.read()
     if (end) { unzip.push(new Uint8Array(0), true); break }
     unzip.push(value)
     done += value.byteLength
-    ev({ event: 'progress', done, total: blob.size })
+    ev({ event: 'progress', done, total })
   }
   await Promise.all(writes)
   return { files }
@@ -50,7 +50,7 @@ export async function zipDir(fs: WebFS, dir: string, out: string, prefix: string
     const name = (prefix ? `${prefix}/` : '') + e.path
     const entry = STORED.test(e.path!) ? new ZipPassThrough(name) : new ZipDeflate(name, { level: 6 })
     zip.add(entry)
-    const reader = (await fs.fileBlob(`${dir}/${e.path}`)).stream().getReader()
+    const reader = (await fs.fileStream(`${dir}/${e.path}`)).getReader()
     for (;;) {
       const { done: end, value } = await reader.read()
       if (end) { entry.push(new Uint8Array(0), true); break }

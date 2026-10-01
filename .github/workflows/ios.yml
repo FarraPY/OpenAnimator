@@ -60,6 +60,7 @@ jobs:
                       if x['name'].startswith('iPhone'):
                           print(x['udid']); sys.exit()
           ")
+          echo "$UDID" > udid.txt
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" "$APP"
@@ -71,6 +72,24 @@ jobs:
           RESULT=$(grep -o 'OA-DIAG-RESULT .*' diag.log | head -1 | cut -c16-)
           echo "::notice title=Diagnóstico del simulador::${RESULT:-sin resultado (ver el log)}"
           { echo '### Diagnóstico del simulador'; echo '```json'; echo "${RESULT:-sin resultado}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      # La app de verdad en el simulador: instala Claude Code de npm, lo arranca contra una API de mentira (en esta Mac),
+      # Claude escribe una escena por MCP, se exporta un video y AVFoundation lo revisa (src/iphone/test/e2e.ts).
+      - name: Simulador (prueba de punta a punta)
+        continue-on-error: true
+        run: |
+          node ios/test/mock-anthropic.mjs 8899 > mock.log 2>&1 &
+          UDID=$(cat udid.txt)
+          xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OATest e2e \
+            -OADev '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8899","ANTHROPIC_API_KEY":"sk-ant-api03-prueba"}}' > e2e.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 900); do grep -q "OA-DIAG-" e2e.log && break; sleep 1; done
+          sleep 1; kill $PID 2>/dev/null || true
+          cat e2e.log
+          echo '--- API de mentira'; tail -n 60 mock.log
+          RESULT=$(grep -o 'OA-DIAG-RESULT .*' e2e.log | head -1 | cut -c16-)
+          echo "::notice title=Prueba de punta a punta::${RESULT:-sin resultado (ver el log)}"
+          { echo '### Prueba de punta a punta'; echo '```json'; echo "${RESULT:-sin resultado}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       - name: IPA sin firmar
         run: |

@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Photos
 import PhotosUI
@@ -48,6 +49,7 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "photos.save": saveToPhotos(a, replyHandler)
         case "pick": pick(a, replyHandler)
         case "open": open(a, replyHandler)
+        case "probe": probe(a, replyHandler)
         default:
             // Archivos: en otro hilo (pueden ser grandes); la respuesta vuelve al principal.
             io.async {
@@ -119,6 +121,22 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         ql.dataSource = self
         vc.present(ql, animated: true)
         reply(true, nil)
+    }
+
+    /// Qué tiene un video según iOS (AVFoundation): duración y pistas. Lo usa la prueba de la exportación.
+    private func probe(_ a: [String: Any], _ reply: @escaping Reply) {
+        guard let url = fileURL(a) else { reply(nil, "No existe el archivo"); return }
+        let asset = AVURLAsset(url: url)
+        asset.loadValuesAsynchronously(forKeys: ["duration", "tracks", "playable"]) {
+            let video = asset.tracks(withMediaType: .video).first
+            let result: [String: Any] = [
+                "duration": CMTimeGetSeconds(asset.duration),
+                "video": video.map { ["w": Double($0.naturalSize.width), "h": Double($0.naturalSize.height), "fps": Double($0.nominalFrameRate)] } ?? NSNull(),
+                "audio": asset.tracks(withMediaType: .audio).count,
+                "playable": asset.isPlayable,
+            ]
+            DispatchQueue.main.async { reply(result, nil) }
+        }
     }
 
     // MARK: elegir archivos (Fotos o Archivos) → .incoming/<id>/

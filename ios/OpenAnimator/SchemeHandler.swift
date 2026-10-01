@@ -17,6 +17,9 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     private let io = DispatchQueue(label: "oa.scheme", qos: .userInitiated, attributes: .concurrent)
     private static let chunk = 1 << 20
 
+    /// Con -OADiag/-OATest se anota cada pedido (para ver qué pide, p. ej., el reproductor de video).
+    private static let trace = WebViewController.diagMode || WebViewController.argument("-OATest") != nil
+
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         let id = ObjectIdentifier(task)
         live.insert(id)
@@ -24,6 +27,12 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         io.async { [weak self] in
             guard let self else { return }
             let reply = Self.route(request)
+            if Self.trace, let url = request.url, url.path.hasSuffix(".mp4") || url.path.hasSuffix(".m4a") || url.path.contains("__diag") {
+                let len: String
+                switch reply.body { case .data(let d): len = "\(d.count)"; case .file(_, let off, let n): len = "\(off)+\(n)" }
+                print("[scheme] \(request.httpMethod ?? "GET") \(url.absoluteString) Range=\(request.value(forHTTPHeaderField: "Range") ?? "-") → \(reply.status) \(len) \(request.allHTTPHeaderFields ?? [:])")
+                fflush(stdout)
+            }
             self.send(reply, to: task, id: id)
         }
     }

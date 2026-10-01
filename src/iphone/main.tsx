@@ -1,7 +1,8 @@
 /**
- * Arranque de OpenAnimator en el iPhone (una app web: se abre en Safari y se agrega a la pantalla de inicio).
- *   1. El Service Worker (sw.ts): la app sin conexión, los archivos de los proyectos y el Claude Code instalado.
- *   2. El "puente nativo" hecho con APIs de Safari (host/webhost.ts) y, encima, el backend de Android (window.oa).
+ * Arranque de OpenAnimator en el iPhone, en la app nativa (ios/: WKWebView) o como app web en Safari.
+ *   1. Sólo en Safari: el Service Worker (sw.ts) sirve la app sin conexión, los archivos de los proyectos y Claude Code.
+ *      En la app nativa eso lo hace la app (ios/OpenAnimator/SchemeHandler.swift).
+ *   2. El "puente nativo" (host/webhost.ts) y, encima, el backend de Android (window.oa).
  *   3. La interfaz del teléfono (ui/PhoneApp.tsx).
  */
 import { createRoot } from 'react-dom/client'
@@ -9,6 +10,7 @@ import { setHost } from '../android/host'
 import { installBackend } from '../android/backend'
 import { installPressFeedback } from '../android/ui/press'
 import { createWebHost } from './host/webhost'
+import { isNative } from './host/native'
 import '../styles.css'
 import './phone.css'
 
@@ -41,25 +43,30 @@ async function serviceWorker() {
 }
 
 async function boot() {
-  await serviceWorker()
-  const h = await createWebHost(BASE)
+  const native = isNative()
+  if (!native) await serviceWorker()
+  const h = await createWebHost(BASE, native)
   setHost(h)
-  // El Service Worker le pide a esta página los archivos de los datos (escenas, medios): los tiene WebFS.
-  const sw = navigator.serviceWorker
-  sw.addEventListener('message', async (e: MessageEvent) => {
-    if (e.data?.type !== 'fs-read') return
-    const port = e.ports[0]
-    try { port.postMessage({ blob: h.fs.stat(e.data.path)?.dir === false ? await h.fs.fileBlob(e.data.path) : null }) } catch { port.postMessage({ blob: null }) }
-  })
-  sw.startMessages()
-  const claim = () => sw.controller?.postMessage({ type: 'fs-owner' })
-  claim()
-  sw.addEventListener('controllerchange', claim)
+  if (!native) {
+    // El Service Worker le pide a esta página los archivos de los datos (escenas, medios): los tiene WebFS.
+    const sw = navigator.serviceWorker
+    sw.addEventListener('message', async (e: MessageEvent) => {
+      if (e.data?.type !== 'fs-read') return
+      const port = e.ports[0]
+      try { port.postMessage({ blob: h.fs.stat(e.data.path)?.dir === false ? await h.fs.fileBlob(e.data.path) : null }) } catch { port.postMessage({ blob: null }) }
+    })
+    sw.startMessages()
+    const claim = () => sw.controller?.postMessage({ type: 'fs-owner' })
+    claim()
+    sw.addEventListener('controllerchange', claim)
+  }
   installBackend('iphone')
   installPressFeedback()
   // La interfaz se importa después: algunos módulos miran la plataforma al cargarse (modelos de Claude…).
   const { default: PhoneApp } = await import('./ui/PhoneApp')
   createRoot(document.getElementById('root')!).render(<PhoneApp />)
+  // Prueba de punta a punta en el simulador (la app la abre con -OATest e2e).
+  if ((window as any).__oaTest === 'e2e') void import('./test/e2e').then((m) => m.runE2E())
 }
 
 boot().catch(fatal)

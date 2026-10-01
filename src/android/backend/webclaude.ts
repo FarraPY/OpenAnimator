@@ -11,6 +11,7 @@
 import { ClaudeStreamSession, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
 import { parseTranscript, sessionInfo, sessionsSlug } from '../../../electron/claude-transcript'
 import type { WebHost } from '../../iphone/host/webhost'
+import { b64encode, nativeCall } from '../../iphone/host/native'
 import { host } from '../host'
 import { projectChanged, send } from './events'
 import { projectDir } from './projects'
@@ -31,8 +32,19 @@ const cwd = (projectId: string) => `${HOME}/proyectos/${projectId}`
 // ── Claude Code instalado ──────────────────────────────────────────────────────
 export type Manifest = { version: string; base: string; loaders: Record<string, string>; assets: string[]; preload: string[]; installedAt: number; size: number }
 
-/** El Claude Code instalado (Cache Storage "oa-claude-<versión>", ver installer.worker.ts), o null. */
+/**
+ * El Claude Code instalado, o null: en la app nativa, en el disco del iPhone (Application Support/claude-code/<versión>);
+ * en Safari, en Cache Storage ("oa-claude-<versión>"). Ver installer.worker.ts.
+ */
 export async function manifest(): Promise<Manifest | null> {
+  if (web().native) {
+    const versions = await nativeCall<string[]>('cc.list').catch(() => [] as string[])
+    for (const v of versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))) {
+      const r = await fetch(`${web().base}cc/${v}/manifest.json`, { cache: 'no-store' }).catch(() => null)
+      if (r?.ok) return r.json()
+    }
+    return null
+  }
   for (const k of await caches.keys()) {
     if (!k.startsWith('oa-claude-')) continue
     const r = await caches.match(`${web().base}cc/${k.slice(10)}/manifest.json`)
@@ -53,13 +65,24 @@ export function install(version?: string): Promise<Manifest> {
   if (!installing) {
     installing = new Promise<Manifest>((resolve, reject) => {
       const w = new Worker(`${web().base}claude/installer.js`, { type: 'module' })
-      w.onmessage = ({ data: m }) => {
+      w.onmessage = async ({ data: m }) => {
         if (m.type === 'progress') { send('claude:installProgress', m); return }
+        if (m.type === 'files') {
+          // App nativa: el Worker manda los archivos por tandas y la página los guarda en el disco del iPhone.
+          try {
+            await nativeCall('cc.write', { version: m.version, files: (m.files as Array<[string, ArrayBuffer]>).map(([p, b]) => [p, b64encode(new Uint8Array(b))]) })
+            w.postMessage({ type: 'ack' })
+          } catch (e: any) { w.postMessage({ type: 'ack', error: String(e?.message || e) }) }
+          return
+        }
         w.terminate()
-        if (m.type === 'done') resolve(m.manifest); else reject(new Error(m.message))
+        if (m.type === 'done') {
+          if (web().native) await nativeCall('cc.delete', { keep: m.manifest.version }).catch(() => {})
+          resolve(m.manifest)
+        } else reject(new Error(m.message))
       }
       w.onerror = (e) => { w.terminate(); reject(new Error(e.message || 'El instalador de Claude Code se cerró')) }
-      w.postMessage({ type: 'install', appBase: web().base, version, tarball: dev().tarball })
+      w.postMessage({ type: 'install', appBase: web().base, version, tarball: dev().tarball, native: web().native })
     }).finally(() => { installing = null; assets = null })
   }
   return installing
@@ -96,8 +119,9 @@ let assets: Promise<Array<[string, Uint8Array]>> | null = null
 function bunAssets(m: Manifest) {
   if (!assets) {
     assets = Promise.all(m.assets.filter((n) => m.loaders[n] !== 'napi').map(async (n): Promise<[string, Uint8Array]> => {
-      const r = await caches.match(`${m.base}$bunfs/root/${n}`)
-      if (!r) throw new Error('Claude Code quedó incompleto: volvé a instalarlo en Ajustes › Claude.')
+      // Por URL: en la app la sirve SchemeHandler (del disco); en Safari, el Service Worker (de Cache Storage).
+      const r = await fetch(`${m.base}$bunfs/root/${n}`).catch(() => null)
+      if (!r?.ok) throw new Error('Claude Code quedó incompleto: volvé a instalarlo en Ajustes › Claude.')
       return [`/$bunfs/root/${n}`, new Uint8Array(await r.arrayBuffer())]
     }))
     assets.catch(() => { assets = null })

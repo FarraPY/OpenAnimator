@@ -5,11 +5,12 @@
  * volumen y sus fundidos; se decodifica de a tramos de 8 s por delante del cursor (Mediabunny lee el archivo por
  * partes): una música larga o el audio de un video pesado nunca se cargan enteros.
  */
-import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from 'mediabunny'
+import { ALL_FORMATS, AudioSampleSink, Input } from 'mediabunny'
 import type { Timeline } from '../../api'
 import { host } from '../../android/host'
 import { audioParts, type Part } from '../../android/backend/exporter'
 import type { WebHost } from '../host/webhost'
+import { mediaSource } from '../host/audio'
 
 const CHUNK = 8 // segundos por tramo
 const AHEAD = 3 // el tramo siguiente se prepara con esta anticipación
@@ -20,7 +21,7 @@ function open(file: string): Promise<Source> {
   let s = sources.get(file)
   if (!s) {
     s = (async () => {
-      const input = new Input({ source: new BlobSource(await (host() as WebHost).fs.fileBlob(file)), formats: ALL_FORMATS })
+      const input = new Input({ source: await mediaSource((host() as WebHost).fs, file), formats: ALL_FORMATS })
       const track = await input.getPrimaryAudioTrack()
       if (!track || !(await track.canDecode())) return null
       return { sink: new AudioSampleSink(track), sr: track.sampleRate, ch: track.numberOfChannels }

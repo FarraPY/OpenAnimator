@@ -55,6 +55,24 @@ await t('video', () => new Promise((res, rej) => {
   v.src = 'clip.mp4'
   document.body.appendChild(v)
 }), 15000)
+const playable = (src) => new Promise((res, rej) => {
+  const v = document.createElement('video')
+  v.muted = true; v.playsInline = true; v.preload = 'auto'
+  v.onloadeddata = () => res({ duration: v.duration, w: v.videoWidth, h: v.videoHeight, ready: v.readyState })
+  v.onerror = () => rej(new Error('video error ' + (v.error && v.error.code) + ' ' + (v.error && v.error.message)))
+  v.src = src
+  document.body.appendChild(v)
+})
+await t('video_blob', async () => playable(URL.createObjectURL(await (await fetch('clip.mp4')).blob())), 15000)
+await t('video_canplay_mp4', async () => document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028, mp4a.40.2"'))
+await t('audio', () => new Promise((res, rej) => {
+  const a = document.createElement('audio')
+  a.preload = 'auto'
+  a.onloadedmetadata = () => res({ duration: a.duration })
+  a.onerror = () => rej(new Error('audio error ' + (a.error && a.error.code)))
+  a.src = 'clip.mp4'
+}), 15000)
+await t('video_again_loadeddata', () => playable('clip.mp4?2'), 15000)
 await t('iframe_other_origin', () => new Promise((res) => {
   const f = document.createElement('iframe')
   window.addEventListener('message', (e) => res({ data: e.data, from: e.origin }), { once: true })

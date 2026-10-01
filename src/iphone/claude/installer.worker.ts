@@ -5,14 +5,17 @@
  * ("oa-claude-<versión>", servidos por el Service Worker en <app>cc/<versión>/). OpenAnimator no redistribuye nada de
  * Anthropic: es la copia que el usuario baja de npm.
  *
- * Mensajes: install {appBase, version?, tarball?} → progress {phase, done, total} | done {manifest} | error {message}
+ * En la app nativa (native: true) los archivos no van a Cache Storage sino al disco del iPhone: el Worker los manda por
+ * tandas a la página (files {version, files: [ruta, ArrayBuffer][]}), que los guarda con el puente y contesta ack.
+ *
+ * Mensajes: install {appBase, version?, tarball?, native?} → progress {phase, done, total} | files | done {manifest} | error {message}
  */
 import { readBunGraph } from './bunfs'
 import { ready, transformModule, wrapperSource, nodeModuleFile, isCode, type TransformCtx } from './transform'
 import nodeNames from './node-names.json'
 
 const PKG = '@anthropic-ai/claude-code-linux-arm64'
-const post = (m: any) => (self as any).postMessage(m)
+const post = (m: any, transfer: Transferable[] = []) => (self as any).postMessage(m, transfer)
 let lastProgress = 0
 function progress(phase: string, done: number, total: number) {
   const now = Date.now()
@@ -82,7 +85,9 @@ async function untar(stream: ReadableStream<Uint8Array>, want: string[]): Promis
   return found
 }
 
-async function install(o: { appBase: string; version?: string; tarball?: string }) {
+let ack: ((error?: string) => void) | null = null
+
+async function install(o: { appBase: string; version?: string; tarball?: string; native?: boolean }) {
   let version = o.version || '', tarball = o.tarball || ''
   progress('buscando', 0, 1)
   if (!tarball) {
@@ -108,8 +113,25 @@ async function install(o: { appBase: string; version?: string; tarball?: string 
   await ready
   const base = `${o.appBase}cc/${version}/`
   const cacheName = `oa-claude-${version}`
-  await caches.delete(cacheName)
-  const cache = await caches.open(cacheName)
+  // Dónde se guarda cada archivo: Cache Storage (Safari) o, por tandas de ~4 MB, el disco del iPhone (app nativa).
+  let cache: Cache | null = null
+  let batch: Array<[string, ArrayBuffer]> = [], batchBytes = 0
+  const flushBatch = async () => {
+    if (!batch.length) return
+    const files = batch
+    batch = []; batchBytes = 0
+    const done = new Promise<void>((resolve, reject) => { ack = (error) => (error ? reject(new Error(error)) : resolve()) })
+    post({ type: 'files', version, files }, files.map((f) => f[1])) // transferidos: sin otra copia
+    await done
+  }
+  const save = async (rel: string, body: Uint8Array | string, type: string) => {
+    if (!o.native) { await cache!.put(`${base}${rel}`, new Response(body as BodyInit, { headers: { 'Content-Type': type } })); return }
+    const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
+    batch.push([rel, bytes.slice().buffer])
+    batchBytes += bytes.byteLength
+    if (batchBytes >= 4 * 1024 * 1024) await flushBatch()
+  }
+  if (!o.native) { await caches.delete(cacheName); cache = await caches.open(cacheName) }
   const ctx: TransformCtx = { base, externals: new Map(), lazy: new Set() }
   const loaders: Record<string, string> = {}, assets: string[] = []
   const dec = new TextDecoder()
@@ -117,26 +139,28 @@ async function install(o: { appBase: string; version?: string; tarball?: string 
   for (const m of modules) {
     const bytes = await read(m.off, m.len)
     loaders[m.name] = m.loader
-    let body: BodyInit = bytes as BodyInit, type = 'application/octet-stream'
+    let body: Uint8Array | string = bytes, type = 'application/octet-stream'
     if (isCode(m.name)) {
       type = 'text/javascript; charset=utf-8'
       try { body = transformModule(m.name, dec.decode(bytes), ctx) } catch { /* no es un módulo ES (una librería que va como recurso): tal cual */ }
     } else assets.push(m.name)
-    await cache.put(`${base}$bunfs/root/${m.name}`, new Response(body, { headers: { 'Content-Type': type } }))
+    await save(`$bunfs/root/${m.name}`, body, type)
     progress('adaptando', ++i, modules.length)
   }
   const names = nodeNames as Record<string, string[]>
   for (const [spec, used] of ctx.externals) {
     const b = spec.replace(/^node:/, '')
-    await cache.put(`${base}oa-node/${nodeModuleFile(spec)}`, new Response(wrapperSource(b, [...(names[b] || []), ...used]), { headers: { 'Content-Type': 'text/javascript; charset=utf-8' } }))
+    await save(`oa-node/${nodeModuleFile(spec)}`, wrapperSource(b, [...(names[b] || []), ...used]), 'text/javascript; charset=utf-8')
   }
   const manifest = { version, entry, base, loaders, assets, preload: [...ctx.lazy].filter((n) => /\.m?js$/.test(n)), installedAt: Date.now(), size: exe.size }
-  await cache.put(`${base}manifest.json`, new Response(JSON.stringify(manifest), { headers: { 'Content-Type': 'application/json' } }))
-  for (const k of await caches.keys()) if (k.startsWith('oa-claude-') && k !== cacheName) await caches.delete(k)
+  await save('manifest.json', JSON.stringify(manifest), 'application/json') // al final: sin él, la versión no cuenta como instalada
+  await flushBatch()
+  if (!o.native) for (const k of await caches.keys()) if (k.startsWith('oa-claude-') && k !== cacheName) await caches.delete(k)
   return manifest
 }
 
 self.addEventListener('message', async ({ data: m }: MessageEvent) => {
+  if (m?.type === 'ack') { const a = ack; ack = null; a?.(m.error); return }
   if (m?.type !== 'install') return
   try { post({ type: 'done', manifest: await install(m) }) } catch (e: any) { post({ type: 'error', message: String(e?.message || e) }) }
 })

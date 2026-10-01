@@ -60,3 +60,6 @@ targets:
         NSCameraUsageDescription: Para sacar una foto o grabar un video y usarlo en un proyecto.
         NSMicrophoneUsageDescription: Para grabar audio y usarlo en un proyecto.
         ITSAppUsesNonExemptEncryption: false
+        # Conexiones locales (pruebas con una API de mentira en la Mac del simulador; escenas que miran la red local).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true

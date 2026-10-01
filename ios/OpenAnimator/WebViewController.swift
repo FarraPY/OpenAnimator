@@ -7,6 +7,12 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private let schemes = SchemeHandler()
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
+    /// Pruebas en el simulador: -OATest e2e corre src/iphone/test/e2e.ts; -OADev '{"env":…}' usa una API de mentira.
+    static func argument(_ name: String) -> String? {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
+        return args[i + 1]
+    }
     private static let background = UIColor(red: 11 / 255, green: 12 / 255, blue: 15 / 255, alpha: 1)
 
     override func loadView() {
@@ -17,6 +23,11 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsInlineMediaPlayback = true
         config.userContentController.addScriptMessageHandler(bridge, contentWorld: .page, name: "oa")
+        if let test = Self.argument("-OATest") {
+            var js = "window.__oaTest = \(Self.json(test));"
+            if let dev = Self.argument("-OADev") { js += "try { localStorage.setItem('oa.claudeDev', \(Self.json(dev))) } catch (e) {}" }
+            config.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         let web = WKWebView(frame: .zero, configuration: config)
         web.isInspectable = true
         web.navigationDelegate = self
@@ -34,9 +45,10 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     override func viewDidLoad() {
         super.viewDidLoad()
         load()
-        if Self.diagMode {
-            // Si el diagnóstico se traba, igual termina (la integración continua espera el resultado).
-            DispatchQueue.main.asyncAfter(deadline: .now() + 170) { print("OA-DIAG-TIMEOUT"); fflush(stdout); exit(2) }
+        if Self.diagMode || Self.argument("-OATest") != nil {
+            // Si la prueba se traba, igual termina (la integración continua espera el resultado).
+            let limit: Double = Self.diagMode ? 170 : 900
+            DispatchQueue.main.asyncAfter(deadline: .now() + limit) { print("OA-DIAG-TIMEOUT"); fflush(stdout); exit(2) }
         }
     }
 

@@ -3,8 +3,14 @@
  * Mediabunny lee el archivo por partes desde OPFS (un video 4K de varios GB no se carga entero) y decodifica sólo el
  * tramo pedido con WebCodecs. Si el formato no se puede leer así, se usa decodeAudioData (sólo archivos chicos).
  */
-import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from 'mediabunny'
+import { ALL_FORMATS, AudioSampleSink, BlobSource, Input, UrlSource } from 'mediabunny'
 import type { WebFS } from './webfs'
+
+/** De dónde lee Mediabunny: en la app nativa, la URL del archivo (por tramos, con Range); en Safari, el archivo de OPFS. */
+export async function mediaSource(fs: WebFS, path: string) {
+  const url = fs.urlOf(path)
+  return url ? new UrlSource(url) : new BlobSource(await fs.fileBlob(path))
+}
 
 const BIG = 150 * 1024 * 1024 // decodeAudioData necesita el archivo entero en memoria
 
@@ -12,9 +18,8 @@ type Pcm = { sampleRate: number; channels: Float32Array[]; frames: number }
 
 /** PCM (float, un arreglo por canal) de [from, to) segundos del audio de un archivo. */
 async function decodeRange(fs: WebFS, path: string, from: number, to: number): Promise<Pcm | null> {
-  const blob = await fs.fileBlob(path)
   try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS })
+    const input = new Input({ source: await mediaSource(fs, path), formats: ALL_FORMATS })
     const track = await input.getPrimaryAudioTrack()
     if (!track) return null // un video sin sonido
     if (!(await track.canDecode())) throw new Error('sin decodificador')
@@ -36,9 +41,9 @@ async function decodeRange(fs: WebFS, path: string, from: number, to: number): P
     }
     return { sampleRate: sr, channels: out, frames: want }
   } catch {
-    if (blob.size > BIG) throw new Error('No se pudo leer el audio de este archivo (formato no compatible con el iPhone)')
+    if ((fs.stat(path)?.size || 0) > BIG) throw new Error('No se pudo leer el audio de este archivo (formato no compatible con el iPhone)')
     const ctx = new OfflineAudioContext(1, 1, 48000)
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer())
+    const buf = await ctx.decodeAudioData(await (await fs.fileBlob(path)).arrayBuffer())
     const a = Math.max(0, Math.floor(from * buf.sampleRate)), b = Math.min(buf.length, Math.ceil(to * buf.sampleRate))
     return { sampleRate: buf.sampleRate, channels: Array.from({ length: buf.numberOfChannels }, (_, c) => buf.getChannelData(c).slice(a, b)), frames: Math.max(0, b - a) }
   }
@@ -46,12 +51,11 @@ async function decodeRange(fs: WebFS, path: string, from: number, to: number): P
 
 /** audio.peaks: la envolvente para el timeline (perSec valores por segundo, 0–255, raíz como en la PC). */
 export async function peaks(fs: WebFS, path: string, perSec: number) {
-  const blob = await fs.fileBlob(path)
   const out: number[] = []
   let max = 0, n = 0, win = 0
   const push = (v: number) => { if (v > max) max = v; if (++n >= win) { out.push(Math.min(255, Math.round(Math.sqrt(Math.min(1, max)) * 255))); n = 0; max = 0 } }
   try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS })
+    const input = new Input({ source: await mediaSource(fs, path), formats: ALL_FORMATS })
     const track = await input.getPrimaryAudioTrack()
     if (!track) throw new Error('El archivo no tiene audio')
     win = Math.max(1, Math.floor(track.sampleRate / perSec))
@@ -64,9 +68,9 @@ export async function peaks(fs: WebFS, path: string, perSec: number) {
       } finally { s.close() }
     }
   } catch (e) {
-    if (blob.size > BIG) throw e
+    if ((fs.stat(path)?.size || 0) > BIG) throw e
     // Formatos que WebCodecs no lee: a 8 kHz alcanza para la envolvente (y ocupa poco).
-    const buf = await new OfflineAudioContext(1, 1, 8000).decodeAudioData(await blob.arrayBuffer())
+    const buf = await new OfflineAudioContext(1, 1, 8000).decodeAudioData(await (await fs.fileBlob(path)).arrayBuffer())
     win = Math.max(1, Math.floor(buf.sampleRate / perSec)); out.length = 0; n = 0; max = 0
     const d = buf.getChannelData(0)
     for (let i = 0; i < d.length; i++) push(Math.abs(d[i]))

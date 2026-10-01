@@ -1,54 +1,76 @@
 /**
  * El "puente nativo" del iPhone: los mismos métodos que Java le da al backend en Android (android/app/java/…/Bridge.java),
- * hechos con APIs de Safari. Así src/android/backend (proyectos, timelines, plantillas, fotogramas, exportación,
+ * hechos con APIs de WebKit. Así src/android/backend (proyectos, timelines, plantillas, fotogramas, exportación,
  * herramientas de Claude) corre igual en el teléfono, sin PC.
  *
- *   archivos → WebFS (OPFS)          video → WebCodecs + Mediabunny (encoder.ts)     audio → Mediabunny + Web Audio (audio.ts)
- *   zip → fflate                     compartir/guardar → hoja de Compartir           claves → cifradas con WebCrypto (secrets.ts)
+ *   archivos → WebFS                 video → WebCodecs + Mediabunny (encoder.ts)     audio → Mediabunny + Web Audio (audio.ts)
+ *   zip → fflate                     claves → cifradas con WebCrypto (secrets.ts)
+ *
+ * Dos formas: dentro de la app nativa (ios/, `native`), los archivos van al disco del iPhone y lo que sólo hace iOS
+ * (elegir fotos y archivos, compartir, guardar en Fotos, la pantalla encendida) lo hace la app (native.ts); como app
+ * web en Safari, OPFS y las APIs del navegador.
  *
  * La captura por GPU de Android (cap.*, snap.*) no existe en un navegador: el backend pasa solo al método compatible
  * (el compositor redibuja cada fotograma).
  */
 import type { Host, DeviceInfo, AsyncOpts } from '../../android/host'
 import { WebFS } from './webfs'
+import { nativeCall } from './native'
 import { Secrets } from './secrets'
 import * as Enc from './encoder'
 import * as Aud from './audio'
 import * as Zip from './zip'
 
-export type WebHost = Host & { fs: WebFS; base: string; secrets: Secrets; stageFiles: (files: File[]) => Promise<Array<{ path: string; name: string; size: number; mime: string }>> }
+export type WebHost = Host & { fs: WebFS; base: string; secrets: Secrets; native: boolean; stageFiles: (files: File[]) => Promise<Array<{ path: string; name: string; size: number; mime: string }>> }
 
 const asOpts = (o?: AsyncOpts | ((e: any) => void)): AsyncOpts => (typeof o === 'function' ? { onEvent: o } : o || {})
 const encPath = (p: string) => p.split('/').map(encodeURIComponent).join('/')
 const rid = () => Math.random().toString(36).slice(2, 10)
 
-function deviceInfo(): DeviceInfo {
+/** Lo que informa la app nativa (Bridge.swift, op "info"). */
+type NativeInfo = { model: string; name: string; system: string; app: string; build: string; memory: number; free: number; total: number; scale: number }
+
+function deviceInfo(n: NativeInfo | null): DeviceInfo {
   const ua = navigator.userAgent
   const ios = /OS (\d+)[_.](\d+)/.exec(ua)
   const safari = /Version\/([\d.]+)/.exec(ua)?.[1] || ''
+  const release = n?.system || (ios ? `${ios[1]}.${ios[2]}` : '')
   return {
-    platform: 'android', sdk: 0, release: ios ? `${ios[1]}.${ios[2]}` : '', manufacturer: 'Apple', brand: 'Apple', model: /iPad/.test(ua) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : 'Navegador', device: '', soc: '',
-    versionName: (globalThis as any).__OA_VERSION__ || '0.1.0', versionCode: 1, abi: 'arm64', webview: safari ? `Safari ${safari}` : ua,
-    density: devicePixelRatio || 1, screenWidth: screen.width, screenHeight: screen.height, memory: ((navigator as any).deviceMemory || 8) * 1024 ** 3, dataDir: 'OPFS',
+    platform: 'android', sdk: 0, release, manufacturer: 'Apple', brand: 'Apple', model: n?.name || (/iPad/.test(ua) ? 'iPad' : /iPhone/.test(ua) ? 'iPhone' : 'Navegador'), device: n?.model || '', soc: '',
+    versionName: n?.app || (globalThis as any).__OA_VERSION__ || '0.1.0', versionCode: +(n?.build || 1), abi: 'arm64', webview: n ? `WebKit · iOS ${release}` : safari ? `Safari ${safari}` : ua,
+    density: devicePixelRatio || 1, screenWidth: screen.width, screenHeight: screen.height, memory: n?.memory || ((navigator as any).deviceMemory || 8) * 1024 ** 3, dataDir: n ? 'Documentos' : 'OPFS',
   }
 }
 
-export async function createWebHost(base: string): Promise<WebHost> {
+/** Orígenes de la app nativa: la interfaz y los proyectos (otro origen: una escena no puede tocar la app). */
+const APP_ORIGIN = 'oa://localhost', PROJECT_ORIGIN = 'oaproj://localhost'
+
+export async function createWebHost(base: string, native = false): Promise<WebHost> {
   const fs = new WebFS()
-  await fs.open()
+  await fs.open(native ? { native: APP_ORIGIN } : {})
   const secrets = new Secrets(fs)
   await secrets.load()
   const caps = await Enc.codecCaps()
   const listeners = new Map<string, Set<(d: any) => void>>()
   const emit = (name: string, data?: any) => listeners.get(name)?.forEach((cb) => { try { cb(data) } catch (e) { console.error(e) } })
-  document.addEventListener('visibilitychange', () => emit(document.hidden ? 'pause' : 'resume'))
+  let info: NativeInfo | null = null
   let estimate = { free: 0, total: 0 }
-  const refreshEstimate = () => navigator.storage?.estimate?.().then((e) => { estimate = { free: Math.max(0, (e.quota || 0) - (e.usage || 0)), total: e.quota || 0 } }).catch(() => {})
-  refreshEstimate()
-  // Que Safari no borre los datos por falta de espacio (en la app de la pantalla de inicio ya es así).
-  navigator.storage?.persist?.().catch(() => {})
+  let refreshEstimate: () => void
+  if (native) {
+    // Eventos de la app (pause, resume, memory): los manda WebViewController.emit.
+    ;(window as any).__oaNativeEvent = (name: string, data: unknown) => emit(name, data)
+    refreshEstimate = () => { nativeCall<NativeInfo>('info').then((i) => { info = i; estimate = { free: i.free, total: i.total } }).catch(() => {}) }
+    info = await nativeCall<NativeInfo>('info').catch(() => null)
+    if (info) estimate = { free: info.free, total: info.total }
+  } else {
+    document.addEventListener('visibilitychange', () => emit(document.hidden ? 'pause' : 'resume'))
+    refreshEstimate = () => { navigator.storage?.estimate?.().then((e) => { estimate = { free: Math.max(0, (e.quota || 0) - (e.usage || 0)), total: e.quota || 0 } }).catch(() => {}) }
+    refreshEstimate()
+    // Que Safari no borre los datos por falta de espacio (en la app de la pantalla de inicio ya es así).
+    navigator.storage?.persist?.().catch(() => {})
+  }
   let wake: any = null
-  const origin = location.origin + base.replace(/\/$/, '')
+  const origin = native ? APP_ORIGIN : location.origin + base.replace(/\/$/, '')
 
   /** Archivos elegidos por el usuario → .incoming/<id>/ (como Java), sin pasar por memoria. */
   async function stageFiles(files: File[]) {
@@ -75,8 +97,16 @@ export async function createWebHost(base: string): Promise<WebHost> {
       input.click()
     })
   }
+  /** Elegir archivos: en la app, los selectores de iOS (Fotos o Archivos) los copian directo a .incoming. */
+  async function pick(accept: string[], multiple: boolean) {
+    if (!native) return stageFiles(await pickFiles(accept, multiple))
+    const files = await nativeCall<Array<{ path: string; name: string; size: number; mime: string }>>('pick', { accept, multiple })
+    for (const f of files) fs.noteFile(f.path, f.size)
+    return files
+  }
   /** Hoja de Compartir de iOS con el archivo (Guardar video / Guardar en Archivos / AirDrop…). */
   async function share(path: string, name?: string, mime?: string, title?: string) {
+    if (native) { await fs.flush(); await nativeCall('share', { path }); return true }
     const blob = await fs.fileBlob(path)
     const file = new File([blob], name || path.split('/').pop()!, { type: mime || blob.type || guessMime(path) })
     if (navigator.canShare?.({ files: [file] })) {
@@ -91,18 +121,19 @@ export async function createWebHost(base: string): Promise<WebHost> {
   }
 
   const sync: Record<string, (a: any) => any> = {
-    'app.info': () => deviceInfo(),
+    'app.info': () => deviceInfo(info),
     'app.toast': (a) => { window.dispatchEvent(new CustomEvent('oa-toast', { detail: String(a.text || '') })); return true },
     'app.immersive': () => true, 'app.debug': () => true, 'app.openSettings': () => true, 'app.takePendingOpen': () => null, 'app.exits': () => [],
-    'app.openUrl': (a) => { window.open(String(a.url), '_blank', 'noopener'); return true },
+    'app.openUrl': (a) => { if (native) void nativeCall('openUrl', { url: String(a.url) }); else window.open(String(a.url), '_blank', 'noopener'); return true },
     'app.keepScreenOn': (a) => {
+      if (native) { void nativeCall('awake', { on: !!a.on }); return true }
       // Pantalla encendida mientras se exporta o Claude trabaja (si se apaga, iOS pausa la página).
       if (a.on && !wake) (navigator as any).wakeLock?.request('screen').then((w: any) => { wake = w }).catch(() => {})
       if (!a.on && wake) { wake.release?.(); wake = null }
       return true
     },
     'codec.caps': () => caps,
-    'clipboard.text': (a) => { navigator.clipboard?.writeText(String(a.text || '')).catch(() => {}); return true },
+    'clipboard.text': (a) => { if (native) void nativeCall('clipboard.text', { text: String(a.text || '') }); else navigator.clipboard?.writeText(String(a.text || '')).catch(() => {}); return true },
     'secrets.masked': (a) => secrets.masked(a.name), 'secrets.set': (a) => { secrets.set(a.name, a.value || ''); return true }, 'secrets.list': (a) => Object.fromEntries(((a.names as string[]) || secrets.names()).map((n) => [n, secrets.masked(n)])),
     'storage.info': () => { refreshEstimate(); return { internal: estimate, newProjects: 'internal', missing: 0, cardLabel: '' } },
     'storage.setNew': () => true, 'storage.cancel': () => true,
@@ -115,10 +146,17 @@ export async function createWebHost(base: string): Promise<WebHost> {
   }
   const async: Record<string, (a: any, emitEvent: (e: any) => void, o: AsyncOpts) => Promise<any>> = {
     'fs.delete': async (a) => fs.delete(a.path), 'fs.copy': async (a) => { fs.copy(a.from, a.to); await fs.flush(); return true }, 'fs.du': async (a) => fs.du(a.path),
-    'pick.files': async (a) => stageFiles(await pickFiles(a.accept || [], a.multiple !== false)),
+    'pick.files': async (a) => pick(a.accept || [], a.multiple !== false),
     'file.share': async (a) => share(a.path, a.name, a.mime, a.title), 'file.save': async (a) => ({ saved: await share(a.path, a.name, a.mime) }),
-    'gallery.save': async (a) => { await share(a.path, a.name, a.mime || 'video/mp4'); return { folder: 'Fotos' } },
-    'file.open': async (a) => { const b = await fs.fileBlob(a.path); window.open(URL.createObjectURL(new Blob([b], { type: guessMime(a.path) })), '_blank'); return true },
+    // En la app va directo a Fotos (pide permiso la primera vez); en Safari, la hoja de Compartir (Guardar video).
+    'gallery.save': async (a) => {
+      if (native) { await fs.flush(); return nativeCall('photos.save', { path: a.path }) }
+      await share(a.path, a.name, a.mime || 'video/mp4'); return { folder: 'Fotos' }
+    },
+    'file.open': async (a) => {
+      if (native) { await fs.flush(); return nativeCall('open', { path: a.path }) }
+      const b = await fs.fileBlob(a.path); window.open(URL.createObjectURL(new Blob([b], { type: guessMime(a.path) })), '_blank'); return true
+    },
     'clipboard.image': async (a) => { const b = await fs.fileBlob(a.path); await navigator.clipboard.write([new ClipboardItem({ [b.type || 'image/png']: b })]); return true },
     'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal),
     'zip.import': async (a, ev) => Zip.unzipTo(fs, a.zip, a.dest, ev), 'zip.export': async (a, ev) => Zip.zipDir(fs, a.dir, a.out, a.prefix, a.skip, ev),
@@ -127,7 +165,7 @@ export async function createWebHost(base: string): Promise<WebHost> {
   }
   const unavailable = (m: string) => new Error(`${m} no está disponible en el iPhone`)
   const host: WebHost = {
-    kind: 'web', appOrigin: origin, projectOrigin: origin, info: deviceInfo(), fs, base, secrets, stageFiles,
+    kind: 'web', appOrigin: origin, projectOrigin: native ? PROJECT_ORIGIN : origin, info: deviceInfo(info), fs, base, secrets, stageFiles, native,
     call(method, args = {}) {
       const fn = sync[method]
       if (!fn) throw unavailable(method)
