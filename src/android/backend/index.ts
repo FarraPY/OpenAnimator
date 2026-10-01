@@ -13,6 +13,13 @@ import * as F from './frames'
 import * as PL from './plugins'
 import { basename, dirname, fs, join, normalizeRel, uniqueName } from './fsx'
 import { copy, on as onEvent, projectChanged, send, touched } from './events'
+import { holdAwake, holdWhileEditing } from './wake'
+
+/** Trabajo largo con la pantalla encendida (si se apaga, Android pausa la página y el trabajo se frena). */
+async function awake<T>(work: () => Promise<T>): Promise<T> {
+  const release = holdAwake()
+  try { return await work() } finally { release() }
+}
 
 type Handler = (...args: any[]) => any
 const handlers: Record<string, Handler> = {}
@@ -119,13 +126,13 @@ h('projects:importZip', async (path?: string) => {
     if (!picked.length) return null
     zip = picked[0].path
   }
-  const p = await P.importZip(zip, (x) => send('projects:progress', { kind: 'import', p: x }))
+  const p = await awake(() => P.importZip(zip!, (x) => send('projects:progress', { kind: 'import', p: x })))
   if (zip.startsWith('.incoming/')) fs.deleteAsync(dirname(zip)).catch(() => {})
   send('projects:changed', null)
   return p
 })
 h('projects:exportZip', async (id: string, o: { includeRenders?: boolean; action?: 'share' | 'save' } = {}) => {
-  const r = await P.exportZip(id, o, (x) => send('projects:progress', { kind: 'export', id, p: x }))
+  const r = await awake(() => P.exportZip(id, o, (x) => send('projects:progress', { kind: 'export', id, p: x })))
   if (o.action === 'save') return { ...r, ...(await host().callAsync('file.save', { path: r.path, name: r.name, mime: 'application/zip' })) }
   await host().callAsync('file.share', { path: r.path, name: r.name, mime: 'application/zip', title: 'Compartir proyecto' })
   return r
@@ -175,6 +182,7 @@ h('storage:move', async (ids: string[], to: 'internal' | 'sd') => {
   if (moving) throw new Error('Ya se están moviendo proyectos: esperá a que termine.')
   const cur = { cancel: false }
   moving = cur
+  const release = holdAwake()
   let moved = 0, todo: ProjectSummary[] = []
   try {
     if ((await import('./exporter')).exporting()) throw new Error('Hay una exportación en curso: esperá a que termine para mover proyectos.')
@@ -203,6 +211,7 @@ h('storage:move', async (ids: string[], to: 'internal' | 'sd') => {
     throw new Error(moved ? `${e?.message || e} (ya se habían movido ${moved} de ${todo.length})` : String(e?.message || e))
   } finally {
     moving = null
+    release()
     send('projects:changed', null)
     send('storage:changed', null)
   }
@@ -216,7 +225,9 @@ h('storage:cancel', () => {
 h('app:toast', (text: string) => { try { host().call('app.toast', { text: String(text) }) } catch { /* sin puente */ } })
 
 // ── proyecto abierto ──────────────────────────────────────────────────────────
-h('project:open', (id) => { const p = P.readProject(id); openProjects.set(id, (openProjects.get(id) || 0) + 1); return p })
+/** La pantalla encendida de cada proyecto abierto en el editor (ver holdWhileEditing). */
+const editorAwake: Array<() => void> = []
+h('project:open', (id) => { const p = P.readProject(id); openProjects.set(id, (openProjects.get(id) || 0) + 1); editorAwake.push(holdWhileEditing()); return p })
 /**
  * ¿La miniatura quedó vieja? Si nada cambió desde que se hizo (abrir y cerrar sin tocar), no se rehace: hacerla
  * dibuja el proyecto en el compositor y en la tablet frena ~0,5 s la pantalla de inicio justo al volver.
@@ -230,6 +241,7 @@ function thumbStale(id: string) {
   return newest > th.mtime
 }
 h('project:close', async (id) => {
+  editorAwake.pop()?.()
   const n = (openProjects.get(id) || 1) - 1
   if (n > 0) openProjects.set(id, n)
   else openProjects.delete(id)

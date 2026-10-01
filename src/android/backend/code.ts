@@ -10,6 +10,7 @@ import { buildSystem } from './prompt'
 import { getSettings } from './settings'
 import * as T from './termux'
 import { TOOL_DEFS, toolKind } from './tools'
+import { holdAwake } from './wake'
 
 const MCP = 'mcp__openanimator__'
 // Lo que sólo lee o renderiza no pide permiso (como en la PC).
@@ -82,6 +83,14 @@ class TermuxChat extends ClaudeStreamSession {
   protected terminate() {
     if (this.proc) T.killProc(this.proc)
     this.reset()
+  }
+
+  /** Pantalla encendida mientras Claude trabaja: si se apaga, Android pausa la página y el turno se frena. */
+  private awake: (() => void) | null = null
+  protected state() {
+    super.state()
+    if (this.busy && !this.awake) this.awake = holdAwake()
+    else if (!this.busy && this.awake) { this.awake(); this.awake = null }
   }
 
   /** "Aceptar ediciones": como en la PC, escribir archivos del proyecto no pide permiso. */

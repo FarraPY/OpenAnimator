@@ -149,7 +149,7 @@ export function TabletSection() {
       <Row label="Tamaño de la interfaz" desc="Más grande para usar con el dedo; más chico para ver más timeline.">
         <Segmented value={a.uiScale} onChange={(v) => up({ android: { uiScale: v } })} options={[{ value: 0.9, label: '90 %' }, { value: 1, label: '100 %' }, { value: 1.1, label: '110 %' }, { value: 1.25, label: '125 %' }]} />
       </Row>
-      <Row label="Mantener la pantalla encendida" desc="Mientras Claude trabaja o se exporta un video (si la pantalla se apaga, el trabajo se pausa)."><Switch checked={a.keepAwake} onChange={(v) => up({ android: { keepAwake: v } })} /></Row>
+      <Row label="Mantener la pantalla encendida" desc="Con un proyecto abierto (hasta 10 min sin tocarla) y siempre mientras Claude trabaja, se exporta un video o se mueven proyectos (si la pantalla se apaga, el trabajo se pausa)."><Switch checked={a.keepAwake} onChange={(v) => up({ android: { keepAwake: v } })} /></Row>
     </Group>
     <Group title="Avanzado" icon="terminal">
       <Row label="Depuración remota" desc="Permite inspeccionar la app desde Chrome en una PC (chrome://inspect). Dejalo apagado si no lo necesitás."><Switch checked={a.debug} onChange={(v) => up({ android: { debug: v } })} /></Row>
