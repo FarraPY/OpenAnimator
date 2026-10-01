@@ -35,6 +35,7 @@ type Props = {
 // ── miniaturas de las escenas ─────────────────────────────────────────────────
 // Un fotograma del video en cada escena (frames:png, el compositor oculto), de a uno y en segundo plano; quedan
 // guardadas mientras no cambien el clip ni los archivos del proyecto.
+const THUMBS = false
 const thumbs = new Map<string, string>()
 const thumbKey = (projectId: string, tlId: string, c: Clip) => `${projectId}|${tlId}|${c.id}|${c.src}|${c.start}|${c.in || 0}|${c.duration}`
 function useSceneThumbs(projectId: string, tlId: string, clips: Clip[], busy: boolean) {
@@ -44,7 +45,9 @@ function useSceneThumbs(projectId: string, tlId: string, clips: Clip[], busy: bo
     for (const k of [...thumbs.keys()]) if (k.startsWith(projectId + '|')) thumbs.delete(k)
     bump((x) => x + 1)
   }), [projectId])
-  const want = clips.filter((c) => !thumbs.has(thumbKey(projectId, tlId, c)))
+  // ponytail: apagadas (THUMBS): cargaban todo el proyecto otra vez en el compositor oculto y, con escenas pesadas,
+  // iOS cerraba la app por memoria. Volver cuando haya una forma liviana (p. ej. una captura del video de la vista previa).
+  const want = THUMBS ? clips.filter((c) => !thumbs.has(thumbKey(projectId, tlId, c))) : []
   useEffect(() => {
     if (busy || !want.length) return
     let stop = false

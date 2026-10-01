@@ -88,10 +88,10 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         }
     }
 
-    private func load(recovered: Bool = false) {
+    private func load(recovered: Bool = false, crashed: Bool = false) {
         chrome.clear()
         menus.layout([])
-        let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : "")
+        let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : crashed ? "?crashed=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }
 
@@ -156,9 +156,28 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     // MARK: navegación
 
     /// Si iOS cierra el proceso web (falta de memoria), la página vuelve a abrir el proyecto (como en Android).
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        AppLog.write("app", "ERROR", "iOS cerró el motor web (casi siempre por falta de memoria): se vuelve a abrir la página")
-        load(recovered: true)
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { processTerminated(nil) }
+
+    /// Lo mismo, con el motivo (método privado de WebKit: si está, WebKit llama a éste en vez del de arriba).
+    @objc(_webView:webContentProcessDidTerminateWithReason:)
+    func webContentProcessDidTerminate(_ webView: WKWebView, reason: Int) {
+        let why = [0: "se pasó del límite de memoria", 1: "se pasó del límite de procesador", 2: "lo pidió la app", 3: "se colgó"][reason]
+        processTerminated(why ?? "motivo " + String(reason))
+    }
+
+    /// iOS cerró el motor web: se vuelve a abrir la página y el proyecto. Si se cierra otra vez enseguida (un proyecto
+    /// que no entra en memoria lo volvía a cerrar al reabrirse, sin fin), se vuelve al inicio sin reabrirlo.
+    private var crashes: [Date] = []
+    private func processTerminated(_ why: String?) {
+        let now = Date()
+        if let last = crashes.last, now.timeIntervalSince(last) < 0.5 { return } // los dos avisos de WebKit
+        crashes = crashes.filter { now.timeIntervalSince($0) < 45 } + [now]
+        let loop = crashes.count >= 2
+        let detail = why.map { " (" + $0 + ")" } ?? " (casi siempre por falta de memoria)"
+        AppLog.write("app", "ERROR", "iOS cerró el motor web" + detail + ": "
+            + (loop ? "otra vez enseguida, se vuelve al inicio sin reabrir el proyecto" : "se vuelve a abrir la página"))
+        if loop { crashes.removeAll() }
+        load(recovered: !loop, crashed: loop)
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

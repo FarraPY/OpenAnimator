@@ -57,6 +57,14 @@ export default function PhoneApp() {
     try { const id = recoveredBoot && localStorage.getItem('oa.openProject'); return id ? { page: 'editor', id } : { page: 'home' } } catch { return { page: 'home' } }
   })
   const [toasts, setToasts] = useState<ToastT[]>([])
+  // El motor web se cerró dos veces seguidas con un proyecto abierto (no le alcanzó la memoria): la app volvió al
+  // inicio (WebViewController) y no lo reabre solo.
+  useEffect(() => {
+    if (!/[?&]crashed=1\b/.test(location.search)) return
+    try { localStorage.removeItem('oa.openProject') } catch { /* sin almacenamiento */ }
+    toast('El proyecto hizo cerrar la app dos veces seguidas (al iPhone no le alcanzó la memoria para sus escenas), así que volví al inicio.', true)
+    history.replaceState(null, '', location.pathname)
+  }, [])
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
   const seq = useRef(0)
