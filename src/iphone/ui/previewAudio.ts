@@ -76,8 +76,13 @@ export class PreviewAudio {
     try {
       // Que suene aunque el iPhone esté en silencio (la app además pone la categoría «playback»: AppDelegate).
       const nav = navigator as any
-      if (nav.audioSession) nav.audioSession.type = 'playback'
-      if (!this.ctx) this.ctx = new AudioContext()
+      if (nav.audioSession && nav.audioSession.type !== 'playback') nav.audioSession.type = 'playback'
+      if (!this.ctx || this.ctx.state === 'closed') {
+        this.ctx = new AudioContext()
+        this.master = null
+        const ctx = this.ctx
+        ctx.onstatechange = () => { if (ctx.state !== 'running' && ctx.state !== 'closed') console.warn(`Audio de la vista previa: ${ctx.state}`) }
+      }
       if (this.ctx.state !== 'running') void this.ctx.resume()
     } catch (e) { console.warn('Sin audio en la vista previa:', e) } // sin Web Audio: se ve igual, sin sonido
   }
@@ -87,6 +92,7 @@ export class PreviewAudio {
     this.stop()
     const ctx = this.ctx
     if (!ctx) return
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {}) // iOS lo pausa con una interrupción
     const gen = ++this.gen
     const parts = audioParts(projectId, tl, t, tl.duration)
     if (!parts.length) return

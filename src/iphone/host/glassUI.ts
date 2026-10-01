@@ -103,6 +103,7 @@ export function installNativeGlass() {
       const key = el.dataset.menu!, m = menus.get(key)
       if (!m) continue
       const r = el.getBoundingClientRect()
+      if (getComputedStyle(el).visibility === 'hidden') continue
       // Recortado a lo que se ve de su lista (los botones de las tarjetas del inicio).
       const box = el.closest('.ph-scroll')?.getBoundingClientRect()
       const top = Math.max(r.top, box?.top ?? 0), bottom = Math.min(r.bottom, box?.bottom ?? innerHeight)

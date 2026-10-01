@@ -15,6 +15,7 @@ import { Icon } from '../../ui/icons'
 import { Spinner } from '../../ui/kit'
 import { useBack } from '../../android/ui/back'
 import { syncGlassNow } from '../host/glassUI'
+import { isNative, nativeCall } from '../host/native'
 import { MenuButton, Tap, TopBar } from './PhoneApp'
 import PhoneTimeline from './PhoneTimeline'
 import PhoneMedia from './PhoneMedia'
@@ -215,6 +216,22 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     return () => cancelAnimationFrame(raf)
   }, [playing, tl?.duration, rate])
   const changeRate = (r: number) => { setRate(r); if (playing && tl) audio.current!.play(projectId, tl, tRef.current, r) }
+  const toggleMute = () => { audio.current?.setMuted(!muted); setMuted(!muted) }
+  // Pantalla completa: el video de borde a borde con los controles encima, que se esconden solos mientras se reproduce
+  // (un toque los muestra o los esconde); iOS saca la barra de estado y gira si el video es horizontal.
+  const [chrome, setChrome] = useState(true)
+  const [kick, setKick] = useState(0)
+  useEffect(() => {
+    if (!full || !playing || !chrome) return
+    const timer = window.setTimeout(() => setChrome(false), 3000)
+    return () => clearTimeout(timer)
+  }, [full, playing, chrome, kick])
+  useEffect(() => { if (!playing || !full) setChrome(true) }, [playing, full])
+  useEffect(() => {
+    if (!isNative() || !project) return
+    void nativeCall('screen.full', { on: full, landscape: full && project.width > project.height }).catch(() => {})
+  }, [full])
+  useEffect(() => () => { if (isNative()) void nativeCall('screen.full', { on: false }).catch(() => {}) }, [])
   useEffect(() => { if (!playing) audio.current?.stop() }, [playing])
   /** Se llama desde el toque (Safari sólo deja sonar el audio así). */
   const togglePlay = () => {
@@ -431,38 +448,35 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       </div>
     )
   }
+  const projectItems = [
+    { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
+    { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
+    { sep: true as const },
+    { label: 'Timelines', icon: 'film', desc: project.timelines.find((x) => x.id === tlId)?.name, sub: [
+      ...project.timelines.map((x) => ({ label: x.name, checked: x.id === tlId, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
+      { sep: true as const },
+      { label: 'Nuevo timeline…', icon: 'plus', onSelect: newTl },
+    ] },
+    { sep: true as const },
+    { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
+  ]
   return (
-    <div ref={edRef} className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}>
-      <div className="ph-top ed-top">
-        <button className="g-btn" data-glass aria-label={full ? 'Salir de pantalla completa' : 'Proyectos'} data-back onClick={full ? () => setFull(false) : onClose}><Icon name="chevron-left" size={22} /></button>
-        <MenuButton className="ed-name" glass align={full ? 'end' : 'start'} label="Proyecto" title={project.name} items={[
-          { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
-          { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
-          { sep: true },
-          { label: 'Timelines', icon: 'film', desc: project.timelines.find((x) => x.id === tlId)?.name, sub: [
-            ...project.timelines.map((x) => ({ label: x.name, checked: x.id === tlId, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
-            { sep: true as const },
-            { label: 'Nuevo timeline…', icon: 'plus', onSelect: newTl },
-          ] },
-          { sep: true },
-          { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
-        ]}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
-        {full ? <MenuButton className="g-btn" glass label="Reproducción" title="Reproducción" items={[
-          { label: 'Velocidad', icon: 'gauge', desc: `${rate}×`.replace('.', ','), sub: [0.5, 1, 1.5, 2].map((r) => ({ label: `${r}×`.replace('.', ','), checked: rate === r, onSelect: () => changeRate(r) })) },
-          { label: 'Repetir', icon: 'repeat', checked: loop, onSelect: () => setLoop(!loop) },
-        ]}><Icon name="more" size={20} /></MenuButton> : <>
-          <div className="grow" />
-          <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
-          <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
-          <button className="ed-export" data-glass="accent" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
-        </>}
-      </div>
+    <div ref={edRef} className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}
+      onClick={full ? (e) => { if (!(e.target as HTMLElement).closest('.fs-top, .fs-panel')) setChrome((c) => !c) } : undefined}>
+      {!full && <div className="ph-top ed-top">
+        <button className="g-btn" data-glass aria-label="Proyectos" data-back onClick={onClose}><Icon name="chevron-left" size={22} /></button>
+        <MenuButton className="ed-name" glass align="start" label="Proyecto" title={project.name} items={projectItems}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
+        <div className="grow" />
+        <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
+        <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
+        <button className="ed-export" data-glass="accent" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
+      </div>}
 
       <div className="ed-media">
         <div className="ed-player" style={{ ['--ar' as any]: ar }}>
           <div className="ed-stage">
             {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={hold ?? t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={0} bg="black" onError={(m) => toast(m, true)} />}
-            <button className="ed-tapzone" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
+            <button className="ed-tapzone" aria-label={full ? 'Mostrar u ocultar los controles' : playing ? 'Pausa' : 'Reproducir'} onClick={full ? undefined : togglePlay} />
           </div>
         </div>
 
@@ -473,21 +487,34 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
             <button className="ed-play" data-glass="light" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={22} /></button>
             <button className="ed-tpb" aria-label="Ir al final" disabled={t >= tl.duration} onClick={() => seek(tl.duration)}><Icon name="skip-fwd" size={20} /></button>
           </div>
-          <button className="ed-tpb ed-fs" aria-label="Pantalla completa" onClick={() => setFull(true)}><Icon name="maximize" size={19} /></button>
+          <div className="ed-tright">
+            <button className={`ed-tpb ${muted ? 'muted' : ''}`} aria-label={muted ? 'Activar el sonido' : 'Silenciar'} onClick={toggleMute}><Icon name={muted ? 'volume-x' : 'volume-2'} size={19} /></button>
+            <button className="ed-tpb" aria-label="Pantalla completa" onClick={() => setFull(true)}><Icon name="maximize" size={19} /></button>
+          </div>
         </div>}
       </div>
 
-      {full && <div className="fs-panel" data-glass>
-        <div className="fs-line">
-          <span className="fs-time tabnum"><b>{clock(t, false)}</b> / {clock(tl.duration, false)}</span>
-          <input className="fs-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} style={{ ['--pct' as any]: `${(t / (tl.duration || 1)) * 100}%` }} />
+      {full && <div className={`fs ${chrome ? '' : 'hide'}`} onPointerDown={() => setKick((k) => k + 1)}>
+        <div className="fs-top">
+          <button className="fs-btn" aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="chevron-left" size={22} /></button>
+          <MenuButton className="fs-title" align="end" label="Proyecto" title={project.name} items={projectItems}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
+          <MenuButton className="fs-btn" label="Reproducción" title="Reproducción" items={[
+            { label: 'Velocidad', icon: 'gauge', desc: `${rate}×`.replace('.', ','), sub: [0.5, 1, 1.5, 2].map((r) => ({ label: `${r}×`.replace('.', ','), checked: rate === r, onSelect: () => changeRate(r) })) },
+            { label: 'Repetir', icon: 'repeat', checked: loop, onSelect: () => setLoop(!loop) },
+          ]}><Icon name="more" size={20} /></MenuButton>
         </div>
-        <div className="fs-ctrls">
-          <button className="ed-tpb" aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="minimize" size={20} /></button>
-          <button className="ed-tpb" aria-label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)}><Icon name="skip-back" size={22} /></button>
-          <button className="fs-play" data-glass="accent" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={26} /></button>
-          <button className="ed-tpb" aria-label="Ir al final" disabled={t >= tl.duration} onClick={() => seek(tl.duration)}><Icon name="skip-fwd" size={22} /></button>
-          <button className="ed-tpb" aria-label={muted ? 'Activar el sonido' : 'Silenciar'} onClick={() => { audio.current?.setMuted(!muted); setMuted(!muted) }}><Icon name={muted ? 'volume-x' : 'volume-2'} size={21} /></button>
+        <div className="fs-panel">
+          <div className="fs-line">
+            <span className="fs-time tabnum"><b>{clock(t, false)}</b> / {clock(tl.duration, false)}</span>
+            <input className="fs-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} style={{ ['--pct' as any]: `${(t / (tl.duration || 1)) * 100}%` }} />
+          </div>
+          <div className="fs-ctrls">
+            <button className="ed-tpb" aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="minimize" size={20} /></button>
+            <button className="ed-tpb" aria-label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)}><Icon name="skip-back" size={22} /></button>
+            <button className="fs-play" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={26} /></button>
+            <button className="ed-tpb" aria-label="Ir al final" disabled={t >= tl.duration} onClick={() => seek(tl.duration)}><Icon name="skip-fwd" size={22} /></button>
+            <button className={`ed-tpb ${muted ? 'muted' : ''}`} aria-label={muted ? 'Activar el sonido' : 'Silenciar'} onClick={toggleMute}><Icon name={muted ? 'volume-x' : 'volume-2'} size={21} /></button>
+          </div>
         </div>
       </div>}
 

@@ -97,6 +97,24 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
 
+    // La app va siempre en vertical; sólo la pantalla completa del video gira (y, si el video es horizontal, se pone
+    // horizontal sola, como en las apps de video), sin la barra de estado ni la del inicio.
+    private var fullScreen = false
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { fullScreen ? .allButUpsideDown : .portrait }
+    override var prefersStatusBarHidden: Bool { fullScreen }
+    override var prefersHomeIndicatorAutoHidden: Bool { fullScreen }
+
+    func setFullScreen(_ on: Bool, landscape: Bool) {
+        fullScreen = on
+        setNeedsStatusBarAppearanceUpdate()
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        setNeedsUpdateOfSupportedInterfaceOrientations()
+        let want: UIInterfaceOrientationMask = on && landscape ? .landscape : .portrait
+        view.window?.windowScene?.requestGeometryUpdate(.iOS(interfaceOrientations: want)) { error in
+            AppLog.write("app", "WARN", "No se pudo girar la pantalla: \(error.localizedDescription)")
+        }
+    }
+
     /// Volver deslizando desde el borde izquierdo, como en las apps de iOS: la página decide qué es volver (__oaBack).
     @objc private func edgePan(_ g: UIScreenEdgePanGestureRecognizer) {
         let x = g.translation(in: view).x

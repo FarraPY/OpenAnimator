@@ -93,6 +93,9 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)
         case "glass.layout": replyHandler(controller?.chrome.layout(a["items"] as? [[String: Any]] ?? []) ?? false, nil)
+        case "screen.full":
+            controller?.setFullScreen(a["on"] as? Bool ?? false, landscape: a["landscape"] as? Bool ?? false)
+            replyHandler(true, nil)
         case "menu.layout":
             controller?.menus.layout(a["items"] as? [[String: Any]] ?? [])
             replyHandler(true, nil)
