@@ -127,7 +127,8 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   debajo de la página, una `UIGlassEffect` por cada elemento con `data-glass` ("", "accent", "light", "clear"; también
   `.ph-top .tap` y el cuadro del chat en la hoja), que mide `src/iphone/host/glassUI.ts` y manda con `glass.layout`
   (cambios, desplazamientos, transiciones). Como va debajo, lo que la página pone encima (ventanas, menús) lo tapa, pero
-  no refracta contenido de la página: no usarlo dentro de listas que se desplazan (iría un cuadro atrasado y sin recorte).
+  no refracta contenido de la página: no usarlo dentro de listas que se desplazan (iría un cuadro atrasado y sin recorte)
+  ni dentro de algo opaco de la página (una hoja o ventana con fondo: el fondo lo tapa y el botón queda transparente).
   Sin iOS 26 (o en Safari) el vidrio es CSS. Editor (diseño del usuario): botones de vidrio, video redondeado, cápsula de
   reproducción, timeline compacto (escenas como tarjetas con miniatura de `frames:png`, onda rellena) y una hoja de
   vidrio con Claude / Timeline (inspector del clip, PhoneInspector) / Medios en tres alturas (`sheet` min/mid/max).

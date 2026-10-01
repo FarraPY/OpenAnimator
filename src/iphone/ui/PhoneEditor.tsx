@@ -190,7 +190,10 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   }
 
   // ── reproducción: el reloj de la página; el sonido lo pone PreviewAudio ────
-  const rate = 1
+  const [rate, setRate] = useState(1)
+  const [loop, setLoop] = useState(false)
+  const loopRef = useRef(loop); loopRef.current = loop
+  const [muted, setMuted] = useState(false)
   useEffect(() => {
     if (!playing || !tl) return
     let raf = 0, last = performance.now()
@@ -198,13 +201,17 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       const dt = ((now - last) / 1000) * rate
       last = now
       const nt = tRef.current + dt
-      if (nt >= tl.duration) { setT(tl.duration); setPlaying(false); return }
-      setT(nt)
+      if (nt >= tl.duration) {
+        if (!loopRef.current) { setT(tl.duration); setPlaying(false); return }
+        // Repetir: vuelve al principio sin cortar.
+        tRef.current = 0; setT(0); audio.current!.play(projectId, tl, 0, rate)
+      } else setT(nt)
       raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [playing, tl?.duration])
+  }, [playing, tl?.duration, rate])
+  const changeRate = (r: number) => { setRate(r); if (playing && tl) audio.current!.play(projectId, tl, tRef.current, r) }
   useEffect(() => { if (!playing) audio.current?.stop() }, [playing])
   /** Se llama desde el toque (Safari sólo deja sonar el audio así). */
   const togglePlay = () => {
@@ -413,8 +420,8 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   return (
     <div ref={edRef} className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}>
       <div className="ph-top ed-top">
-        <button className="g-btn" data-glass aria-label="Proyectos" data-back onClick={onClose}><Icon name="chevron-left" size={22} /></button>
-        <MenuButton className="ed-name" glass align="start" label="Proyecto" title={project.name} items={[
+        <button className="g-btn" data-glass aria-label={full ? 'Salir de pantalla completa' : 'Proyectos'} data-back onClick={full ? () => setFull(false) : onClose}><Icon name="chevron-left" size={22} /></button>
+        <MenuButton className="ed-name" glass align={full ? 'end' : 'start'} label="Proyecto" title={project.name} items={[
           { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
           { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
           { sep: true },
@@ -426,10 +433,15 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
           { sep: true },
           { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
         ]}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
-        <div className="grow" />
-        <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
-        <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
-        <button className="ed-export" data-glass="accent" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
+        {full ? <MenuButton className="g-btn" glass label="Reproducción" title="Reproducción" items={[
+          { label: 'Velocidad', icon: 'gauge', desc: `${rate}×`.replace('.', ','), sub: [0.5, 1, 1.5, 2].map((r) => ({ label: `${r}×`.replace('.', ','), checked: rate === r, onSelect: () => changeRate(r) })) },
+          { label: 'Repetir', icon: 'repeat', checked: loop, onSelect: () => setLoop(!loop) },
+        ]}><Icon name="more" size={20} /></MenuButton> : <>
+          <div className="grow" />
+          <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
+          <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
+          <button className="ed-export" data-glass="accent" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
+        </>}
       </div>
 
       <div className="ed-media">
@@ -437,12 +449,6 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
           <div className="ed-stage">
             {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={hold ?? t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={0} bg="black" onError={(m) => toast(m, true)} />}
             <button className="ed-tapzone" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
-            {full && <div className="ed-fullbar">
-              <Tap icon="minimize" label="Salir de pantalla completa" onClick={() => setFull(false)} />
-              <span className="tabnum">{fmtTime(t)} / {fmtTime(tl.duration)}</span>
-              <input className="ed-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} />
-              <Tap icon={playing ? 'pause' : 'play'} label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
-            </div>}
           </div>
         </div>
 
@@ -456,6 +462,20 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
           <button className="ed-tpb ed-fs" aria-label="Pantalla completa" onClick={() => setFull(true)}><Icon name="maximize" size={19} /></button>
         </div>}
       </div>
+
+      {full && <div className="fs-panel" data-glass>
+        <div className="fs-line">
+          <span className="fs-time tabnum"><b>{clock(t, false)}</b> / {clock(tl.duration, false)}</span>
+          <input className="fs-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} style={{ ['--pct' as any]: `${(t / (tl.duration || 1)) * 100}%` }} />
+        </div>
+        <div className="fs-ctrls">
+          <button className="ed-tpb" aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="minimize" size={20} /></button>
+          <button className="ed-tpb" aria-label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)}><Icon name="skip-back" size={22} /></button>
+          <button className="fs-play" data-glass="accent" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={26} /></button>
+          <button className="ed-tpb" aria-label="Ir al final" disabled={t >= tl.duration} onClick={() => seek(tl.duration)}><Icon name="skip-fwd" size={22} /></button>
+          <button className="ed-tpb" aria-label={muted ? 'Activar el sonido' : 'Silenciar'} onClick={() => { audio.current?.setMuted(!muted); setMuted(!muted) }}><Icon name={muted ? 'volume-x' : 'volume-2'} size={21} /></button>
+        </div>
+      </div>}
 
       {!full && <>
         <div className="ed-tl">{sheet !== 'max' && timeline}</div>

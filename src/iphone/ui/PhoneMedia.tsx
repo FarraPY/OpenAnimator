@@ -66,7 +66,6 @@ export default function PhoneMedia({ projectId, assets, onRefresh, onAdd, onAsk,
       <div className="med-scroll">
         {!assets.length ? <Empty icon="folder" title="Sin medios todavía" desc="Importá videos, fotos o audio, o pedile a Claude que genere imágenes, voz o música con tus plugins." compact />
           : <>
-            <div className="med-sec">En este proyecto</div>
             <div className="med-grid">{shown.map((a) => <Tile key={a.path} projectId={projectId} a={a} on={picked.includes(a.path)} onTap={() => toggle(a)} onHold={(at) => setActing({ a, at })} />)}</div>
             {!shown.length && <div className="t3 med-none">Nada con ese nombre.</div>}
           </>}

@@ -133,7 +133,7 @@ export function Tap({ icon, label, onClick, active, disabled, accent, size = 22,
 }
 
 /** Hoja que sube desde abajo. Se cierra tocando afuera o deslizando la manija hacia abajo. */
-export function Sheet({ title, onClose, children, footer, tall, persistent }: { title?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; tall?: boolean; persistent?: boolean }) {
+export function Sheet({ title, onClose, children, footer, tall, persistent, closeX }: { title?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; tall?: boolean; persistent?: boolean; closeX?: boolean }) {
   const [dy, setDy] = useState(0)
   const drag = useRef<{ y: number; id: number } | null>(null)
   return createPortal(
@@ -146,6 +146,7 @@ export function Sheet({ title, onClose, children, footer, tall, persistent }: { 
           onPointerCancel={() => { drag.current = null; setDy(0) }}>
           <div className="sheet-grab" />
           {title && <div className="sheet-title">{title}</div>}
+          {closeX && !persistent && <button className="g-btn sheet-x" aria-label="Cerrar" onPointerDown={(e) => e.stopPropagation()} onClick={onClose}><Icon name="x" size={19} /></button>}
         </div>
         <div className="sheet-body">{children}</div>
         {footer && <div className="sheet-foot">{footer}</div>}
@@ -227,6 +228,29 @@ export function Row({ icon, label, detail, onClick, children, danger, chevron, s
   )
   const cls = `prow2 ${danger ? 'danger' : ''} ${stack ? 'stack' : ''}`
   return onClick ? <button className={cls} onClick={onClick}>{body}</button> : <div className={cls}>{body}</div>
+}
+
+/** Control segmentado (una cápsula con las opciones; la elegida, del color de la app). */
+export function Seg<T extends string | number>({ value, options, onChange }: { value: T; options: Array<{ value: T; label: ReactNode }>; onChange: (v: T) => void }) {
+  return (
+    <div className="seg2" role="radiogroup">
+      {options.map((o) => <button key={String(o.value)} role="radio" aria-checked={o.value === value} className={o.value === value ? 'on' : ''} onClick={() => onChange(o.value)}>{o.label}</button>)}
+    </div>
+  )
+}
+
+/** Tarjetas para elegir una opción, con ícono y una línea de detalle (resolución, códec). */
+export function Cards<T extends string | number>({ value, options, onChange }: { value: T; options: Array<{ value: T; label: ReactNode; sub?: ReactNode; icon?: IconName }>; onChange: (v: T) => void }) {
+  return (
+    <div className="cards2" role="radiogroup">
+      {options.map((o) => (
+        <button key={String(o.value)} role="radio" aria-checked={o.value === value} className={`card2 ${o.value === value ? 'on' : ''}`} onClick={() => onChange(o.value)}>
+          {o.icon && <Icon name={o.icon} size={24} />}
+          <span><b>{o.label}</b>{o.sub && <small>{o.sub}</small>}</span>
+        </button>
+      ))}
+    </div>
+  )
 }
 
 /** Chips para elegir una opción (formatos, calidad…). */

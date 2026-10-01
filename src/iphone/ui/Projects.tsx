@@ -132,7 +132,7 @@ export default function Projects() {
                   <div className="prow3-thumb" style={p.thumb ? { backgroundImage: `url("${p.thumb}?${p.updatedAt}")` } : undefined}>{!p.thumb && <Icon name="film" size={20} stroke={1.4} />}</div>
                   <div className="grow">
                     <div className="pcard2-name ellipsis">{p.name}</div>
-                    <div className="pcard2-meta ellipsis">{ratio(p.width, p.height)} · {fmtTime(p.duration)} · {ago(p.updatedAt)}</div>
+                    <div className="pcard2-meta ellipsis">{[ratio(p.width, p.height), fmtTime(p.duration), ago(p.updatedAt)].filter(Boolean).join(' · ')}</div>
                   </div>
                   {more(p)}
                 </div>
@@ -146,7 +146,7 @@ export default function Projects() {
                   <div className="pcard2-info">
                     <div className="grow">
                       <div className="pcard2-name ellipsis">{p.name}</div>
-                      <div className="pcard2-meta ellipsis">{ratio(p.width, p.height)} · {ago(p.updatedAt)}</div>
+                      <div className="pcard2-meta ellipsis">{[ratio(p.width, p.height), ago(p.updatedAt)].filter(Boolean).join(' · ')}</div>
                     </div>
                     {more(p)}
                   </div>

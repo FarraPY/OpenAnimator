@@ -93,7 +93,7 @@ export function installNativeGlass() {
       nativeCall<boolean>('glass.layout', { items }).then((ok) => root.classList.toggle('native-glass', !!ok)).catch(() => {})
     }
     // Los menús: ninguno si algo de la página tapa la pantalla (los botones de iOS quedarían por encima).
-    const covered = !!document.querySelector('.sheet-back, .modal-backdrop, .menu, .ed.full')
+    const covered = !!document.querySelector('.sheet-back, .modal-backdrop, .menu')
     const mitems: object[] = []
     actions.clear()
     if (!covered) for (const el of document.querySelectorAll<HTMLElement>('[data-menu]')) {

@@ -63,6 +63,10 @@ function gainAt(p: Part, x: number) {
 
 export class PreviewAudio {
   private ctx: AudioContext | null = null
+  private master: GainNode | null = null
+  private muted = false
+  /** Silenciar la vista previa (sin cortar la reproducción). */
+  setMuted(m: boolean) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 1 }
   private nodes = new Set<AudioBufferSourceNode>()
   private gen = 0
   private timer = 0
@@ -107,7 +111,8 @@ export class PreviewAudio {
           const pts = [a, c.start + (c.fadeIn || 0), c.start + c.duration - (c.fadeOut || 0), b].filter((x) => x >= a && x <= b).sort((x, y) => x - y)
           g.gain.setValueAtTime(gainAt(p, a), Math.max(ctx.currentTime, when(a)))
           for (const x of pts.slice(1)) if (when(x) > ctx.currentTime) g.gain.linearRampToValueAtTime(gainAt(p, x), when(x))
-          node.connect(g).connect(ctx.destination)
+          if (!this.master) { this.master = ctx.createGain(); this.master.gain.value = this.muted ? 0 : 1; this.master.connect(ctx.destination) }
+          node.connect(g).connect(this.master)
           // Si el tramo llegó tarde (decodificar tardó), arranca por donde va.
           const late = Math.max(0, ctx.currentTime - when(a))
           if (late * rate >= buf.duration) return
@@ -131,5 +136,5 @@ export class PreviewAudio {
   /** Otro proyecto o archivos que cambiaron: se vuelven a abrir. */
   forget() { sources.clear() }
 
-  close() { this.stop(); void this.ctx?.close(); this.ctx = null }
+  close() { this.stop(); void this.ctx?.close(); this.ctx = null; this.master = null }
 }

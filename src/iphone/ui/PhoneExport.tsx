@@ -10,7 +10,7 @@ import { useDialogs } from '../../components/Dialogs'
 import { Icon } from '../../ui/icons'
 import { Button, Progress, Switch, TextInput } from '../../ui/kit'
 import { autoBitrate, type ExportQuality as Quality } from '../../android/bitrate'
-import { Chips, Group, Row, Sheet } from './PhoneApp'
+import { Cards, Group, Row, Seg, Sheet } from './PhoneApp'
 
 type Codec = 'avc' | 'hevc'
 type Prog = { id: string; phase: string; message: string; done: number; total: number; fps?: number; eta?: number; elapsed?: number; file?: string; size?: number; encoder?: string; preview?: string; details?: string }
@@ -99,23 +99,23 @@ export default function PhoneExport({ project, currentTl, onClose }: { project: 
     )
   }
 
-  const resOptions = [720, 1080, 1440, 2160].filter((x) => x <= Math.max(1080, short)).map((x) => ({ value: x, label: `${x}p`, sub: `${sizeFor(x).w}×${sizeFor(x).h}` }))
+  const resOptions = [720, 1080, 1440, 2160].filter((x) => x <= Math.max(1080, short)).map((x) => ({ value: x, label: `${x}p`, sub: `${sizeFor(x).w}×${sizeFor(x).h}`, icon: 'monitor' as const }))
   return (
-    <Sheet title="Exportar video" onClose={onClose} tall
-      footer={<Button variant="primary" size="lg" icon="export" onClick={start} disabled={!tl || dur < 1 / fps}>Exportar · ~{fmtSize(estimate)}</Button>}>
+    <Sheet title="Exportar video" onClose={onClose} tall closeX
+      footer={<button className="xp-go" data-glass="accent" onClick={start} disabled={!tl || dur < 1 / fps}><Icon name="export" size={20} />Exportar · ≈{fmtSize(estimate)}</button>}>
       <label className="ph-label">Nombre</label>
       <TextInput value={name} onChange={setName} suffix={<span className="t3">.mp4</span>} />
       <label className="ph-label">Resolución</label>
-      <Chips value={res} onChange={setRes} options={resOptions} />
+      <Cards value={res} onChange={setRes} options={resOptions} />
       <label className="ph-label">Cuadros por segundo</label>
-      <Chips value={fps} onChange={setFps} options={[...new Set([24, 30, 60, project.fps])].sort((a, b) => a - b).map((f) => ({ value: f, label: String(f) }))} />
+      <Seg value={fps} onChange={setFps} options={[...new Set([24, 30, 60, project.fps])].sort((a, b) => a - b).map((f) => ({ value: f, label: String(f) }))} />
       <label className="ph-label">Calidad</label>
-      <Chips value={quality} onChange={setQuality} options={[{ value: 'medium' as Quality, label: 'Liviana' }, { value: 'high' as Quality, label: 'Alta' }, { value: 'max' as Quality, label: 'Máxima' }]} />
+      <Seg value={quality} onChange={setQuality} options={[{ value: 'medium' as Quality, label: 'Liviana' }, { value: 'high' as Quality, label: 'Alta' }, { value: 'max' as Quality, label: 'Máxima' }]} />
       <label className="ph-label">Códec</label>
-      <Chips value={codec} onChange={setCodec} options={[{ value: 'avc' as Codec, label: 'H.264', sub: 'se ve en todos lados' }, ...(hevcOk ? [{ value: 'hevc' as Codec, label: 'HEVC', sub: 'la mitad de tamaño' }] : [])]} />
+      <Cards value={codec} onChange={setCodec} options={[{ value: 'avc' as Codec, label: 'H.264', sub: 'Mayor compatibilidad', icon: 'film' as const }, ...(hevcOk ? [{ value: 'hevc' as Codec, label: 'HEVC', sub: 'Menor tamaño', icon: 'film' as const }] : [])]} />
       <Group>
-        <Row label="Audio" detail={audio ? 'Voz, música y efectos (AAC)' : 'Sin audio'}><Switch checked={audio} onChange={setAudio} /></Row>
-        <Row label="Duración" detail={tl ? fmtTime(dur, true, project.fps) : '…'} />
+        <Row icon="music" label="Audio" detail={audio ? 'Voz, música y efectos (AAC)' : 'Sin audio'}><Switch checked={audio} onChange={setAudio} /></Row>
+        <Row icon="clock" label="Duración" detail={tl ? fmtTime(dur, true, project.fps) : '…'} />
       </Group>
     </Sheet>
   )

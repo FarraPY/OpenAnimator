@@ -93,7 +93,11 @@ export function listProjects(): ProjectSummary[] {
       for (const ref of p.timelines || []) {
         try { duration += fs.readJSON<Timeline>(join(PROJECTS, e.name, normalizeRel(ref.file))).duration || 0 } catch { /* ignore */ }
       }
-      out.push({ id: e.name, name: p.name, width: p.width, height: p.height, fps: p.fps, timelines: (p.timelines || []).length, duration, updatedAt: p.updatedAt, thumb: thumbUrl(e.name), volume: e.vol === 'sd' ? 'sd' : 'internal' })
+      // Un proyecto traído de otro lado (un .zip viejo) puede no tener la fecha del último cambio: la de creación o la
+      // del archivo, así igual se ordena y muestra «hace…».
+      const mtime = p.updatedAt || (p as any).createdAt ? 0 : fs.stat(join(PROJECTS, e.name, 'project.json'))?.mtime || 0
+      const updatedAt = p.updatedAt || (p as any).createdAt || (mtime ? new Date(mtime).toISOString() : undefined)
+      out.push({ id: e.name, name: p.name, width: p.width, height: p.height, fps: p.fps, timelines: (p.timelines || []).length, duration, updatedAt, thumb: thumbUrl(e.name), volume: e.vol === 'sd' ? 'sd' : 'internal' })
     } catch { /* proyecto roto: se ignora en la lista */ }
   }
   return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
