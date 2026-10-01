@@ -77,4 +77,22 @@ export function installAppLog(on: (ch: string, cb: (p: any) => void) => unknown)
   })
   let phase = ''
   on('claude:installProgress', (p) => { if (p?.phase && p.phase !== phase) { phase = p.phase; appLog('INFO', 'claude', `Instalando Claude Code: ${p.phase}`) } })
+
+  // Tirones de la interfaz: mientras se toca o se desplaza algo (también lo que mueve la reproducción) y 1,5 s después
+  // se miden los cuadros; si hubo tirones, una línea con cuántos, el peor y en qué pantalla.
+  let raf = 0, until = 0, last = 0, dt: number[] = []
+  const tick = (now: number) => {
+    if (last) dt.push(now - last)
+    last = now
+    if (now < until) { raf = requestAnimationFrame(tick); return }
+    raf = 0; last = 0
+    const slow = dt.filter((x) => x > 50), worst = Math.max(0, ...dt)
+    if (slow.length >= 3 || worst > 150) {
+      const where = document.querySelector('.tlp') ? 'editor (timeline)' : document.querySelector('.chat-list') ? 'chat' : 'otra pantalla'
+      appLog('WARN', 'interfaz', `Tirones: ${slow.length} cuadros de más de 50 ms en ${secs(dt.reduce((a, b) => a + b, 0))} (el peor, ${Math.round(worst)} ms) · ${where}`)
+    }
+    dt = []
+  }
+  const watch = () => { until = performance.now() + 1500; if (!raf) raf = requestAnimationFrame(tick) }
+  for (const ev of ['touchstart', 'touchmove', 'scroll']) addEventListener(ev, watch, { capture: true, passive: true })
 }

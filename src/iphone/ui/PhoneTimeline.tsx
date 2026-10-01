@@ -244,9 +244,11 @@ export default function PhoneTimeline(p: Props) {
                   <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''} ${waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) ? 'wave' : ''}`} style={{ left: half + c.start * pps, width: Math.max(4, c.duration * pps), ['--c' as any]: color(tr, c) }}
                     onPointerDown={(e) => down(e, c, tr, 'move')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { tap.current = null; up() }}>
                     {waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) && (() => {
-                      // La onda real, dibujada sólo en lo que se ve del clip.
+                      // La onda real, dibujada sólo cerca de lo que se ve del clip, en tramos de una pantalla: al
+                      // desplazar el timeline se redibuja una vez por pantalla y no en cada cuadro.
                       const x = half + c.start * pps, w = Math.max(4, c.duration * pps)
-                      const x0 = Math.max(0, left - x), x1 = Math.min(w, left + vw - x)
+                      const q = Math.max(1, vw), a = Math.floor((left - x) / q) * q
+                      const x0 = Math.max(0, a), x1 = Math.min(w, a + 2 * q)
                       return x1 > x0 && <div className="tlp-wave"><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={x0} x1={x1} height={Math.max(14, row - 31)} color={WAVE[tr.type === 'audio' ? trackRole(tr) : 'video'] || WAVE.audio} /></div>
                     })()}
                     {c.fadeIn ? <span className="tlp-fade l" style={{ width: c.fadeIn * pps }} /> : null}
