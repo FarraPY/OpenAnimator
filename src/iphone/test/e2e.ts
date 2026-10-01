@@ -88,7 +88,7 @@ export async function runE2E() {
       const off = on('export:progress', (p: any) => {
         if (id && p.id !== id) return
         if (Date.now() - shown > 3000 || p.phase !== 'render') { shown = Date.now(); log(`  exportando: ${p.phase} · ${p.message} · ${p.done}/${p.total}`) }
-        if (p.phase === 'listo') { off(); resolve({ file: p.file, size: p.size, fps: p.fps, encoder: p.encoder }) }
+        if (p.phase === 'listo') { off(); resolve({ file: p.file, size: p.size, fps: p.fps, encoder: p.encoder, details: p.details }) }
         else if (p.phase === 'error' || p.phase === 'cancelado') { off(); reject(new Error(p.message + '\n' + (p.details || ''))) }
       })
       call<string>('export:start', { projectId: project.id, timeline: project.activeTimeline || 'main', range: null, width: 540, height: 960, fps: 30, codec: 'avc', quality: 'medium', audio: false, audioBitrate: 128, name: 'e2e' })

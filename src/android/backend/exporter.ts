@@ -75,6 +75,7 @@ type Diag = {
   }
   calls?: { n: number; ms: number; max: number; gap: number; gapMax: number; first?: number }
   compat?: { n: number; ms: number }
+  encoderStalls?: number
   /** encodeMs: el codificador AAC mientras llegaba la mezcla; closeMs: al cerrarlo, antes del primer fotograma. */
   audio?: { parts: number; failed: string[]; encodeMs?: number; closeMs?: number }
 }
@@ -254,6 +255,7 @@ class Export {
     if (c?.stateStart || c?.stateEnd) lines.push(`Equipo al empezar: ${st(c.stateStart)}; al terminar: ${st(c.stateEnd)}`)
     if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}; la primera ${msf(d.calls.first)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
     if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
+    if (d.encoderStalls) lines.push(`El codificador de video se trabó ${d.encoderStalls} veces (se vació y siguió)`)
     if (d.audio) {
       const aac = d.audio.encodeMs != null ? ` · codificar a AAC ${secs(d.audio.encodeMs)} (dentro de la mezcla) + ${msf(d.audio.closeMs)} al cerrar` : ''
       lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${aac}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
@@ -430,8 +432,9 @@ class Export {
     const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => LABEL[m]).join(' + ')}`
 
     this.emit({ phase: 'final', message: 'Escribiendo el archivo…', done: 1, total: 1 })
-    const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number; audioCloseMs?: number }>('enc.finish')
+    const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number; audioCloseMs?: number; stalls?: number }>('enc.finish')
     if (d.audio && res?.audioCloseMs != null) d.audio.closeMs = res.audioCloseMs
+    if (res?.stalls) d.encoderStalls = res.stalls // iPhone: veces que el codificador se trabó y se vació
     this.renderer?.destroy()
     this.renderer = null
 

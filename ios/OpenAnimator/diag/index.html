@@ -97,6 +97,37 @@ await t('webcodecs_audio', () => new Promise((res, rej) => {
   enc.encode(data); data.close()
   enc.flush().then(() => res({ bytes })).catch(rej)
 }), 20000)
+// Codificar de corrido (como la exportación): cuántos toma el codificador antes de devolver algo, si avisa con
+// `dequeue` y si se traba con la cola llena (Mediabunny espera `dequeue` con 4 en cola).
+const stream = (latencyMode) => () => new Promise((res, rej) => {
+  const W = 540, H = 960, N = 40
+  const s = { dequeueEvent: 'ondequeue' in VideoEncoder.prototype, outputs: 0, firstOutputAfter: -1, dequeues: 0, maxQueue: 0, waits: 0, stuck: 0 }
+  let sent = 0
+  const enc = new VideoEncoder({ output: () => { s.outputs++; if (s.firstOutputAfter < 0) s.firstOutputAfter = sent }, error: rej })
+  enc.addEventListener('dequeue', () => s.dequeues++)
+  enc.configure({ codec: 'avc1.640028', width: W, height: H, bitrate: 3e6, framerate: 30, latencyMode })
+  const cv = new OffscreenCanvas(W, H), g = cv.getContext('2d')
+  ;(async () => {
+    for (let i = 0; i < N; i++) {
+      g.fillStyle = `hsl(${i * 9} 70% 50%)`; g.fillRect(0, 0, W, H)
+      const f = new VideoFrame(cv, { timestamp: Math.round(i * 1e6 / 30), duration: Math.round(1e6 / 30) })
+      enc.encode(f, { keyFrame: i === 0 }); f.close(); sent++
+      s.maxQueue = Math.max(s.maxQueue, enc.encodeQueueSize)
+      if (enc.encodeQueueSize >= 4) {
+        s.waits++
+        const ok = await Promise.race([new Promise((r) => enc.addEventListener('dequeue', () => r(true), { once: true })), new Promise((r) => setTimeout(() => r(false), 500))])
+        if (!ok) { s.stuck++; s.stuckAt = s.stuckAt || `fotograma ${i + 1}, cola ${enc.encodeQueueSize}, salidas ${s.outputs}` }
+      }
+    }
+    s.outputsBeforeFlush = s.outputs
+    s.flush = await Promise.race([enc.flush().then(() => 'ok'), new Promise((r) => setTimeout(() => r('timeout'), 10000))])
+    s.queueEnd = enc.encodeQueueSize
+    enc.close()
+    res(s)
+  })().catch(rej)
+})
+await t('webcodecs_stream_quality', stream('quality'), 60000)
+await t('webcodecs_stream_realtime', stream('realtime'), 60000)
 await t('audio_context', async () => { const c = new AudioContext(); const s = c.state; await c.close(); return s })
 await t('net_anthropic', async () => {
   const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': 'sk-ant-invalida', 'anthropic-dangerous-direct-browser-access': 'true' }, body: '{}' })

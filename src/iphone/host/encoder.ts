@@ -3,9 +3,42 @@
  * del iPhone) + Mediabunny para armar el MP4. El archivo se escribe en OPFS a medida que se codifica (nunca entero en
  * memoria). El audio se mezcla en ventanas de 30 s (audio.ts) mientras se capturan los fotogramas.
  */
-import { AudioSample, AudioSampleSource, Mp4OutputFormat, Output, StreamTarget, VideoSample, VideoSampleSource, canEncodeAudio, canEncodeVideo } from 'mediabunny'
+import { AudioSample, AudioSampleSource, CustomVideoEncoder, EncodedPacket, Mp4OutputFormat, Output, StreamTarget, VideoSample, VideoSampleSource, canEncodeAudio, canEncodeVideo, registerEncoder } from 'mediabunny'
 import type { WebFS } from './webfs'
 import { mixWindow } from './audio'
+
+/** Veces que el codificador se trabó y hubo que vaciarlo (para el informe de la exportación). */
+let stalls = 0
+/**
+ * El codificador de video de WebCodecs con su propia espera. Mediabunny, con 4 fotogramas en cola, espera el evento
+ * `dequeue`; en el WebKit de iOS (simulador de iOS 26) el codificador tomaba 4 y se quedaba con los siguientes sin
+ * devolver nada, y la exportación se trababa para siempre en el fotograma 8. Acá la cola se mira cada 5 ms y, si no
+ * avanza en 300 ms, se vacía con flush() (sigue codificando después); si ni así responde, la exportación falla con
+ * un error en vez de quedarse esperando.
+ */
+class PatientVideoEncoder extends CustomVideoEncoder {
+  static supports(codec: string) { return (codec === 'avc' || codec === 'hevc') && typeof VideoEncoder !== 'undefined' }
+  private enc!: VideoEncoder
+  init() {
+    this.enc = new VideoEncoder({ output: (chunk, meta) => this.onPacket(EncodedPacket.fromEncodedChunk(chunk), meta), error: (e) => this.onError(e) })
+    this.enc.configure(this.config)
+  }
+  async encode(sample: VideoSample, options: VideoEncoderEncodeOptions) {
+    const f = sample.toVideoFrame()
+    try { this.enc.encode(f, options) } finally { f.close() }
+    let last = this.enc.encodeQueueSize, since = performance.now()
+    while (this.enc.encodeQueueSize >= 4) {
+      await new Promise((r) => setTimeout(r, 5))
+      if (this.enc.encodeQueueSize < last) { last = this.enc.encodeQueueSize; since = performance.now() }
+      else if (performance.now() - since > 300) { stalls++; await this.flush(); since = performance.now() }
+    }
+  }
+  flush() {
+    return Promise.race([this.enc.flush(), new Promise<never>((_, rej) => setTimeout(() => rej(new Error('El codificador de video del iPhone dejó de responder.')), 15000))])
+  }
+  close() { if (this.enc.state !== 'closed') this.enc.close() }
+}
+registerEncoder(PatientVideoEncoder)
 
 type Job = {
   out: string; width: number; height: number; fps: number
@@ -24,6 +57,7 @@ export async function codecCaps() {
 export function start(fs: WebFS, a: { out: string; width: number; height: number; fps: number; bitrate: number; keyframeSec?: number; codec: 'avc' | 'hevc'; audio?: { sampleRate: number; channels: number; bitrate: number } }) {
   if (job && !job.cancelled) throw new Error('Ya hay una exportación en curso')
   const j: Job = { out: a.out, width: a.width, height: a.height, fps: a.fps, frames: 0, written: 0, cancelled: false, ready: Promise.resolve(), fs }
+  stalls = 0
   j.ready = (async () => {
     const { writable, done } = await fs.openWritable(a.out)
     j.done = done
@@ -94,7 +128,7 @@ export async function finish(_fs: WebFS) {
   await j.output!.finalize()
   j.done?.(j.written)
   job = null
-  return { path: j.out, size: j.written, frames: j.frames, duration: j.frames / j.fps }
+  return { path: j.out, size: j.written, frames: j.frames, duration: j.frames / j.fps, stalls }
 }
 
 export function cancel() {
