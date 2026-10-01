@@ -39,8 +39,8 @@ final class NativeChrome {
         CATransaction.commit()
     }
 
-    /// [{id, x, y, w, h, r, tint?: "rgb(…)"|"rgba(…)", clear?}] en puntos de la pantalla, en el orden de la página (lo
-    /// de adentro después: queda arriba). Lo que no viene se saca. Devuelve si hay Liquid Glass.
+    /// [{id, x, y, w, h, r, alpha?, tint?: "rgb(…)"|"rgba(…)", clear?}] en puntos de la pantalla, en el orden de la
+    /// página (lo de adentro después: queda arriba). Lo que no viene se saca. Devuelve si hay Liquid Glass.
     func layout(_ items: [[String: Any]]) -> Bool {
         guard #available(iOS 26.0, *) else { return false }
         let num = { (d: [String: Any], k: String) -> CGFloat in CGFloat((d[k] as? NSNumber)?.doubleValue ?? 0) }
@@ -67,6 +67,7 @@ final class NativeChrome {
                 }
                 g.view.frame = CGRect(x: num(it, "x"), y: num(it, "y"), width: num(it, "w"), height: num(it, "h"))
                 g.view.layer.cornerRadius = min(num(it, "r"), min(g.view.bounds.width, g.view.bounds.height) / 2)
+                g.view.alpha = (it["alpha"] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 1
                 pieces.insertSubview(g.view, at: i) // el orden de la página: lo de adentro, arriba
                 glass[id] = g
             }

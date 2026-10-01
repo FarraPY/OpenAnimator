@@ -80,8 +80,11 @@ export function installNativeGlass() {
       if (!id) { id = 'g' + ++seq; ids.set(el, id) }
       const rad = cs.borderTopLeftRadius
       const kind = el.dataset.glass
+      let alpha = 1
+      for (let n: HTMLElement | null = el; n && n !== document.body && alpha > 0.01; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity) || 0
+      if (alpha < 0.02) continue
       items.push({
-        id, x: r.left, y: r.top, w: r.width, h: r.height,
+        id, x: r.left, y: r.top, w: r.width, h: r.height, alpha: Math.round(alpha * 100) / 100,
         r: rad.endsWith('%') ? (Math.min(r.width, r.height) * parseFloat(rad)) / 100 : parseFloat(rad) || 0,
         tint: kind === 'accent' ? rgb('var(--accent)', 0.8) : kind === 'light' ? 'rgba(255, 255, 255, 0.82)' : '',
         clear: kind === 'clear',

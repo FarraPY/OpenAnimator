@@ -27,8 +27,10 @@ const TRACK_NAME: Record<TrackType, string> = { scene: 'Escenas', video: 'Video'
 /** Los clips que se ven en x (escenas y videos): si cambian, la vista previa tiene que cargar algo. */
 const visualAt = (d: TL, x: number) => d.tracks.map((tr) => tr.type === 'audio' ? '' : tr.clips.find((c) => x >= c.start && x < c.start + c.duration)?.id || '').join()
 type Tab = 'claude' | 'timeline' | 'media'
-/** La hoja de abajo: sólo las pestañas, a media altura o casi toda la pantalla (el timeline de arriba se esconde). */
-type Sheet = 'min' | 'mid' | 'max'
+/** La hoja de abajo: sólo las pestañas, a media altura, alta (con el video chico) o hasta arriba (debajo de la barra:
+ *  el video y la reproducción se apagan). Alta y arriba esconden el timeline de arriba. */
+type Sheet = 'min' | 'mid' | 'max' | 'top'
+const SHEETS: Sheet[] = ['min', 'mid', 'max', 'top']
 const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')
 /** Las áreas seguras (la isla dinámica arriba, el indicador de inicio abajo), medidas una vez. */
 let safe: { top: number; bottom: number } | null = null
@@ -43,11 +45,11 @@ function insets() {
   }
   return safe
 }
-/** Las tres alturas de la hoja: sólo las pestañas, media altura y casi toda la pantalla (lo que deja el video chico). */
+/** Las alturas de la hoja: sólo las pestañas, media altura, alta (lo que deja el video chico) y hasta arriba. */
 function detents(): Record<Sheet, number> {
   const vh = window.visualViewport?.height || window.innerHeight, s = insets()
-  const max = vh - s.top - 54 - (vh * 0.17 + 12) - 62 - 4
-  return { min: 84 + s.bottom, mid: Math.max(250, Math.round(vh * 0.31)), max: Math.max(320, Math.round(max)) }
+  const max = Math.max(320, Math.round(vh - s.top - 54 - (vh * 0.17 + 12) - 62 - 4))
+  return { min: 84 + s.bottom, mid: Math.max(250, Math.round(vh * 0.31)), max, top: Math.max(max + 60, Math.round(vh - s.top - 54 - 6)) }
 }
 
 export default function PhoneEditor({ projectId, onClose }: { projectId: string; onClose: () => void }) {
@@ -265,8 +267,10 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     const el = edRef.current
     if (!el) return
     const d = detents(), k = (a: number, b: number) => Math.max(0, Math.min(1, (h - a) / (b - a)))
+    const tr = 1 - k(d.max, d.top) // de alta a arriba: el video y la reproducción se achican y se apagan
     el.style.setProperty('--sheet-h', `${Math.round(h)}px`)
-    el.style.setProperty('--pv', (0.3 - 0.09 * k(d.min, d.mid) - 0.04 * k(d.mid, d.max)).toFixed(4))
+    el.style.setProperty('--pv', ((0.3 - 0.09 * k(d.min, d.mid) - 0.04 * k(d.mid, d.max)) * tr).toFixed(4))
+    el.style.setProperty('--tr', tr.toFixed(3))
     el.style.setProperty('--tl-o', (1 - k(d.max - 150, d.max - 20)).toFixed(3))
     syncGlassNow()
   }
@@ -307,7 +311,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     // Más allá de los extremos se estira con resistencia, como en iOS.
     const d = detents(), rubber = (x: number) => 46 * (1 - 1 / (x / 140 + 1))
     let h = g.h0 - dy
-    if (h > d.max) h = d.max + rubber(h - d.max)
+    if (h > d.top) h = d.top + rubber(h - d.top)
     else if (h < d.min) h = d.min - rubber(d.min - h)
     g.ys.push([performance.now(), e.clientY])
     if (g.ys.length > 5) g.ys.shift()
@@ -318,8 +322,8 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     drag.current = null
     if (!g) return
     if (!g.on) {
-      // Un toque en la manija: media altura ↔ casi toda la pantalla (minimizada: a media altura).
-      if ((e.target as HTMLElement).closest('.ed-grab')) moveSheet(sheetRef.current === 'mid' ? 'max' : 'mid')
+      // Un toque en la manija: de abajo, hasta arriba; de arriba (o alta), a media altura.
+      if ((e.target as HTMLElement).closest('.ed-grab')) moveSheet(sheetRef.current === 'min' || sheetRef.current === 'mid' ? 'top' : 'mid')
       return
     }
     justDragged.current = true
@@ -327,7 +331,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     const [t0, y0] = g.ys[0], [t1, y1] = g.ys[g.ys.length - 1]
     const v = t1 > t0 ? -(y1 - y0) / ((t1 - t0) / 1000) : 0 // px/s, hacia arriba
     const d = detents(), proj = drawer.current.h + v * 0.2
-    moveSheet((['min', 'mid', 'max'] as Sheet[]).reduce((a, b) => (Math.abs(d[b] - proj) < Math.abs(d[a] - proj) ? b : a)), v)
+    moveSheet(SHEETS.reduce((a, b) => (Math.abs(d[b] - proj) < Math.abs(d[a] - proj) ? b : a)), v)
   }
   // Al abrir el proyecto, al volver de pantalla completa y si cambia el tamaño (el teclado): la altura de su lugar.
   useLayoutEffect(() => { if (!drawer.current.moving && !drag.current) applyDrawer(detents()[sheetRef.current]) }, [!!tl, !!project, full])
@@ -478,7 +482,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       </div>}
 
       {!full && <>
-        <div className="ed-tl">{sheet !== 'max' && timeline}</div>
+        <div className="ed-tl">{sheet !== 'max' && sheet !== 'top' && timeline}</div>
 
         {/* La hoja de abajo (vidrio) con sus pestañas: Claude, Timeline (los ajustes del clip) y Medios. Se arrastra
             desde la manija o las pestañas. */}
@@ -502,9 +506,9 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
                   return { timeline: tlId, t: tRef.current, scene: c ? `«${clipName(c)}» (${c.src}, de ${fmtTime(c.start, true, fps)} a ${fmtTime(c.start + c.duration, true, fps)})` : undefined }
                 }} />
             </div>
-            {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAssets} onAsk={askClaude} full={sheet === 'max'} />}
+            {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAssets} onAsk={askClaude} full={sheet === 'max' || sheet === 'top'} />}
             {tab === 'timeline' && <div className="ed-montage">
-              {sheet === 'max' && <div className="ed-montage-tl">{timeline}</div>}
+              {(sheet === 'max' || sheet === 'top') && <div className="ed-montage-tl">{timeline}</div>}
               <PhoneInspector projectId={projectId} tlId={tlId} tl={tl} sel={sel} t={t} fps={fps} onSelect={setSel} onPatch={patchClip}
                 onSplit={() => splitAt(tRef.current)} onDuplicate={dupSel} onDelete={delSel} />
             </div>}
