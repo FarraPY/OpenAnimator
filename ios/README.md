@@ -16,6 +16,8 @@ ios/
     SchemeHandler.swift       sirve oa://localhost (interfaz, fs/, cc/) y oaproj://localhost (proyectos, otro origen)
     Bridge.swift              lo nativo que pide la interfaz: archivos en disco, Claude Code instalado, Fotos y Archivos
                               (elegir), Compartir, guardar en Fotos, vista previa, pantalla encendida
+    NativeEncoder.swift       exportación con AVFoundation (venc.*) si el WebCodecs de WebKit no anda en el equipo
+    Keychain.swift            claves de los servicios en el Llavero de iOS
     Storage.swift             dónde vive cada cosa (app, Documentos, Application Support/claude-code)
     diag/                     diagnóstico del WebKit de iOS (-OADiag)
   test/mock-anthropic.mjs     API de mentira para la prueba de punta a punta en el simulador

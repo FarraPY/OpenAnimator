@@ -108,6 +108,15 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
   WebCrypto), los Workers de módulos cargan desde el esquema, `fetch` con `Range` y `PUT` con Uint8Array (un Blob llega
   sin cuerpo).
+- Trampas del WebKit de iOS 26: no entiende `using`/`await using` (Claude Code los usa) → `lowerUsing` (transform.ts, al
+  instalar; envuelve TODO el bloque para no cambiar el alcance; prueba: `scripts/check-lower-using.mjs`) con
+  `$oaUse`/`$oaDispose` de claude/node/inject.js. El User-Agent de WKWebView quedó en «iPhone OS 18_7» (la versión real
+  la da `info` del puente). El VideoEncoder de WebKit en el simulador de CI toma 2–4 fotogramas y no devuelve nada (a
+  veces ni con flush): Mediabunny esperaba `dequeue` para siempre (la exportación se trababa en el fotograma 8).
+  `PatientVideoEncoder` (encoder.ts) mira la cola, la vacía con flush() y, si igual no responde, falla; entonces la
+  exportación se repite con AVFoundation (`NativeEncoder.swift`: JPEG + PCM por el puente, video y audio aparte y
+  juntados sin recodificar) y las siguientes van directo por ahí (`enc.fallback`). En el simulador de CI
+  `<video>`/`<audio>` dan error 4 aun desde blob:.
 
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente

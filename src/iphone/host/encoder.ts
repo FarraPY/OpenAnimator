@@ -2,13 +2,22 @@
  * Codificador de la exportación (enc.* del puente, como Encoder.java en Android): WebCodecs (codificador de hardware
  * del iPhone) + Mediabunny para armar el MP4. El archivo se escribe en OPFS a medida que se codifica (nunca entero en
  * memoria). El audio se mezcla en ventanas de 30 s (audio.ts) mientras se capturan los fotogramas.
+ * En la app, si WebCodecs falla, la exportación se repite con AVFoundation (ios/OpenAnimator/NativeEncoder.swift:
+ * fotogramas en JPEG, audio en PCM) y las siguientes van directo por ahí.
  */
 import { AudioSample, AudioSampleSource, CustomVideoEncoder, EncodedPacket, Mp4OutputFormat, Output, StreamTarget, VideoSample, VideoSampleSource, canEncodeAudio, canEncodeVideo, registerEncoder } from 'mediabunny'
 import type { WebFS } from './webfs'
 import { mixWindow } from './audio'
+import { b64encode, isNative, nativeCall } from './native'
 
 /** Veces que el codificador se trabó y hubo que vaciarlo (para el informe de la exportación). */
 let stalls = 0
+/** Fotogramas que devolvió el codificador (si al final faltan, WebCodecs no anduvo). */
+let packets = 0
+/** Por qué no anduvo WebCodecs en esta exportación (vacío: anduvo o no se usó). */
+let webcodecsError = ''
+/** WebCodecs ya falló en este equipo: se exporta con AVFoundation (hasta que se cierre la app). */
+let avf = false
 /**
  * El codificador de video de WebCodecs con su propia espera. Mediabunny, con 4 fotogramas en cola, espera el evento
  * `dequeue`; en el WebKit de iOS (simulador de iOS 26) el codificador tomaba 4 y se quedaba con los siguientes sin
@@ -20,7 +29,7 @@ class PatientVideoEncoder extends CustomVideoEncoder {
   static supports(codec: string) { return (codec === 'avc' || codec === 'hevc') && typeof VideoEncoder !== 'undefined' }
   private enc!: VideoEncoder
   init() {
-    this.enc = new VideoEncoder({ output: (chunk, meta) => this.onPacket(EncodedPacket.fromEncodedChunk(chunk), meta), error: (e) => this.onError(e) })
+    this.enc = new VideoEncoder({ output: (chunk, meta) => { packets++; this.onPacket(EncodedPacket.fromEncodedChunk(chunk), meta) }, error: (e) => this.onError(e) })
     this.enc.configure(this.config)
   }
   async encode(sample: VideoSample, options: VideoEncoderEncodeOptions) {
@@ -44,6 +53,8 @@ type Job = {
   out: string; width: number; height: number; fps: number
   ready: Promise<void>; output?: Output; video?: VideoSampleSource; audio?: AudioSampleSource
   frames: number; done?: (size: number) => void; written: number; error?: unknown; cancelled: boolean; fs: WebFS
+  /** AVFoundation (la app) en vez de WebCodecs; withAudio: el MP4 lleva pista de audio. */
+  native?: boolean; withAudio?: boolean
 }
 let job: Job | null = null
 
@@ -57,7 +68,14 @@ export async function codecCaps() {
 export function start(fs: WebFS, a: { out: string; width: number; height: number; fps: number; bitrate: number; keyframeSec?: number; codec: 'avc' | 'hevc'; audio?: { sampleRate: number; channels: number; bitrate: number } }) {
   if (job && !job.cancelled) throw new Error('Ya hay una exportación en curso')
   const j: Job = { out: a.out, width: a.width, height: a.height, fps: a.fps, frames: 0, written: 0, cancelled: false, ready: Promise.resolve(), fs }
-  stalls = 0
+  stalls = 0; packets = 0; webcodecsError = ''
+  if (avf) {
+    Object.assign(j, { native: true, withAudio: !!a.audio })
+    j.ready = nativeCall('venc.start', a)
+    j.ready.catch((e) => { j.error = e })
+    job = j
+    return { codec: a.codec === 'hevc' ? 'HEVC' : 'H.264', profile: '', native: true }
+  }
   j.ready = (async () => {
     const { writable, done } = await fs.openWritable(a.out)
     j.done = done
@@ -84,11 +102,23 @@ export function start(fs: WebFS, a: { out: string; width: number; height: number
 export async function frame(a: { bitmap?: ImageBitmap; data?: string }) {
   const j = job
   if (!j) throw new Error('No hay una exportación en curso')
-  await j.ready
-  if (j.cancelled) throw new Error('cancelado')
-  const img = a.bitmap || await createImageBitmap(new Blob([Uint8Array.from(atob(a.data!), (c) => c.charCodeAt(0))], { type: 'image/jpeg' }))
-  const sample = new VideoSample(img, { timestamp: j.frames / j.fps, duration: 1 / j.fps })
-  try { await j.video!.add(sample) } finally { sample.close(); img.close() }
+  if (j.native) {
+    await j.ready
+    if (j.cancelled) throw new Error('cancelado')
+    await nativeCall('venc.frame', { data: a.data })
+    j.frames++
+    return true
+  }
+  try {
+    await j.ready
+    if (j.cancelled) throw new Error('cancelado')
+    const img = a.bitmap || await createImageBitmap(new Blob([Uint8Array.from(atob(a.data!), (c) => c.charCodeAt(0))], { type: 'image/jpeg' }))
+    const sample = new VideoSample(img, { timestamp: j.frames / j.fps, duration: 1 / j.fps })
+    try { await j.video!.add(sample) } finally { sample.close(); img.close() }
+  } catch (e: any) {
+    if (!j.cancelled) webcodecsError ||= String(e?.message || e)
+    throw e
+  }
   j.frames++
   return true
 }
@@ -102,7 +132,7 @@ export async function mix(fs: WebFS, a: { start: number; end: number; sampleRate
   const j = job
   if (!j) throw new Error('No hay una exportación en curso')
   await j.ready
-  if (!j.audio) return { parts: 0, failed: [] }
+  if (j.native ? !j.withAudio : !j.audio) return { parts: 0, failed: [] }
   const t0 = performance.now()
   const WIN = 30, failed = new Set<string>()
   const total = Math.ceil((a.end - a.start) / WIN)
@@ -110,11 +140,22 @@ export async function mix(fs: WebFS, a: { start: number; end: number; sampleRate
     if (j.cancelled) throw new Error('cancelado')
     const len = Math.min(WIN, a.end - at)
     const buf = await mixWindow(fs, a.parts, at, len, a.sampleRate, failed)
-    const planar = new Float32Array(buf.length * 2)
-    planar.set(buf.getChannelData(0), 0)
-    planar.set(buf.numberOfChannels > 1 ? buf.getChannelData(1) : buf.getChannelData(0), buf.length)
-    const sample = new AudioSample({ data: planar, format: 'f32-planar', numberOfChannels: 2, sampleRate: a.sampleRate, timestamp: at - a.start })
-    try { await j.audio.add(sample) } finally { sample.close() }
+    const L = buf.getChannelData(0), R = buf.numberOfChannels > 1 ? buf.getChannelData(1) : L
+    if (j.native) {
+      // A AVFoundation en tramos de 10 s (el puente lleva texto: base64), cada uno con sus dos canales seguidos.
+      for (let o = 0; o < buf.length; o += a.sampleRate * 10) {
+        const n = Math.min(a.sampleRate * 10, buf.length - o), part = new Float32Array(n * 2)
+        part.set(L.subarray(o, o + n), 0)
+        part.set(R.subarray(o, o + n), n)
+        await nativeCall('venc.audio', { data: b64encode(new Uint8Array(part.buffer)) })
+      }
+    } else {
+      const planar = new Float32Array(buf.length * 2)
+      planar.set(L, 0)
+      planar.set(R, buf.length)
+      const sample = new AudioSample({ data: planar, format: 'f32-planar', numberOfChannels: 2, sampleRate: a.sampleRate, timestamp: at - a.start })
+      try { await j.audio!.add(sample) } finally { sample.close() }
+    }
     ev({ event: 'progress', done: w + 1, total })
   }
   return { parts: a.parts.length, failed: [...failed], encodeMs: performance.now() - t0 }
@@ -125,10 +166,33 @@ export async function finish(_fs: WebFS) {
   if (!j) throw new Error('No hay una exportación en curso')
   await j.ready
   if (j.error) throw j.error
-  await j.output!.finalize()
+  if (j.native) {
+    const r = await nativeCall<{ size: number }>('venc.finish')
+    j.fs.noteFile(j.out, r.size)
+    job = null
+    return { path: j.out, size: r.size, frames: j.frames, duration: j.frames / j.fps, native: true }
+  }
+  try {
+    await j.output!.finalize()
+    // Un codificador trabado puede "terminar" sin devolver los últimos: el video quedaría corto.
+    if (packets < j.frames) throw new Error(`El codificador de video devolvió ${packets} de ${j.frames} fotogramas.`)
+  } catch (e: any) {
+    webcodecsError ||= String(e?.message || e)
+    throw e
+  }
   j.done?.(j.written)
   job = null
   return { path: j.out, size: j.written, frames: j.frames, duration: j.frames / j.fps, stalls }
+}
+
+/**
+ * enc.fallback: después de un error, ¿se puede repetir con AVFoundation? Sólo en la app y si lo que falló fue
+ * WebCodecs; desde ahí las exportaciones van por AVFoundation. Devuelve por qué falló (o false).
+ */
+export function fallback(): string | false {
+  if (!isNative() || avf || !webcodecsError) return false
+  avf = true
+  return webcodecsError
 }
 
 export function cancel() {
@@ -136,5 +200,6 @@ export function cancel() {
   if (!j) return
   j.cancelled = true
   job = null
+  if (j.native) { void nativeCall('venc.cancel').catch(() => {}); return }
   j.ready.then(() => j.output?.cancel()).catch(() => {}).finally(() => j.fs.delete(j.out))
 }

@@ -63,6 +63,7 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "pick": pick(a, replyHandler)
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
+        case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
         case "keychain.load": replyHandler(Keychain.load(), nil)
         case "keychain.save":
             Keychain.save(a["json"] as? String ?? "{}") ? replyHandler(true, nil) : replyHandler(nil, "No se pudieron guardar las claves en el Llavero")

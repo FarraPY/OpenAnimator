@@ -4,7 +4,7 @@
  * que Claude escriba una escena por MCP, ponerla en el timeline, exportar y revisar el MP4 con AVFoundation.
  * El resultado va a Swift (diag.result), que lo imprime y cierra la app.
  */
-import { nativeCall } from '../host/native'
+import { b64encode, nativeCall } from '../host/native'
 import { host } from '../../android/host'
 import type { WebHost } from '../host/webhost'
 
@@ -82,6 +82,23 @@ export async function runE2E() {
       return { bytes: Math.round((b64?.length || 0) * 0.75) }
     }, 120000)
     R.iframes = [...document.querySelectorAll('iframe')].map((f) => f.src.slice(0, 120))
+    // El codificador de iOS (AVFoundation, el respaldo de la exportación) directo: 30 fotogramas JPEG y 1 s de audio.
+    await step(R, 'avfoundation', async () => {
+      const W = 320, H = 568, path = 'exports/avf-prueba.mp4'
+      await nativeCall('venc.start', { out: path, width: W, height: H, fps: 30, bitrate: 2e6, codec: 'avc', audio: { sampleRate: 48000, channels: 2, bitrate: 128000 } })
+      const cv = document.createElement('canvas')
+      cv.width = W; cv.height = H
+      const g = cv.getContext('2d')!
+      for (let i = 0; i < 30; i++) {
+        g.fillStyle = `hsl(${i * 12} 70% 50%)`; g.fillRect(0, 0, W, H)
+        await nativeCall('venc.frame', { data: cv.toDataURL('image/jpeg', 0.9).split(',')[1] })
+      }
+      const pcm = new Float32Array(48000 * 2)
+      for (let i = 0; i < 48000; i++) pcm[i] = pcm[48000 + i] = Math.sin((i / 48000) * 2 * Math.PI * 440) * 0.3
+      await nativeCall('venc.audio', { data: b64encode(new Uint8Array(pcm.buffer)) })
+      const r = await nativeCall('venc.finish')
+      return { ...r, probe: await nativeCall('probe', { path }) }
+    }, 60000)
     const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''
       let shown = 0

@@ -76,6 +76,8 @@ type Diag = {
   calls?: { n: number; ms: number; max: number; gap: number; gapMax: number; first?: number }
   compat?: { n: number; ms: number }
   encoderStalls?: number
+  /** iPhone: por qué no anduvo WebCodecs (se exportó con AVFoundation). */
+  fallback?: string
   /** encodeMs: el codificador AAC mientras llegaba la mezcla; closeMs: al cerrarlo, antes del primer fotograma. */
   audio?: { parts: number; failed: string[]; encodeMs?: number; closeMs?: number }
 }
@@ -173,7 +175,16 @@ class Export {
     document.documentElement.classList.add('exporting') // las animaciones de la app, en pausa (tablet.css)
     let started = false
     try {
-      const r = await this.inner(() => { started = true })
+      let r: Awaited<ReturnType<Export['inner']>>
+      try { r = await this.inner(() => { started = true }) } catch (e) {
+        // iPhone: si el que falló fue el codificador de WebCodecs, se exporta de nuevo con el de iOS (AVFoundation).
+        const why = !this.cancelled && host().kind === 'web' ? host().call<string | false>('enc.fallback') : false
+        if (!why) throw e
+        this.diag.fallback = why
+        try { host().call('enc.cancel') } catch { /* ignore */ }
+        this.emit({ phase: 'preparando', message: 'Probando con el codificador de iOS…', done: 0, total: 1 })
+        r = await this.inner(() => { started = true })
+      }
       const details = this.details()
       saveDetails(details)
       this.emit({ phase: 'listo', message: r.gallery ? `Guardado en la galería (${r.gallery})` : 'Exportación terminada', done: 1, total: 1, file: r.file, gallery: r.gallery, size: r.size, encoder: r.encoder, fps: r.fps, note: r.note, details })
@@ -256,6 +267,7 @@ class Export {
     if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}; la primera ${msf(d.calls.first)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
     if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
     if (d.encoderStalls) lines.push(`El codificador de video se trabó ${d.encoderStalls} veces (se vació y siguió)`)
+    if (d.fallback) lines.push(`WebCodecs no anduvo (${d.fallback}): se exportó con AVFoundation`)
     if (d.audio) {
       const aac = d.audio.encodeMs != null ? ` · codificar a AAC ${secs(d.audio.encodeMs)} (dentro de la mezcla) + ${msf(d.audio.closeMs)} al cerrar` : ''
       lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${aac}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
@@ -299,7 +311,7 @@ class Export {
     const parts = job.audio ? audioParts(job.projectId, tl, start, end) : []
     this.check()
 
-    const info = host().call<{ codec: string; profile: string; operatingRate?: number; maxFps?: number }>('enc.start', {
+    const info = host().call<{ codec: string; profile: string; operatingRate?: number; maxFps?: number; native?: boolean }>('enc.start', {
       out, width: W, height: H, fps, bitrate, keyframeSec: 2, codec,
       audio: parts.length ? { sampleRate: SR, channels: 2, bitrate: Math.max(64, Math.min(320, job.audioBitrate || 192)) * 1000 } : undefined,
     })
@@ -345,8 +357,9 @@ class Export {
 
     // Video
     const quality = job.quality === 'max' ? 0.95 : job.quality === 'low' ? 0.86 : 0.92
-    // iPhone: el compositor entrega una ImageBitmap y va directo al codificador (sin JPEG en el medio).
-    const bitmaps = host().kind === 'web'
+    // iPhone: el compositor entrega una ImageBitmap y va directo al codificador (sin JPEG en el medio); a AVFoundation
+    // (info.native) los fotogramas van en JPEG por el puente.
+    const bitmaps = host().kind === 'web' && !info.native
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
     let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0

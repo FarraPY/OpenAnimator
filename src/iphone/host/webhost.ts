@@ -142,7 +142,7 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'fs.readText': (a) => fs.readText(a.path), 'fs.readTextLimited': (a) => fs.readTextLimited(a.path, a.max), 'fs.writeText': (a) => { fs.writeText(a.path, a.text); return true },
     'fs.writeBase64': (a) => { fs.writeBase64(a.path, a.data, !!a.append); return true }, 'fs.mkdir': (a) => { fs.mkdir(a.path); return true }, 'fs.volume': () => 'internal',
     'fs.delete': (a) => fs.delete(a.path), 'fs.rename': (a) => { fs.rename(a.from, a.to); return true }, 'fs.copy': (a) => { fs.copy(a.from, a.to); return true }, 'fs.du': (a) => fs.du(a.path),
-    'enc.start': (a) => Enc.start(fs, a), 'enc.cancel': () => { Enc.cancel(); return true }, 'cap.close': () => true,
+    'enc.start': (a) => Enc.start(fs, a), 'enc.cancel': () => { Enc.cancel(); return true }, 'enc.fallback': () => Enc.fallback(), 'cap.close': () => true,
   }
   const async: Record<string, (a: any, emitEvent: (e: any) => void, o: AsyncOpts) => Promise<any>> = {
     'fs.delete': async (a) => fs.delete(a.path), 'fs.copy': async (a) => { fs.copy(a.from, a.to); await fs.flush(); return true }, 'fs.du': async (a) => fs.du(a.path),

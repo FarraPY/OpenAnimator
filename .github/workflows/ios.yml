@@ -67,10 +67,16 @@ jobs:
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
           xcrun simctl install "$UDID" "$APP"
+          # Lo que dicen WebKit y los medios del sistema mientras tanto (por qué no carga un <video>).
+          xcrun simctl spawn "$UDID" log stream --style compact --level info \
+            --predicate 'subsystem BEGINSWITH "com.apple.WebKit" OR subsystem BEGINSWITH "com.apple.coremedia" OR subsystem BEGINSWITH "com.apple.avfoundation" OR process CONTAINS "WebKit.GPU" OR process == "mediaserverd"' > wk.log 2>&1 &
+          LOGPID=$!
           xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OADiag > diag.log 2>&1 &
           PID=$!
           for i in $(seq 1 200); do grep -q "OA-DIAG-" diag.log && break; sleep 1; done
-          sleep 1; kill $PID 2>/dev/null || true
+          sleep 1; kill $PID $LOGPID 2>/dev/null || true
+          esc() { python3 -c "import sys; print(sys.stdin.read()[-12000:].replace('%','%25').replace('\r','').replace('\n','%0A'))"; }
+          echo "::warning title=WebKit y medios (simulador)::$(grep -iE 'media|avf|player|video|audio|decod|fail|error' wk.log | tail -n 120 | cut -c1-300 | esc)"
           cat diag.log
           RESULT=$(grep -o 'OA-DIAG-RESULT .*' diag.log | head -1 | cut -c16-)
           echo "::notice title=Diagnóstico del simulador::${RESULT:-sin resultado (ver el log)}"
