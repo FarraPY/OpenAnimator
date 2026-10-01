@@ -58,9 +58,11 @@ export type TransformCtx = {
 
 /**
  * `using` / `await using` (gestión explícita de recursos): Bun los entiende y el WebKit de iOS todavía no (SyntaxError).
- * Se reescriben como la especificación: `const` + try/finally que libera cada recurso al salir del bloque, en orden
- * inverso (`x[Symbol.dispose]()`, o `Symbol.asyncDispose` con await). En la cabecera de un for-of, el cuerpo queda
- * dentro del try. En el nivel del módulo sólo se cambia por `const` (un try no puede envolver import/export).
+ * Se reescriben como lo hacen los compiladores (Babel, TypeScript): TODO el bloque va dentro de un try (así no cambia
+ * dónde se ve cada declaración: una función definida antes del `using` puede usar algo declarado después), cada recurso
+ * se anota en una pila ($oaUse) y el finally los libera en orden inverso ($oaDispose / $oaDisposeAsync, definidos en
+ * claude/node/inject.js). En la cabecera de un for-of, el cuerpo queda dentro del try. En el nivel del módulo sólo se
+ * cambia por `const` (un try no puede envolver import/export).
  */
 export function lowerUsing(src: string): string {
   if (!/\busing\s/.test(src)) return src
@@ -76,14 +78,22 @@ export function lowerUsing(src: string): string {
   while (stack.length) {
     const node = stack.pop()
     const list: any[] | null = node.type === 'BlockStatement' || node.type === 'StaticBlock' ? node.body : node.type === 'SwitchCase' ? node.consequent : null
-    if (list) {
-      let closing = ''
-      for (const s of list) if (isUsing(s)) {
+    const usings = list ? list.filter(isUsing) : []
+    if (list && usings.length) {
+      // Las directivas ("use strict") tienen que seguir al principio.
+      let first = 0
+      while (first < list.length && list[first].directive) first++
+      const anyAwait = usings.some((s) => s.kind === 'await using')
+      const from = first < list.length ? list[first].start : list[list.length - 1].end
+      // En un case, entre llaves: dos case no pueden declarar el mismo $oaR.
+      const open = node.type === 'SwitchCase' ? '{ ' : '', close = node.type === 'SwitchCase' ? ' }' : ''
+      edits.push([from, from, open + 'const $oaR = []; try { '])
+      for (const s of usings) {
         keyword(s)
-        edits.push([s.end, s.end, ' try {'])
-        closing = `} finally { ${dispose(s)} }` + closing // el último en declararse se libera primero
+        for (const d of s.declarations) if (d.init) edits.push([d.init.start, d.init.start, `$oaUse($oaR, ${s.kind === 'await using'}, `], [d.init.end, d.init.end, ')'])
       }
-      if (closing) edits.push([list[list.length - 1].end, list[list.length - 1].end, closing])
+      const end = list[list.length - 1].end
+      edits.push([end, end, (anyAwait ? ' } finally { await $oaDisposeAsync($oaR) }' : ' } finally { $oaDispose($oaR) }') + close])
     } else if (node.type === 'Program') {
       for (const s of node.body) if (isUsing(s)) keyword(s)
     } else if ((node.type === 'ForOfStatement' || node.type === 'ForInStatement') && isUsing(node.left)) {

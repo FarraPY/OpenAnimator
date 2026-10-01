@@ -76,6 +76,12 @@ export async function runE2E() {
       await call('timeline:save', project.id, project.activeTimeline || 'main', tl)
       return true
     })
+    // Un fotograma con el compositor oculto (lo que usa la exportación y lo que mira Claude).
+    await step(R, 'frames:png', async () => {
+      const b64 = await call<string>('frames:png', project.id, project.activeTimeline || 'main', 0.5, 320)
+      return { bytes: Math.round((b64?.length || 0) * 0.75) }
+    }, 120000)
+    R.iframes = [...document.querySelectorAll('iframe')].map((f) => f.src.slice(0, 120))
     const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''
       let shown = 0

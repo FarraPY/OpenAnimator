@@ -33,6 +33,9 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
+      - name: Prueba de la reescritura de `using` (Claude Code en el WebKit de iOS)
+        run: node --experimental-strip-types scripts/check-lower-using.mjs
+
       - name: Interfaz (ios/www)
         run: npm run build:ios
 

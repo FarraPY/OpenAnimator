@@ -51,6 +51,7 @@
   }
   function isImage(src) { return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(src); }
   function post(msg, transfer) { if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'oa-compositor' }, msg), '*', transfer || []); }
+  post({ type: 'alive', mode: mode }); // el script corrió (para diagnosticar un compositor que no responde)
 
   async function loadJSON(path) {
     var r = await fetch(url(path) + '?_=' + Date.now());

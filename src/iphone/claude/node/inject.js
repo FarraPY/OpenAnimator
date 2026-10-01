@@ -4,6 +4,12 @@ import { Buffer } from 'buffer'
 // símbolos que usa Node cuando el motor no los trae.
 if (typeof Symbol.dispose !== 'symbol') Object.defineProperty(Symbol, 'dispose', { value: Symbol.for('nodejs.dispose') })
 if (typeof Symbol.asyncDispose !== 'symbol') Object.defineProperty(Symbol, 'asyncDispose', { value: Symbol.for('nodejs.asyncDispose') })
+// La pila de recursos de cada bloque reescrito (pares [async, valor]): se liberan en orden inverso al salir.
+globalThis.$oaUse = (stack, isAsync, v) => { if (v != null) stack.push(isAsync, v); return v }
+globalThis.$oaDispose = (stack) => { for (let i = stack.length - 2; i >= 0; i -= 2) stack[i + 1][Symbol.dispose]() }
+globalThis.$oaDisposeAsync = async (stack) => {
+  for (let i = stack.length - 2; i >= 0; i -= 2) { const v = stack[i + 1]; await (stack[i] ? (v[Symbol.asyncDispose] || v[Symbol.dispose]) : v[Symbol.dispose]).call(v) }
+}
 if (!globalThis.global) globalThis.global = globalThis
 if (!globalThis.Buffer) globalThis.Buffer = Buffer
 if (!globalThis.process) {

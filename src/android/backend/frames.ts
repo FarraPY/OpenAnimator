@@ -48,6 +48,7 @@ export class Renderer {
   }
 
   handle(m: any) {
+    if ((window as any).__oaTest) console.log('[compositor]', m.type, m.id || '', m.message || '', m.t ?? '')
     if (m.type === 'ready') { this.onReady({ duration: m.duration, width: m.width, height: m.height }); return }
     if (m.type === 'reloaded') { this.reloading?.resolve(true); this.reloading = null; return }
     if (m.type === 'error' && !m.id) {
