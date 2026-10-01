@@ -14,6 +14,9 @@ enum AppLog {
     private static var outbox: [String] = []
     private static var sending = false
     private static var sentAt: Date?
+    private static var lastTry: Date?
+    /** Hay un error esperando: afuera de la red local se manda sin esperar la tanda (pero no más de una vez cada 10 s). */
+    private static var urgent = false
     private static var lastError: String?
     private static var timer: DispatchSourceTimer?
     private static let stamp: ISO8601DateFormatter = {
@@ -80,6 +83,7 @@ enum AppLog {
             if remote != nil {
                 outbox.append(out)
                 if outbox.count > 3000 { outbox.removeFirst(outbox.count - 3000) }
+                if lines.contains(where: { $0.0 == "ERROR" }) { urgent = true }
             }
         }
     }
@@ -148,9 +152,16 @@ enum AppLog {
         }
     }
 
-    /// Cada segundo, lo nuevo en una tanda; si la computadora no responde, se guarda y se reintenta.
+    /// En la red local, lo nuevo cada segundo. Afuera (ntfy.sh, un túnel) en tandas de 30 s: ntfy.sh deja 250 mensajes
+    /// por día. Si no responde, se guarda y se reintenta.
     private static func send() {
         guard let url = remote, !sending, !outbox.isEmpty else { return }
+        let host = url.host?.lowercased() ?? ""
+        let local = host == "localhost" || host.hasSuffix(".local") || ["10.", "127.", "192.168.", "172."].contains { host.hasPrefix($0) }
+        let gap = Date().timeIntervalSince(lastTry ?? .distantPast)
+        guard local || gap >= 30 || (urgent && gap >= 10) else { return }
+        lastTry = Date()
+        urgent = false
         let count = outbox.count
         var req = URLRequest(url: url, timeoutInterval: 5)
         req.httpMethod = "POST"

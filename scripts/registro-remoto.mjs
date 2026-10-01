@@ -3,7 +3,10 @@
  * Registro en vivo de la app del iPhone (Ajustes › Depuración › En vivo a tu computadora): recibe lo que manda la app
  * y lo agrega a registro-iphone.log (y lo muestra acá). La clave queda en .tools/ (la dirección no cambia entre una vez
  * y otra en la misma red).
- *   node scripts/registro-remoto.mjs [--tunel] [puerto] [archivo]
+ *   node scripts/registro-remoto.mjs [--ntfy] [--tunel] [puerto] [archivo]
+ * Con --ntfy, además escucha un tema fijo de ntfy.sh (https://ntfy.sh/oa-<clave>): sirve desde cualquier red, la
+ * dirección no cambia nunca y ntfy.sh guarda 12 h lo que llega aunque la computadora esté apagada (la app manda en
+ * tandas de 30 s: 250 mensajes por día).
  * Con --tunel, además lo publica por HTTPS para que llegue desde cualquier red (datos móviles incluidos): con un túnel
  * rápido de Cloudflare (cloudflared, en .tools/ o en el PATH) o, si la red lo bloquea, con localhost.run (por ssh, sin
  * instalar nada). Esa dirección cambia cada vez que se abre el túnel: hay que volver a pegarla en la app.
@@ -17,6 +20,7 @@ import path from 'node:path'
 
 const args = process.argv.slice(2)
 const tunnel = args.includes('--tunel')
+const ntfy = args.includes('--ntfy')
 const [portArg, fileArg] = args.filter((a) => !a.startsWith('--'))
 const port = +(portArg || 8799)
 const file = path.resolve(fileArg || 'registro-iphone.log')
@@ -35,9 +39,7 @@ http.createServer((req, res) => {
   let size = 0
   req.on('data', (c) => { size += c.length; if (size > 16e6) req.destroy(); else parts.push(c) })
   req.on('end', () => {
-    const text = Buffer.concat(parts).toString('utf8')
-    fs.appendFileSync(file, text.endsWith('\n') ? text : text + '\n')
-    process.stdout.write(text)
+    append(Buffer.concat(parts).toString('utf8'))
     res.writeHead(204).end()
   })
 }).listen(port, '0.0.0.0', () => {
@@ -46,7 +48,43 @@ http.createServer((req, res) => {
   console.log('En la app (Ajustes › Depuración › En vivo a tu computadora) pegá, en la misma wifi:')
   for (const ip of ips) console.log(`  http://${ip}:${port}/k/${key}`)
   if (tunnel) startTunnel()
+  if (ntfy) void listenNtfy()
 })
+
+const append = (text) => {
+  const t = text.endsWith('\n') ? text : text + '\n'
+  fs.appendFileSync(file, t)
+  process.stdout.write(t)
+}
+
+/** ntfy.sh: lo que llegó desde la última vez (hasta 12 h) y después lo nuevo, siempre (se reconecta solo). */
+async function listenNtfy() {
+  const topic = `oa-${key}`
+  const last = path.resolve('.tools/registro-ntfy.last')
+  console.log(`Desde cualquier red (por ntfy.sh, no cambia nunca), pegá en la app:\n  https://ntfy.sh/${topic}`)
+  for (;;) {
+    let since = '12h'
+    try { since = fs.readFileSync(last, 'utf8').trim() || '12h' } catch { /* primera vez */ }
+    try {
+      const r = await fetch(`https://ntfy.sh/${topic}/json?since=${since}`)
+      let buf = ''
+      for await (const chunk of r.body) {
+        buf += Buffer.from(chunk).toString('utf8')
+        for (let i; (i = buf.indexOf('\n')) >= 0;) {
+          const line = buf.slice(0, i)
+          buf = buf.slice(i + 1)
+          let m
+          try { m = JSON.parse(line) } catch { continue }
+          if (m.event !== 'message') continue
+          // Una tanda de más de 4 KB llega como adjunto (ntfy.sh lo guarda 3 h).
+          append(m.attachment?.url ? await (await fetch(m.attachment.url)).text() : m.message || '')
+          fs.writeFileSync(last, m.id)
+        }
+      }
+    } catch (e) { console.error(`ntfy.sh: ${e.message}`) }
+    await new Promise((r) => setTimeout(r, 5000))
+  }
+}
 
 /** El túnel: Cloudflare y, si no anda desde esta red, localhost.run. Si se corta, se vuelve a abrir. */
 function startTunnel() {

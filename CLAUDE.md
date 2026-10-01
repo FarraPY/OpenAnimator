@@ -132,8 +132,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   códigos de OAuth) con lo que manda la página (`src/iphone/host/applog.ts`: warn/error de la consola —todo con
   «Registro detallado»—, errores sin atrapar, Claude: pedidos, fin de turno, herramientas que fallan, stderr del
   Worker; la exportación: velocidad cada 2 s y el informe, con «Esperando al codificador») y lo del sistema (memoria,
-  cierre del motor web, segundo plano, temperatura, ahorro de batería). «En vivo»: POST cada 1 s a
-  `node scripts/registro-remoto.mjs` en la misma wifi (clave en .tools/registro-remoto.key → registro-iphone.log).
+  cierre del motor web, segundo plano, temperatura, ahorro de batería). «En vivo»: POST a
+  `node scripts/registro-remoto.mjs` (clave en .tools/registro-remoto.key → registro-iphone.log): en la misma wifi cada
+  1 s; desde cualquier red, con `--ntfy`, al tema fijo https://ntfy.sh/oa-<clave> en tandas de 30 s (ntfy.sh: 250
+  mensajes por día y guarda 12 h; más de 4 KB va como adjunto). Los túneles gratis no sirvieron: esta red bloquea el
+  DNS de trycloudflare/argotunnel y localhost.run cambia la dirección cada tanto.
 - Trampas del WebKit de iOS 26: no entiende `using`/`await using` (Claude Code los usa) → `lowerUsing` (transform.ts, al
   instalar; envuelve TODO el bloque para no cambiar el alcance; prueba: `scripts/check-lower-using.mjs`) con
   `$oaUse`/`$oaDispose` de claude/node/inject.js. El User-Agent de WKWebView quedó en «iPhone OS 18_7» (la versión real
