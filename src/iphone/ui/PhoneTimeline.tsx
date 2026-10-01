@@ -178,7 +178,8 @@ export default function PhoneTimeline(p: Props) {
   const icon = (tr: Track): IconName => TYPE_ICON[tr.type === 'audio' ? trackRole(tr) : tr.type] || 'film'
 
   // Liquid Glass de iOS 26 (nativo: GlassOverlay.swift) sobre la columna de nombres: la página le dice dónde va cada
-  // panel y con qué color; los toques siguen siendo de la página. Con un menú, una hoja o una ventana encima se saca
+  // pista y con qué color; los toques siguen siendo de la página. Estilo: `__oaGlassStyle` («panel» o «chips»; la prueba
+  // de capturas saca los dos para elegir). Con un menú, una hoja o una ventana encima se saca
   // (lo nativo quedaría por arriba). Sin iOS 26 (o en Safari) queda el vidrio dibujado con CSS.
   const [glass, setGlass] = useState(false)
   useEffect(() => {
@@ -194,10 +195,11 @@ export default function PhoneTimeline(p: Props) {
         return { id: b.dataset.id, name: b.dataset.name, kind: b.dataset.kind, color: getComputedStyle(b).color, x: r.left, y: r.top, w: r.width, h: r.height }
       })
       const clip = box ? { x: box.left, y: box.top + RULER, w: box.width, h: box.height - RULER } : null
-      const msg = JSON.stringify([clip, items])
+      const style = (window as any).__oaGlassStyle || 'panel'
+      const msg = JSON.stringify([clip, items, style])
       if (msg === last) return
       last = msg
-      nativeCall<boolean>('glass.set', { clip, items }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
+      nativeCall<boolean>('glass.set', { clip, items, style }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
     }
     const later = () => { if (!raf) raf = requestAnimationFrame(sync) }
     later()

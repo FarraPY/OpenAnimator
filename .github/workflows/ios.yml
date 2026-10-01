@@ -59,9 +59,10 @@ jobs:
           d = json.load(sys.stdin)['devices']
           for rt in sorted(d, reverse=True):
               if 'iOS' in rt:
-                  for x in d[rt]:
-                      if x['name'].startswith('iPhone'):
-                          print(x['udid']); sys.exit()
+                  # El más grande (como el del usuario: iPhone 17 Pro Max), si está.
+                  xs = sorted((x for x in d[rt] if x['name'].startswith('iPhone')), key=lambda x: 'Pro Max' not in x['name'])
+                  if xs:
+                      print(xs[0]['name'], file=sys.stderr); print(xs[0]['udid']); sys.exit()
           ")
           echo "$UDID" > udid.txt
           xcrun simctl boot "$UDID" || true

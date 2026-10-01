@@ -56,13 +56,20 @@ export async function runGlass() {
     for (let i = 0; i < 60 && !tab(); i++) await wait(250)
     tab()?.click()
     await wait(5000)
-    await say('OA-SHOT timeline-1')
-    await wait(3000)
+    // Los dos estilos del vidrio (ver GlassOverlay.swift): al principio y con los clips pasando por detrás.
     const sc = document.querySelector<HTMLElement>('.tlp-scroll')
-    if (sc) sc.scrollLeft = 260
-    await wait(2500)
-    await say('OA-SHOT timeline-2')
-    await wait(3000)
+    for (const [style, k] of [['panel', 'a'], ['chips', 'b']]) {
+      ;(window as any).__oaGlassStyle = style
+      if (sc) sc.scrollLeft = 0
+      window.dispatchEvent(new Event('resize'))
+      await wait(2500)
+      await say(`OA-SHOT vidrio-${k}1`)
+      await wait(3000)
+      if (sc) sc.scrollLeft = 260
+      await wait(2500)
+      await say(`OA-SHOT vidrio-${k}2`)
+      await wait(3000)
+    }
   } catch (e: any) { await say('ERROR ' + (e?.stack || e)) }
   await nativeCall('diag.result', { json: '{}' })
 }
