@@ -159,6 +159,8 @@ final class NativeEncoder {
         let ctx = CGContext(data: CVPixelBufferGetBaseAddress(pb), width: width, height: height, bitsPerComponent: 8,
                             bytesPerRow: CVPixelBufferGetBytesPerRow(pb), space: space,
                             bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        // Copia (no mezcla): el buffer viene reciclado del pool y tiene el fotograma de antes.
+        ctx?.setBlendMode(.copy)
         ctx?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         CVPixelBufferUnlockBaseAddress(pb, [])
         guard ctx != nil else { throw NativeEncoder.fail("No se pudo preparar el fotograma") }

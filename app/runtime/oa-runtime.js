@@ -153,6 +153,27 @@
     }
   }
 
+  // ── WebKit: máscaras SVG sobre grupos grandes ─────────────────────────────
+  // El motor SVG de WebKit aplica la máscara de un <g mask> a cada figura de adentro por separado, con la CPU: en la
+  // escena SVG de «Prueba de render» (1500 figuras bajo una máscara) el iPhone exportaba a 7 fps. Aislado cada hijo que
+  // es un grupo (isolation), WebKit lo pinta en una capa propia y la enmascara una vez: 13 fps (mientras la máscara se
+  // abre, 4 → 7,8) y la misma imagen (PSNR al nivel del ruido del codificador, sin corrimiento de color). isolation sólo
+  // cambia el resultado con mix-blend-mode adentro: esas máscaras no se tocan. Chromium no lo necesita.
+  var WEBKIT = /AppleWebKit/i.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Android|Edg/i.test(navigator.userAgent);
+  var maskBlends = new WeakMap();
+  function isolateMasked() {
+    var list = document.querySelectorAll('svg [mask]');
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      // ponytail: los modos de mezcla se miran una vez por máscara; uno agregado después quedaría aislado.
+      if (!maskBlends.has(m)) maskBlends.set(m, Array.prototype.some.call(m.querySelectorAll('*'), function (el) { return getComputedStyle(el).mixBlendMode !== 'normal'; }));
+      if (maskBlends.get(m)) continue;
+      for (var c = m.firstElementChild; c; c = c.nextElementSibling) {
+        if (c.firstElementChild && c.style && c.style.isolation !== 'isolate') c.style.isolation = 'isolate';
+      }
+    }
+  }
+
   // ── videos sincronizados (<video data-oa-sync> o data-oa-time) ────────────
   function syncVideos(t) {
     var vids = document.querySelectorAll('video[data-oa-sync], video[data-oa-time], video[data-kc-desired-time]');
@@ -246,6 +267,7 @@
       flushTimers();
       flushRAF();
       syncAnimations();
+      if (WEBKIT) isolateMasked();
       await syncVideos(t);
       await imagesReady();
       if (document.fonts && document.fonts.status !== 'loaded') await document.fonts.ready;

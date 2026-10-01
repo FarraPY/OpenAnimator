@@ -1,5 +1,5 @@
 """(iPhone por cable, ver CLAUDE.md) Exporta un tramo de «Prueba de render» en el iPhone con distintos ajustes y mide los fps (del registro en vivo).
-  python scripts/iphone-bench.py '<json de corridas>'   cada corrida: {"name", "workers", "prefs", "start", "end"}"""
+  python scripts/iphone-bench.py '<json de corridas>'   cada corrida: {"name", "workers", "prefs", "start", "end"} (y "project", "timeline": por defecto «Prueba de render»)"""
 import json, os, re, subprocess, sys, time
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '.tools')
@@ -16,7 +16,7 @@ def ev(js):
 def run(c):
     prefs = json.dumps(c.get('prefs', {}))
     js = (f"localStorage.setItem('oa.capWorkers', '{c.get('workers', 3)}'); localStorage.setItem('oa.capPrefs', {json.dumps(prefs)});"
-          f"oa.call('export:start', {{projectId: 'mi-video-2', timeline: 'prueba-render', range: {{start: {c['start']}, end: {c['end']}}},"
+          f"oa.call('export:start', {{projectId: '{c.get('project', 'mi-video-2')}', timeline: '{c.get('timeline', 'prueba-render')}', range: {{start: {c['start']}, end: {c['end']}}},"
           f" width: 1920, height: 1080, fps: 30, codec: 'avc', quality: 'high', audio: false, audioBitrate: 192, name: 'bench-{c['name']}'}})"
           f".then((id) => window.__bench = id, (e) => window.__bench = 'error ' + e), 'ok'")
     n0 = sum(1 for _ in open(LOG, encoding='utf-8', errors='replace'))

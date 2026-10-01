@@ -49,8 +49,12 @@ final class NativeCapture: NSObject {
         let fit = min(1, cellW / points.width, cellH / points.height)
         startReply = reply
         n = 0; totalMs = 0; snapMs = 0; maxMs = 0; t0 = Date()
-        let prefs = a["prefs"] as? [String: Any] ?? [:]
-        if !prefs.isEmpty { AppLog.write("exportar", "INFO", "Ajustes de WebKit de la captura: \(prefs)") }
+        let extra = a["prefs"] as? [String: Any] ?? [:]
+        if !extra.isEmpty { AppLog.write("exportar", "INFO", "Ajustes de WebKit de la captura: \(extra)") }
+        // WebKit dibuja a 60 Hz aunque la pantalla vaya a 120, y takeSnapshot espera al próximo dibujo: a 120 Hz,
+        // «Prueba de render» pasó de 63 a 83 fps en las partículas y de 58 a 63 en la escena CSS 3D, con los mismos
+        // fotogramas (la escena 3D, idéntica; ninguno repetido).
+        let prefs = (["PreferPageRenderingUpdatesNear60FPSEnabled": false] as [String: Any]).merging(extra) { $1 }
         for k in 0..<count {
             let w = CaptureWorker(schemes: schemes, size: size, points: points, prefs: prefs)
             w.web.transform = CGAffineTransform(scaleX: fit, y: fit)

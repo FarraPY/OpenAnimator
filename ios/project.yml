@@ -52,6 +52,8 @@ targets:
         UIStatusBarStyle: UIStatusBarStyleLightContent
         UIViewControllerBasedStatusBarAppearance: true
         UIUserInterfaceStyle: Dark
+        # 120 Hz en iPhone (sin esto CADisplayLink no pasa de 60): WebKit marca con él el ritmo de las vistas de captura.
+        CADisableMinimumFrameDurationOnPhone: true
         # La carpeta de datos (proyectos, exportaciones) se ve en la app Archivos.
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
