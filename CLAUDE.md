@@ -153,8 +153,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `native=1` contesta por `messageHandlers.oaPreview`). El compositor tiene viewport del ancho del video y escala de
   página = ancho de la vista ÷ ancho del video (iOS no aleja menos de 0,1: más chico se achica con una transformación;
   mientras la hoja se mueve también, y quieta 0,25 s se redibuja a la escala nueva). Las escenas ven devicePixelRatio 1
-  (como al exportar) y sin el agrandado de letra de iOS. Medido en el iPhone 17 Pro Max: inicio 616 → ~180 MB, SVG
-  ~1,3 GB → ~350 MB, CSS 3D más de 2 GB (se caía) → ~470 MB. Es otro proceso: si iOS lo cierra se rehace sólo el video
+  (como al exportar) y sin el agrandado de letra de iOS. Medido en el iPhone 17 Pro Max con «Prueba de render» de punta a
+  punta (memoria de cada proceso, interfaz + video): inicio 616 MB → 93 + 46, SVG ~1,3 GB → ~300 + 200, CSS 3D más de
+  2 GB (se caía) → ~400 + 250, sin cierres. Es otro proceso: si iOS lo cierra se rehace sólo el video
   (tres veces en 30 s: se deja hasta que se mueva el cursor). Los controles de pantalla completa son vidrio de iOS sobre
   el video. Pendiente: los fotogramas para Claude y la exportación del iPhone siguen con compositores en la página.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
@@ -168,6 +169,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   maneja con `ios webinspector eval 1 "<js>"` (no espera promesas: guardar en una global y leerla después; texto con
   acentos, en base64), `window.oa.call(canal, …)` llega al backend. Memoria por proceso en vivo:
   `.tools/pmd3/Scripts/python.exe scripts/iphone-mem.py`; informes de cierres: `ios crash ls` / `crash cp "JetsamEvent*"`.
+  Instalar un IPA nuevo: `MSYS_NO_PATHCONV=1 ios file push --app=com.openanimator.app --local=x.ipa --remote=/Documents/x.ipa`
+  (sin esa variable Git Bash convierte `/…` en una ruta de Windows) y en Feather: + › Import from Files › En mi iPhone ›
+  OpenAnimator › Open, Sign, Start Signing, Abrir, Install (compartirlo desde OpenAnimator a Feather no lo importaba).
+  La pantalla se bloquea fuera de OpenAnimator: para trabajar así, Bloqueo automático en Nunca (lo cambia el usuario).
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`
