@@ -42,7 +42,7 @@ final class NativeCapture: NSObject {
         let scale = max(1, view.window?.screen.scale ?? 3)
         let size = CGSize(width: num("width", 1920), height: num("height", 1080))
         let points = CGSize(width: size.width / scale, height: size.height / scale)
-        let count = max(1, min(6, Int(num("workers", 3))))
+        let count = max(1, min(6, Int(num("workers", 4))))
         // En una grilla de dos columnas en la mitad de abajo de la pantalla (detrás de la ventana de exportar).
         let b = view.bounds, cols = min(2, count), rows = (count + cols - 1) / cols
         let cellW = (b.width - 20) / CGFloat(cols), cellH = b.height * 0.4 / CGFloat(rows)

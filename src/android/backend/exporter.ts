@@ -339,7 +339,7 @@ class Export {
     // iPhone: cuántas vistas de captura a la vez (NativeCapture.swift; oa.capWorkers para probar otras cantidades).
     // y ajustes internos de WebKit para medir (oa.capPrefs: {"AcceleratedFiltersEnabled": true, …}).
     const iosPrefs = host().kind === 'web' ? (() => { try { return JSON.parse(localStorage.getItem('oa.capPrefs') || '{}') } catch { return {} } })() : undefined
-    const iosWorkers = host().kind === 'web' ? Math.max(1, Math.min(6, Number((() => { try { return localStorage.getItem('oa.capWorkers') } catch { return null } })()) || 3)) : 1
+    const iosWorkers = host().kind === 'web' ? Math.max(1, Math.min(6, Number((() => { try { return localStorage.getItem('oa.capWorkers') } catch { return null } })()) || 4)) : 1
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break

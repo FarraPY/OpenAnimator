@@ -1,7 +1,7 @@
 """Manejar el iPhone por cable con WebDriverAgent (ver CLAUDE.md › «iPhone por cable»: go-ios con tunnel start
 --userspace, runwda y forward 8100).
   python scripts/iphone-wda.py shot [archivo.png] | size | tap x y | hold x y [s] | swipe x1 y1 x2 y2 [s] | type texto
-                   home | launch <bundle> | source
+                   home | launch <bundle> | source | click <nombre>
 Coordenadas en puntos de iOS (la captura viene en píxeles: en el iPhone 17 Pro Max, 3 píxeles por punto)."""
 import base64, json, sys, urllib.request
 
@@ -47,6 +47,18 @@ def main(cmd, *a):
         req('POST', '/wda/homescreen')
     elif cmd == 'launch':
         req('POST', f'/session/{sid()}/wda/apps/launch', {'bundleId': a[0]})
+    elif cmd == 'click':
+        # Un botón o fila por su nombre de accesibilidad (espera hasta 10 s a que aparezca).
+        import time
+        name = ' '.join(a)
+        for _ in range(20):
+            try:
+                el = req('POST', f'/session/{sid()}/element', {'using': 'predicate string', 'value': f"label == '{name}' OR name == '{name}'"})['value']
+                req('POST', f"/session/{sid()}/element/{el['ELEMENT']}/click", {})
+                return
+            except Exception:
+                time.sleep(0.5)
+        sys.exit(f'No apareció «{name}»')
     elif cmd == 'source':
         print(req('GET', '/source?format=description')['value'])
     else:
