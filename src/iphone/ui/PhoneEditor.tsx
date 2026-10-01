@@ -5,7 +5,7 @@
  * abierto queda el video chico y la hoja. La lógica de edición (deshacer, cortar, duplicar, agregar medios) es la del
  * editor de la PC; la forma de tocarla es la del teléfono.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { afterPaint, Asset, call, Clip, EFFORTS, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../../api'
 import { useApp } from '../../App'
 import Stage, { StageHandle } from '../../components/Stage'
@@ -144,7 +144,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       const { tr, c } = f
       if (time <= c.start + 0.02 || time >= c.start + c.duration - 0.02) continue
       const a = time - c.start
-      tr.clips.push({ ...c, id: uid('c'), start: time, duration: c.duration - a, in: (c.in || 0) + a, fadeIn: 0 })
+      tr.clips.push({ ...c, id: uid('c'), start: time, duration: c.duration - a, in: (c.in || 0) + a * (c.speed || 1), fadeIn: 0 })
       c.duration = a; c.fadeOut = 0
     }
   })
@@ -421,46 +421,6 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       onScrub={scrub} onSelect={setSel} onChange={change} onSplit={() => splitAt(tRef.current)} onDelete={delSel} onDuplicate={dupSel}
       onPatchTrack={patchTrack} onAdd={() => openTab('media')} onNote={addNote} onEditNote={editNote} onDeleteNote={deleteNote} onAsk={askClaude} onInspect={() => openTab('timeline')} />
   )
-  // De qué se habla con Claude: todo el proyecto, la escena del cursor o una escena elegida.
-  const scenes = tl.tracks.filter((x) => x.type === 'scene').flatMap((x) => [...x.clips].sort((a, b) => a.start - b.start))
-  const sceneOf = (pick: string | null, x: number) => (!pick ? undefined : pick === 'cursor' ? scenes.find((c) => x >= c.start && x < c.start + c.duration) : scenes.find((c) => c.id === pick))
-  const num = (c: Clip) => String(scenes.indexOf(c) + 1).padStart(2, '0')
-  const chatScene = sceneOf(scenePick, t)
-  const claudeHead = (api: ChatHeadApi) => {
-    const name = chatScene ? clipName(chatScene) : ''
-    const chips: Array<[string, string]> = chatScene
-      ? [['Animar escena', `Animá la escena «${name}»: `], ['Más rápido', `Hacé más rápida la escena «${name}».`], ['Cambiar colores', `Cambiá los colores de la escena «${name}»: `], ['Ajustar voz', `Ajustá la voz de la escena «${name}»: `]]
-      : scenes.length ? [['Revisar el video', 'Mirá el video completo y decime qué mejorarías.'], ['Más ritmo', 'Hacé el video más dinámico: '], ['Agregar una escena', 'Agregá una escena que muestre '], ['Agregar música', 'Agregá música de fondo que acompañe el video.']]
-        : [['Crear un video', 'Creá un video a partir de este guion: '], ['Agregar una escena', 'Agregá una escena que muestre ']]
-    const effort = EFFORTS.find((e) => e.id === api.effort) || EFFORTS[0]
-    const perm = api.perms.find((x) => x.value === api.permissionMode) || api.perms[1]
-    return (
-      <div className="cl-head">
-        <div className="cl-row">
-          <span className="cl-title"><Icon name="sparkles" size={21} />Claude{api.busy && <Spinner size={14} />}</span>
-          <div className="grow" />
-          {scenes.length > 0 && <MenuButton className="cl-scene" glass label="De qué se habla con Claude" title="¿De qué hablamos?" items={[
-            { label: 'Todo el proyecto', icon: 'film', desc: 'Claude piensa en el video completo', checked: !scenePick, onSelect: () => setScenePick(null) },
-            { label: 'La escena del cursor', icon: 'scissors', desc: 'La que se ve en la vista previa', checked: scenePick === 'cursor', onSelect: () => setScenePick('cursor') },
-            { sep: true },
-            ...scenes.map((c) => ({ label: `${num(c)} · ${clipName(c)}`, checked: scenePick === c.id, onSelect: () => setScenePick(c.id) })),
-          ]}><Icon name="film" size={15} /><span className="ellipsis">{!scenePick ? 'Todo el proyecto' : chatScene ? `Escena ${num(chatScene)}` : 'Escena del cursor'}</span><Icon name="chevron-down" size={14} /></MenuButton>}
-          <MenuButton className="g-btn cl-more" glass label="Opciones de Claude" title="Claude" items={[
-            { label: 'Nueva conversación', icon: 'plus', onSelect: api.newChat },
-            { label: 'Conversaciones anteriores', icon: 'history', onSelect: api.history },
-            { sep: true },
-            { label: 'Modelo', icon: 'cpu', desc: api.modelName(api.model), sub: api.models.map((o) => ({ label: typeof o.label === 'string' ? o.label : api.modelName(o.value), checked: o.value === api.modelValue, onSelect: () => api.setOption({ model: o.value }, `Modelo: ${api.modelName(o.value)} (se aplica al próximo mensaje).`) })) },
-            { label: 'Esfuerzo', icon: 'gauge', desc: effort.name, sub: EFFORTS.map((e) => ({ label: e.name, desc: e.desc, checked: e.id === api.effort, onSelect: () => api.setOption({ effort: e.id }, `Esfuerzo: ${e.name} (se aplica al próximo mensaje).`) })) },
-            { label: 'Permisos', icon: 'shield', desc: perm.label, sub: api.perms.map((x) => ({ label: x.label, desc: x.desc, checked: x.value === api.permissionMode, onSelect: () => api.setOption({ permissionMode: x.value }, `Permisos: ${x.label}`) })) },
-            { label: 'Modo ahorro', icon: 'leaf', desc: 'Imágenes más chicas y respuestas cortas', checked: api.saver, onSelect: () => api.setOption({ saver: !api.saver }, api.saver ? 'Modo ahorro desactivado (se aplica al próximo mensaje).' : 'Modo ahorro activado (se aplica al próximo mensaje).') },
-            { sep: true },
-            { label: 'Compactar la conversación', icon: 'compress', desc: api.context ? `${Math.round(api.context.used / 1000)} mil tokens (${api.context.pct} %)` : 'Todavía sin medir', disabled: api.busy || !api.context, onSelect: api.compact },
-          ]}><Icon name="more" size={19} /></MenuButton>
-        </div>
-        <div className="cl-chips">{chips.map(([label, text]) => <button key={label} className="cl-chip" onClick={() => setInject({ text, n: Date.now() })}>{label}</button>)}</div>
-      </div>
-    )
-  }
   const projectItems = [
     { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
     { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
@@ -550,11 +510,9 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
           </div>
           <div className="ed-pane" style={{ display: sheet === 'min' ? 'none' : undefined }}>
             <div className="ed-chat" style={{ display: tab === 'claude' ? 'flex' : 'none' }}>
-              <ChatPanel projectId={projectId} visible={tab === 'claude' && sheet !== 'min'} onStatus={setChat} inject={inject} head={claudeHead} compactBar
-                context={() => {
-                  const c = sceneOf(scenePickRef.current, tRef.current)
-                  return { timeline: tlId, t: tRef.current, scene: c ? `«${clipName(c)}» (${c.src}, de ${fmtTime(c.start, true, fps)} a ${fmtTime(c.start + c.duration, true, fps)})` : undefined }
-                }} />
+              <EditorChat projectId={projectId} tl={tl} tlId={tlId} fps={fps} visible={tab === 'claude' && sheet !== 'min'} onStatus={setChat}
+                inject={inject} setInject={setInject} scenePick={scenePick} setScenePick={setScenePick} scenePickRef={scenePickRef} tRef={tRef}
+                cursorScene={scenePick === 'cursor' ? sceneAt(tl, t)?.id : undefined} />
             </div>
             {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAssets} onAsk={askClaude} full={sheet === 'max' || sheet === 'top'} />}
             {tab === 'timeline' && <div className="ed-montage">
@@ -571,3 +529,70 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     </div>
   )
 }
+
+const sceneList = (tl: TL) => tl.tracks.filter((x) => x.type === 'scene').flatMap((x) => [...x.clips].sort((a, b) => a.start - b.start))
+/** La escena que se ve en x (la primera pista de escenas que tenga una). */
+const sceneAt = (tl: TL, x: number) => sceneList(tl).find((c) => x >= c.start && x < c.start + c.duration)
+
+type EditorChatProps = {
+  projectId: string; tl: TL; tlId: string; fps: number; visible: boolean; onStatus: (s: ChatStatus) => void
+  inject: { text: string; n: number } | null; setInject: (v: { text: string; n: number } | null) => void
+  scenePick: string | null; setScenePick: (v: string | null) => void
+  scenePickRef: { current: string | null }; tRef: { current: number }
+  /** La escena del cursor (si se habla de ésa): cambia sólo al pasar de una escena a otra. */
+  cursorScene?: string
+}
+/**
+ * El chat con Claude de la hoja, con su cabecera (de qué se habla, opciones, sugerencias). Aparte y memorizado: mientras
+ * se reproduce, el editor se dibuja en cada cuadro y redibujar la conversación (y registrar sus menús de iOS) trababa la
+ * reproducción.
+ */
+const EditorChat = memo(function EditorChat({ projectId, tl, tlId, fps, visible, onStatus, inject, setInject, scenePick, setScenePick, scenePickRef, tRef, cursorScene }: EditorChatProps) {
+  // De qué se habla con Claude: todo el proyecto, la escena del cursor o una escena elegida.
+  const scenes = sceneList(tl)
+  const sceneOf = (pick: string | null, x: number) => (!pick ? undefined : pick === 'cursor' ? scenes.find((c) => x >= c.start && x < c.start + c.duration) : scenes.find((c) => c.id === pick))
+  const num = (c: Clip) => String(scenes.indexOf(c) + 1).padStart(2, '0')
+  const chatScene = scenePick === 'cursor' ? scenes.find((c) => c.id === cursorScene) : sceneOf(scenePick, -1)
+  const claudeHead = (api: ChatHeadApi) => {
+    const name = chatScene ? clipName(chatScene) : ''
+    const chips: Array<[string, string]> = chatScene
+      ? [['Animar escena', `Animá la escena «${name}»: `], ['Más rápido', `Hacé más rápida la escena «${name}».`], ['Cambiar colores', `Cambiá los colores de la escena «${name}»: `], ['Ajustar voz', `Ajustá la voz de la escena «${name}»: `]]
+      : scenes.length ? [['Revisar el video', 'Mirá el video completo y decime qué mejorarías.'], ['Más ritmo', 'Hacé el video más dinámico: '], ['Agregar una escena', 'Agregá una escena que muestre '], ['Agregar música', 'Agregá música de fondo que acompañe el video.']]
+        : [['Crear un video', 'Creá un video a partir de este guion: '], ['Agregar una escena', 'Agregá una escena que muestre ']]
+    const effort = EFFORTS.find((e) => e.id === api.effort) || EFFORTS[0]
+    const perm = api.perms.find((x) => x.value === api.permissionMode) || api.perms[1]
+    return (
+      <div className="cl-head">
+        <div className="cl-row">
+          <span className="cl-title"><Icon name="sparkles" size={21} />Claude{api.busy && <Spinner size={14} />}</span>
+          <div className="grow" />
+          {scenes.length > 0 && <MenuButton className="cl-scene" glass label="De qué se habla con Claude" title="¿De qué hablamos?" items={[
+            { label: 'Todo el proyecto', icon: 'film', desc: 'Claude piensa en el video completo', checked: !scenePick, onSelect: () => setScenePick(null) },
+            { label: 'La escena del cursor', icon: 'scissors', desc: 'La que se ve en la vista previa', checked: scenePick === 'cursor', onSelect: () => setScenePick('cursor') },
+            { sep: true },
+            ...scenes.map((c) => ({ label: `${num(c)} · ${clipName(c)}`, checked: scenePick === c.id, onSelect: () => setScenePick(c.id) })),
+          ]}><Icon name="film" size={15} /><span className="ellipsis">{!scenePick ? 'Todo el proyecto' : chatScene ? `Escena ${num(chatScene)}` : 'Escena del cursor'}</span><Icon name="chevron-down" size={14} /></MenuButton>}
+          <MenuButton className="g-btn cl-more" glass label="Opciones de Claude" title="Claude" items={[
+            { label: 'Nueva conversación', icon: 'plus', onSelect: api.newChat },
+            { label: 'Conversaciones anteriores', icon: 'history', onSelect: api.history },
+            { sep: true },
+            { label: 'Modelo', icon: 'cpu', desc: api.modelName(api.model), sub: api.models.map((o) => ({ label: typeof o.label === 'string' ? o.label : api.modelName(o.value), checked: o.value === api.modelValue, onSelect: () => api.setOption({ model: o.value }, `Modelo: ${api.modelName(o.value)} (se aplica al próximo mensaje).`) })) },
+            { label: 'Esfuerzo', icon: 'gauge', desc: effort.name, sub: EFFORTS.map((e) => ({ label: e.name, desc: e.desc, checked: e.id === api.effort, onSelect: () => api.setOption({ effort: e.id }, `Esfuerzo: ${e.name} (se aplica al próximo mensaje).`) })) },
+            { label: 'Permisos', icon: 'shield', desc: perm.label, sub: api.perms.map((x) => ({ label: x.label, desc: x.desc, checked: x.value === api.permissionMode, onSelect: () => api.setOption({ permissionMode: x.value }, `Permisos: ${x.label}`) })) },
+            { label: 'Modo ahorro', icon: 'leaf', desc: 'Imágenes más chicas y respuestas cortas', checked: api.saver, onSelect: () => api.setOption({ saver: !api.saver }, api.saver ? 'Modo ahorro desactivado (se aplica al próximo mensaje).' : 'Modo ahorro activado (se aplica al próximo mensaje).') },
+            { sep: true },
+            { label: 'Compactar la conversación', icon: 'compress', desc: api.context ? `${Math.round(api.context.used / 1000)} mil tokens (${api.context.pct} %)` : 'Todavía sin medir', disabled: api.busy || !api.context, onSelect: api.compact },
+          ]}><Icon name="more" size={19} /></MenuButton>
+        </div>
+        <div className="cl-chips">{chips.map(([label, text]) => <button key={label} className="cl-chip" onClick={() => setInject({ text, n: Date.now() })}>{label}</button>)}</div>
+      </div>
+    )
+  }
+  return (
+    <ChatPanel projectId={projectId} visible={visible} onStatus={onStatus} inject={inject} head={claudeHead} compactBar
+      context={() => {
+        const c = sceneOf(scenePickRef.current, tRef.current)
+        return { timeline: tlId, t: tRef.current, scene: c ? `«${clipName(c)}» (${c.src}, de ${fmtTime(c.start, true, fps)} a ${fmtTime(c.start + c.duration, true, fps)})` : undefined }
+      }} />
+  )
+})

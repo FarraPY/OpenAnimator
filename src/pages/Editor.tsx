@@ -179,7 +179,7 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
       const { tr, c } = f
       if (time <= c.start + 0.02 || time >= c.start + c.duration - 0.02) continue
       const a = time - c.start
-      const b: Clip = { ...c, id: uid('c'), start: time, duration: c.duration - a, in: (c.in || 0) + a, fadeIn: 0 }
+      const b: Clip = { ...c, id: uid('c'), start: time, duration: c.duration - a, in: (c.in || 0) + a * (c.speed || 1), fadeIn: 0 }
       c.duration = a; c.fadeOut = 0
       tr.clips.push(b)
     }
@@ -693,6 +693,21 @@ function Inspector({ clip, track, fps, projectId, onChange, onSeek }: { clip: Cl
           <div className="field"><label className="field-label">Salida</label><NumberInput value={clip.fadeOut || 0} step={0.1} min={0} decimals={2} suffix="s" onChange={(v) => onChange({ fadeOut: v })} /></div>
         </div>
       </div>
+      {track.type !== 'audio' && (
+        <div className="insp-sec">
+          <div className="insp-sec-title caps">Imagen</div>
+          <div className="field">
+            <div className="row"><label className="field-label grow">Opacidad</label><span className="t2 tabnum" style={{ fontSize: 12 }}>{Math.round((clip.opacity ?? 1) * 100)} %</span></div>
+            <Slider value={clip.opacity ?? 1} min={0} max={1} step={0.01} onChange={(v) => onChange({ opacity: +v.toFixed(2) })} />
+          </div>
+          {/* Velocidad: sólo escenas (son función del tiempo); el mismo tramo de la escena en más o menos tiempo. */}
+          {track.type === 'scene' && <div className="field" style={{ marginTop: 10 }}>
+            <label className="field-label">Velocidad</label>
+            <Segmented full value={String(clip.speed || 1)} onChange={(v) => { const sp = +v; onChange({ speed: sp, duration: +((clip.duration * (clip.speed || 1)) / sp).toFixed(3) }) }}
+              options={[0.5, 0.75, 1, 1.5, 2].map((x) => ({ value: String(x), label: `${x}×`.replace('.', ',') }))} />
+          </div>}
+        </div>
+      )}
       {track.type !== 'scene' && (
         <div className="insp-sec">
           <div className="insp-sec-title caps">Audio</div>

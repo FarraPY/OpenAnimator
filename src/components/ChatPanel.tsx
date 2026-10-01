@@ -203,6 +203,7 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
   }
   if (it.kind === 'permission') {
     const m = toolMeta(it)
+    if (/^(Write|Edit|MultiEdit)$/.test((it.name || '').replace(/^mcp__openanimator__/, ''))) return <ChangeCard it={it} session={session} file={m.arg} />
     return (
       <div key={it.id} className="perm-card">
         <div className="t"><Icon name="shield" size={15} /><div className="grow">Claude quiere usar <b>{m.name}</b>{it.input?.description ? <div className="t3" style={{ fontSize: 12 }}>{it.input.description}</div> : null}</div></div>
@@ -221,6 +222,50 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
   return null
         
 })
+
+/** Las líneas que cambia una edición (Edit/MultiEdit: quitadas y agregadas, sin las iguales de las puntas; Write: el archivo). */
+const NL = /\r?\n/
+function changeLines(name: string, input: any): Array<{ k: '+' | '-' | ' '; s: string }> {
+  const out: Array<{ k: '+' | '-' | ' '; s: string }> = []
+  const pair = (a: string, b: string) => {
+    const x = String(a ?? '').split(NL), y = String(b ?? '').split(NL)
+    let i = 0, j = 0
+    while (i < x.length && i < y.length && x[i] === y[i]) i++
+    while (j < x.length - i && j < y.length - i && x[x.length - 1 - j] === y[y.length - 1 - j]) j++
+    if (out.length) out.push({ k: ' ', s: '⋯' })
+    for (const s of x.slice(i, x.length - j)) out.push({ k: '-', s })
+    for (const s of y.slice(i, y.length - j)) out.push({ k: '+', s })
+  }
+  if (/Write$/.test(name)) for (const s of String(input?.content ?? '').split(NL)) out.push({ k: '+', s })
+  else if (Array.isArray(input?.edits)) for (const e of input.edits) pair(e.old_string, e.new_string)
+  else pair(input?.old_string, input?.new_string)
+  return out
+}
+
+/** Un cambio de archivo que Claude pide permiso para hacer: «Ver» muestra qué cambia; «Aplicar» o «Descartar». */
+function ChangeCard({ it, session, file }: { it: ChatItem; session: string | null; file: string }) {
+  const [open, setOpen] = useState(false)
+  const lines = useMemo(() => open ? changeLines(it.name || '', it.input) : [], [open, it])
+  const MAX = 160
+  const write = /Write$/.test(it.name || '')
+  return (
+    <div className="perm-card change">
+      <div className="t"><Icon name="edit" size={15} /><div className="grow">Cambio propuesto<div className="t3 mono ellipsis" style={{ fontSize: 12 }}>{write ? 'Archivo completo: ' : ''}{file}</div></div></div>
+      {open && <pre className="chg">{lines.slice(0, MAX).map((l, i) => <div key={i} className={l.k === '+' ? 'add' : l.k === '-' ? 'del' : 'gap'}>{l.k === ' ' ? l.s : `${l.k} ${l.s}`}</div>)}
+        {lines.length > MAX && <div className="gap">… {lines.length - MAX} líneas más</div>}</pre>}
+      {it.status === 'pendiente'
+        ? <div className="row" style={{ gap: 6 }}>
+          <Button size="sm" variant="ghost" icon={open ? 'chevron-up' : 'eye'} onClick={() => setOpen(!open)}>{open ? 'Ocultar' : 'Ver'}</Button>
+          <div className="grow" />
+          <Button size="sm" variant="ghost" onClick={() => call('chat:permission', session, it.id, false)}>Descartar</Button>
+          <Button size="sm" tip="No volver a preguntar por cambios de archivos en este chat" onClick={() => call('chat:permission', session, it.id, true, true)}>Siempre</Button>
+          <Button size="sm" variant="primary" icon="check" onClick={() => call('chat:permission', session, it.id, true)}>Aplicar</Button>
+        </div>
+        : <span className="t3 row" style={{ gap: 5, fontSize: 12 }}><Icon name={it.status === 'rechazado' ? 'x' : 'check'} size={12} />{it.status === 'rechazado' ? 'descartado' : 'aplicado'}
+          <Button size="sm" variant="ghost" icon={open ? 'chevron-up' : 'eye'} onClick={() => setOpen(!open)}>{open ? 'Ocultar' : 'Ver'}</Button></span>}
+    </div>
+  )
+}
 
 /** assistant: respuestas terminadas de la conversación `session` (el editor cuenta las que no se vieron). */
 export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number; session: string | null }

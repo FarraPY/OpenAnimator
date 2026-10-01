@@ -9,6 +9,7 @@ import { call, Clip, fmtTime, on, Timeline as TL, Track } from '../../api'
 import { useApp } from '../../App'
 import { TYPE_COLOR, TYPE_ICON, WAVE, Wave, trackRole } from '../../components/Timeline'
 import { Icon, IconName } from '../../ui/icons'
+import { Slider } from '../../ui/kit'
 import { MenuButton } from './PhoneApp'
 
 const RULER = 28
@@ -194,8 +195,8 @@ export default function PhoneTimeline(p: Props) {
       c.start = +Math.max(0, start).toFixed(3)
     } else if (d.mode === 'l') {
       let delta = snap(o.start + dt, d.pts).v - o.start
-      delta = Math.min(Math.max(delta, -(o.in || 0), -o.start), o.duration - minDur)
-      c.start = +(o.start + delta).toFixed(3); c.in = +((o.in || 0) + delta).toFixed(3); c.duration = +(o.duration - delta).toFixed(3)
+      delta = Math.min(Math.max(delta, -(o.in || 0) / (o.speed || 1), -o.start), o.duration - minDur)
+      c.start = +(o.start + delta).toFixed(3); c.in = +((o.in || 0) + delta * (o.speed || 1)).toFixed(3); c.duration = +(o.duration - delta).toFixed(3)
     } else {
       let dur = Math.max(minDur, snap(o.start + o.duration + dt, d.pts).v - o.start)
       const srcDur = (o as any).srcDur
@@ -244,7 +245,8 @@ export default function PhoneTimeline(p: Props) {
             </div>
             {tl.tracks.map((tr, i) => (
               <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
-                <MenuButton native={false} align="start" className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} label={tr.name} title={tr.name} items={[
+                <div className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }}>
+                <MenuButton native={false} align="start" className="tlp-trk-menu" label={tr.name} title={tr.name} items={[
                   ...(tr.type !== 'scene' ? [{ label: tr.muted ? 'Activar el sonido' : 'Silenciar la pista', icon: tr.muted ? 'volume-2' : 'volume-x', onSelect: () => p.onPatchTrack(tr.id, { muted: !tr.muted }) }] : []),
                   ...(tr.type !== 'audio' ? [{ label: tr.hidden ? 'Mostrar la pista' : 'Ocultar la pista', icon: tr.hidden ? 'eye' : 'eye-off', onSelect: () => p.onPatchTrack(tr.id, { hidden: !tr.hidden }) }] : []),
                   { label: tr.locked ? 'Desbloquear' : 'Bloquear (no se mueve)', icon: tr.locked ? 'unlock' : 'lock', onSelect: () => p.onPatchTrack(tr.id, { locked: !tr.locked }) },
@@ -252,6 +254,11 @@ export default function PhoneTimeline(p: Props) {
                   <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={19} />
                   {row >= 62 && <span className="tlp-trk-name">{tr.name}</span>}
                 </MenuButton>
+                {/* Con el timeline grande (montaje), mostrar u ocultar la pista (el audio: silenciarla) de un toque. */}
+                {row >= 62 && (tr.type === 'audio'
+                  ? <button className={`tlp-trk-eye ${tr.muted ? 'off' : ''}`} aria-label={tr.muted ? 'Activar el sonido' : 'Silenciar la pista'} onClick={() => p.onPatchTrack(tr.id, { muted: !tr.muted })}><Icon name={tr.muted ? 'volume-x' : 'volume-2'} size={15} /></button>
+                  : <button className={`tlp-trk-eye ${tr.hidden ? 'off' : ''}`} aria-label={tr.hidden ? 'Mostrar la pista' : 'Ocultar la pista'} onClick={() => p.onPatchTrack(tr.id, { hidden: !tr.hidden })}><Icon name={tr.hidden ? 'eye-off' : 'eye'} size={15} /></button>)}
+                </div>
                 {tr.clips.map((c) => {
                   const on = p.sel.includes(c.id)
                   // Sólo lo que está en pantalla (más una pantalla de margen a cada lado): con cientos de clips el
@@ -304,8 +311,12 @@ export default function PhoneTimeline(p: Props) {
           <BarBtn icon="plus" label="Agregar" onClick={p.onAdd} />
           <BarBtn icon="scissors" label="Dividir" disabled={!underCursor} onClick={p.onSplit} />
           <BarBtn icon="note" label="Nota" onClick={p.onNote} />
-          <BarBtn icon="zoom-out" label="Alejar" onClick={() => setPps((v) => clamp(v / 1.5, 2, 400))} />
-          <BarBtn icon="zoom-in" label="Acercar" onClick={() => setPps((v) => clamp(v * 1.5, 2, 400))} />
+          {/* Zoom (también se pellizca): la escala es logarítmica, de 2 a 400 píxeles por segundo. */}
+          <div className="tlp-zoom">
+            <button aria-label="Alejar" onClick={() => setPps((v) => clamp(v / 1.5, 2, 400))}><Icon name="zoom-out" size={19} /></button>
+            <Slider value={Math.log(pps)} min={Math.log(2)} max={Math.log(400)} step={0.01} onChange={(v) => setPps(clamp(Math.exp(v), 2, 400))} />
+            <button aria-label="Acercar" onClick={() => setPps((v) => clamp(v * 1.5, 2, 400))}><Icon name="zoom-in" size={19} /></button>
+          </div>
         </>}
       </div>
 

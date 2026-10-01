@@ -85,6 +85,8 @@ final class NativeChrome {
     /// La vista previa del editor (NativePreview): arriba del fondo y debajo del vidrio, así los controles de pantalla
     /// completa son vidrio de iOS sobre el video.
     func embed(_ v: UIView) { view.insertSubview(v, aboveSubview: background) }
+    /// Detrás del fondo: en pantalla (WebKit la dibuja) pero sin que se vea.
+    func embedBehind(_ v: UIView) { view.insertSubview(v, belowSubview: background) }
 
     private func rgb(_ hex: Int) -> CGColor {
         UIColor(red: CGFloat(hex >> 16 & 255) / 255, green: CGFloat(hex >> 8 & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1).cgColor

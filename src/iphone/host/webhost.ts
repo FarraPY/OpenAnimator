@@ -10,8 +10,9 @@
  * (elegir fotos y archivos, compartir, guardar en Fotos, la pantalla encendida) lo hace la app (native.ts); como app
  * web en Safari, OPFS y las APIs del navegador.
  *
- * La captura por GPU de Android (cap.*, snap.*) no existe en un navegador: el backend pasa solo al método compatible
- * (el compositor redibuja cada fotograma).
+ * La captura de la exportación (cap.*) y los fotogramas para Claude (snap.*) los hace la app con vistas web propias
+ * (NativeCapture.swift, NativeSnap.swift); en Safari no hay: el backend pasa solo al método compatible (el compositor
+ * redibuja cada fotograma).
  */
 import type { Host, DeviceInfo, AsyncOpts } from '../../android/host'
 import { WebFS } from './webfs'
@@ -147,6 +148,7 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'cap.available': () => native, 'cap.close': () => { if (native) void nativeCall('cap.close').catch(() => {}); return true },
     // Whisper en el iPhone (ios/OpenAnimator/LocalWhisper.swift, WhisperKit): sólo en la app.
     'whisper.available': () => native,
+    'snap.close': () => { if (native) void nativeCall('snap.close').catch(() => {}); return true },
   }
   /** Una operación de Whisper en Swift; su avance (evento nativo "whisper") va al que la pidió. */
   const whisper = (op: string) => async (a: any, emitEvent: (e: any) => void) => {
@@ -176,6 +178,10 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'audio.peaks': async (a) => Aud.peaks(fs, a.path, a.perSec || 100), 'audio.decode': async (a) => Aud.decodePcm(fs, a),
     'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height, workers: a.workers, prefs: a.prefs }),
     'cap.frame': async (a) => nativeCall('cap.frame', { t: a.t, i: a.i, preview: !!a.preview }), 'cap.stop': async () => nativeCall('cap.stop'),
+    // Los fotogramas para Claude (ios/OpenAnimator/NativeSnap.swift): el compositor lee el proyecto del disco.
+    'snap.open': async (a) => { if (!native) throw unavailable('snap.open'); await fs.flush(); return nativeCall('snap.open', { url: a.url, width: a.width, height: a.height }) },
+    'snap.reload': async () => { await fs.flush(); return nativeCall('snap.reload') },
+    'snap.frame': async (a) => nativeCall('snap.frame', { t: a.t, width: a.width, format: a.format, quality: a.quality, cost: !!a.cost }),
     'enc.frame': async (a) => Enc.frame(a), 'enc.frames': async () => Enc.frames(), 'enc.mix': async (a, ev) => Enc.mix(fs, a, ev), 'enc.finish': async () => Enc.finish(fs),
     ...Object.fromEntries(['status', 'install', 'remove', 'transcribe', 'test'].map((k) => [`whisper.${k}`, whisper(`whisper.${k}`)])),
   }

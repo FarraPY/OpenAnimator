@@ -1,6 +1,7 @@
 /**
  * La pestaña Timeline de la hoja del editor: los ajustes del clip elegido, como un inspector. Clip (inicio, fin,
- * dividir, duplicar, borrar), Animación (entrada y salida gradual) y Audio (volumen, silenciar).
+ * opacidad, velocidad de las escenas, dividir, duplicar, borrar), Animación (entrada y salida gradual) y Audio
+ * (volumen, silenciar).
  */
 import { useEffect, useState } from 'react'
 import { Clip, Timeline as TL, Track } from '../../api'
@@ -15,6 +16,8 @@ const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+
 const clock = (x: number) => { const cs = Math.round(Math.max(0, x) * 100); return `${String(Math.floor(cs / 6000)).padStart(2, '0')}:${((cs % 6000) / 100).toFixed(2).padStart(5, '0')}` }
 /** «1:05.5», «65,5» o «65» → segundos. */
 const parseTime = (s: string) => { const m = s.trim().match(/^(?:(\d+):)?(\d+(?:[.,]\d*)?)$/); return m ? (m[1] ? +m[1] * 60 : 0) + parseFloat(m[2].replace(',', '.')) : null }
+const SPEEDS = [0.5, 0.75, 1, 1.5, 2]
+const times = (x: number) => `${x}×`.replace('.', ',')
 
 type Props = {
   projectId: string; tlId: string; tl: TL; sel: string[]; t: number; fps: number
@@ -44,10 +47,20 @@ export default function PhoneInspector(p: Props) {
   const thumb = tr.type === 'scene' ? sceneThumb(p.projectId, p.tlId, c) : ''
   const patch = (x: Partial<Clip>, commit = true) => p.onPatch(c.id, x, commit)
   const minDur = 1 / p.fps
-  const maxDur = (c as any).srcDur ? (c as any).srcDur - (c.in || 0) : Infinity
+  const maxDur = (c as any).srcDur ? ((c as any).srcDur - (c.in || 0)) / (tr.type === 'scene' ? c.speed || 1 : 1) : Infinity
   const maxFade = Math.max(0.1, Math.min(5, c.duration / 2))
   const vol = c.volume ?? 1
+  const op = c.opacity ?? 1
+  const sp = c.speed || 1
   const tab = part === 'audio' && !audio ? 'clip' : part
+  /** Más rápido = el mismo tramo de la escena en menos tiempo (como en los editores de video): cambia la duración, sin
+   * pisar el clip que sigue en la pista ni pasarse del final de la escena. */
+  const setSpeed = (v: number) => {
+    const next = Math.min(...tr.clips.filter((x) => x.id !== c.id && x.start >= c.start + c.duration - 1e-3).map((x) => x.start), Infinity)
+    const src = (c as any).srcDur ? ((c as any).srcDur - (c.in || 0)) / v : Infinity
+    const duration = +Math.max(minDur, Math.min((c.duration * sp) / v, next - c.start, src)).toFixed(3)
+    patch({ speed: v, duration })
+  }
   return (
     <div className="ins">
       <div className="ins-head">
@@ -65,6 +78,12 @@ export default function PhoneInspector(p: Props) {
           <TimeField label="Inicio" value={c.start} onCommit={(v) => patch({ start: +Math.max(0, v).toFixed(3) })} />
           <TimeField label="Fin" value={c.start + c.duration} onCommit={(v) => patch({ duration: +Math.min(maxDur, Math.max(minDur, v - c.start)).toFixed(3) })} />
         </div>
+        {tr.type !== 'audio' && <div className="ins-rows">
+          <label className="ins-row"><span>Opacidad</span><b className="tabnum">{Math.round(op * 100)} %</b>
+            <Slider value={op} min={0} max={1} step={0.01} onChange={(v) => patch({ opacity: +v.toFixed(2) }, false)} onCommit={() => patch({}, true)} /></label>
+          {tr.type === 'scene' && <div className="ins-row"><span>Velocidad</span><b className="tabnum">{times(sp)}</b>
+            <div className="ins-seg">{SPEEDS.map((v) => <button key={v} className={Math.abs(sp - v) < 1e-3 ? 'on' : ''} onClick={() => setSpeed(v)}>{times(v)}</button>)}</div></div>}
+        </div>}
         <div className="ins-acts">
           <button className="ins-btn" onClick={p.onSplit} disabled={!(p.t > c.start + 0.02 && p.t < c.start + c.duration - 0.02)}><Icon name="scissors" size={17} />Dividir</button>
           <button className="ins-btn" onClick={p.onDuplicate}><Icon name="copy" size={17} />Duplicar</button>

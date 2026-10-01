@@ -313,7 +313,10 @@ html.phone .ed-sheet .msg-user { background: var(--accent); color: #fff; border-
 .tlp-track.alt { background: rgba(170, 190, 255, .02); }
 .tlp-track.off .tlp-clip { opacity: .35; }
 .tlp-trk, .tlp-corner { position: sticky; left: 0; top: 0; z-index: 2; width: 48px; height: 100%; margin: 0; border: 0; border-radius: 0; background: #0a1328; border-right: 1px solid var(--line-2); }
-.tlp-trk { padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: rgba(235, 240, 255, .86); }
+.tlp-trk { padding: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: rgba(235, 240, 255, .86); }
+.tlp-trk-menu { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 0; border: 0; background: none; color: inherit; }
+.tlp-trk-eye { width: 32px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 11px; background: rgba(255, 255, 255, .08); color: var(--t1); }
+.tlp-trk-eye.off { background: none; color: var(--t3); }
 .tlp-trk-name { max-width: 44px; font-size: 9.5px; font-weight: 600; color: var(--t3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tlp-corner { z-index: 3; }
 .tlp-clip { position: absolute; top: 4px; height: calc(var(--row, 54px) - 8px); border-radius: 9px; background: color-mix(in srgb, var(--c) 22%, #0b1428); border: 1.5px solid color-mix(in srgb, var(--c) 75%, transparent);
@@ -347,6 +350,9 @@ html.phone .ed-sheet .msg-user { background: var(--accent); color: #fff; border-
 .tlp-bar { flex: none; height: 52px; margin: 6px 12px 10px; display: flex; align-items: center; justify-content: space-around; padding: 0 6px; border-radius: 26px; }
 .tlp-btn { flex: 1; height: 46px; max-width: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: 22px; background: none; color: var(--t1); font-size: 11.5px; font-weight: 500; }
 .tlp-btn:disabled { opacity: .3; } .tlp-btn.danger { color: var(--err); }
+.tlp-zoom { flex: 2; min-width: 0; display: flex; align-items: center; gap: 2px; }
+.tlp-zoom button { flex: none; width: 34px; height: 40px; display: grid; place-items: center; border: 0; background: none; color: var(--t1); }
+.tlp-zoom .slider { flex: 1; min-width: 0; }
 
 /* ── medios (pestaña de la hoja) ─────────────────────────────────────────── */
 .med { flex: 1; min-height: 0; display: flex; flex-direction: column; }

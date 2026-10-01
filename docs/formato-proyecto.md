@@ -57,6 +57,8 @@ se pueda editar a mano, versionar con git o modificar desde Claude.
 | `clip.duration` | cuánto dura en el timeline |
 | `clip.in` | desde qué segundo del archivo/escena se reproduce (recorte inicial) |
 | `clip.fadeIn / fadeOut` | fundidos en segundos (opacidad en visuales, volumen en audio) |
+| `clip.opacity` | opacidad del clip visual (0-1, por defecto 1), multiplica a los fundidos |
+| `clip.speed` | sólo escenas: velocidad del tiempo interno (1 = normal); videos y audio van siempre a 1 |
 | `clip.fit` | encuadre de video/imagen: `contain`, `cover`, `fill` |
 | `notes` | notas del usuario ancladas al tiempo, para la IA (`oa_resolver_nota` las borra) |
 

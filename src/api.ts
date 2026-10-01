@@ -1,7 +1,9 @@
 // Tipos compartidos y acceso al proceso principal.
 import { isAndroid, projectUrl } from './platform'
 
-export type Clip = { id: string; src: string; start: number; duration: number; in?: number; volume?: number; muted?: boolean; fadeIn?: number; fadeOut?: number; fit?: string; name?: string }
+export type Clip = { id: string; src: string; start: number; duration: number; in?: number; volume?: number; muted?: boolean; fadeIn?: number; fadeOut?: number; fit?: string; name?: string
+  /** Opacidad del clip visual (0-1); speed: sólo escenas, velocidad de su tiempo interno (compositor.js). */
+  opacity?: number; speed?: number }
 export type TrackType = 'scene' | 'video' | 'audio'
 export type Track = { id: string; name: string; type: TrackType; clips: Clip[]; muted?: boolean; solo?: boolean; hidden?: boolean; volume?: number; locked?: boolean }
 export type Note = { id: string; t: number; text: string }

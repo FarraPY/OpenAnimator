@@ -251,10 +251,10 @@ export default function Timeline(p: Props) {
       let start = o.start + dt
       const a = snap(start, d.pts); start = a.v; if (a.snapped) sx = a.v
       let delta = start - o.start
-      delta = Math.max(delta, -(o.in || 0))
+      delta = Math.max(delta, -(o.in || 0) / (o.speed || 1))
       delta = Math.min(delta, o.duration - minDur)
       if (o.start + delta < 0) delta = -o.start
-      c.start = o.start + delta; c.in = (o.in || 0) + delta; c.duration = o.duration - delta
+      c.start = o.start + delta; c.in = (o.in || 0) + delta * (o.speed || 1); c.duration = o.duration - delta
     } else {
       let end = o.start + o.duration + dt
       const a = snap(end, d.pts); end = a.v; if (a.snapped) sx = a.v

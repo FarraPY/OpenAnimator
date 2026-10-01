@@ -212,7 +212,8 @@ let snap: SnapRenderer | null = null
 
 /** El de la GPU para projectId|tlId, o null si no se puede (va el compositor oculto). */
 async function getSnap(projectId: string, tlId: string): Promise<SnapRenderer | null> {
-  if (host().kind === 'web') return null // el iPhone no tiene la captura de Android (Snap.java)
+  // En el iPhone, la vista de NativeSnap.swift (en la app; en Safari no hay: va el compositor oculto).
+  if (host().kind === 'web' && !host().call<boolean>('cap.available')) return null
   // Con el tamaño: la pantalla virtual se abre a la medida del proyecto (si cambia, se abre otra).
   const p = readProject(projectId)
   const key = `${projectId}|${tlId}|${p.width}x${p.height}`

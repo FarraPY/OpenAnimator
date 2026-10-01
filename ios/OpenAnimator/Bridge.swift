@@ -103,11 +103,19 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             controller?.setFullScreen(a["on"] as? Bool ?? false, landscape: a["landscape"] as? Bool ?? false)
             replyHandler(true, nil)
         case "cap.start":
+            controller?.snap.close() // la memoria, para la exportación (como en Android)
             if let c = controller?.capture { c.start(a, replyHandler) } else { replyHandler(nil, "Sin captura") }
         case "cap.frame":
             if let c = controller?.capture { c.frame(a, replyHandler) } else { replyHandler(nil, "Sin captura") }
         case "cap.stop": replyHandler(controller?.capture.stop() ?? [:], nil)
         case "cap.close": controller?.capture.close(); replyHandler(true, nil)
+        case "snap.open":
+            if let s = controller?.snap { s.open(a, replyHandler) } else { replyHandler(nil, "Sin fotogramas") }
+        case "snap.reload":
+            if let s = controller?.snap { s.reload(replyHandler) } else { replyHandler(nil, "Sin fotogramas") }
+        case "snap.frame":
+            if let s = controller?.snap { s.frame(a, replyHandler) } else { replyHandler(nil, "Sin fotogramas") }
+        case "snap.close": controller?.snap.close(); replyHandler(true, nil)
         case "preview.open":
             controller?.preview.open(a["url"] as? String ?? "", width: (a["width"] as? NSNumber)?.intValue ?? 1920)
             replyHandler(true, nil)

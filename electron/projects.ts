@@ -14,7 +14,7 @@ import { APP_DIR, DATA_DIR, PROJECTS_DIR } from './paths'
 
 export type Clip = {
   id: string; src: string; start: number; duration: number; in?: number
-  volume?: number; muted?: boolean; fadeIn?: number; fadeOut?: number; fit?: string; name?: string
+  volume?: number; muted?: boolean; fadeIn?: number; fadeOut?: number; fit?: string; name?: string; opacity?: number; speed?: number
 }
 export type Track = {
   id: string; name: string; type: 'scene' | 'video' | 'audio'

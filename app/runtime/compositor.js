@@ -159,7 +159,17 @@
     var o = 1, lt = t - c.start;
     if (c.fadeIn > 0 && lt < c.fadeIn) o = Math.min(o, lt / c.fadeIn);
     if (c.fadeOut > 0 && c.duration - lt < c.fadeOut) o = Math.min(o, (c.duration - lt) / c.fadeOut);
-    return Math.max(0, Math.min(1, o));
+    // opacity: la del clip (inspector), por encima de los fundidos.
+    var base = typeof c.opacity === 'number' ? Math.max(0, Math.min(1, c.opacity)) : 1;
+    return Math.max(0, Math.min(1, o)) * base;
+  }
+  /**
+   * El tiempo interno de un clip en t. speed sólo en las escenas HTML (son función del tiempo): 2 = el doble de rápido.
+   * Los videos y el audio van siempre a velocidad normal (su sonido se mezcla aparte, en cada plataforma).
+   */
+  function sceneLocal(c, t) {
+    var sp = c.speed > 0 ? c.speed : 1;
+    return (c.in || 0) + (t - c.start) * sp;
   }
 
   function ensureLayer(track, clip, z) {
@@ -252,7 +262,7 @@
         keep.add(c.id);
         var L = ensureLayer(track, c, z);
         lastUse.set(c.id, now);
-        var local = (c.in || 0) + (t - c.start);
+        var local = L.kind === 'scene' ? sceneLocal(c, t) : (c.in || 0) + (t - c.start);
         jobs.push(L.ready.then(async function () {
           if (seq !== renderSeq && !opts.force) return;
           if (L.el.style.display !== 'block') {
@@ -366,8 +376,7 @@
       if (!L || L.kind !== 'scene') continue;
       var rt = L.el.contentWindow && L.el.contentWindow.__oaRuntime;
       if (!rt) continue;
-      var local = (c.in || 0) + (t - c.start);
-      var r = await rt.audit(local);
+      var r = await rt.audit(sceneLocal(c, t));
       r.issues.forEach(function (is) { is.clip = c.src; is.t = +t.toFixed(2); });
       out = out.concat(r.issues);
     }
@@ -484,7 +493,7 @@
       if (!L || L.kind !== 'scene') return;
       try {
         var w = L.el.contentWindow, doc = L.el.contentDocument;
-        if (w && w.__oaRuntime && doc && doc.documentElement) out.push({ rt: w.__oaRuntime, doc: doc, src: L.src, loadMs: L.loadMs || 0, local: (c.in || 0) + (t - c.start) });
+        if (w && w.__oaRuntime && doc && doc.documentElement) out.push({ rt: w.__oaRuntime, doc: doc, src: L.src, loadMs: L.loadMs || 0, local: sceneLocal(c, t), speed: c.speed > 0 ? c.speed : 1 });
       } catch (e) { /* otro origen */ }
     });
     return out;
@@ -545,7 +554,7 @@
       var steps = [];
       for (var i = 1; i <= 3; i++) {
         var s = performance.now();
-        for (var k = 0; k < scenes.length; k++) await scenes[k].rt.renderAt(scenes[k].local + i / fps, { fps: fps, skipPaint: true });
+        for (var k = 0; k < scenes.length; k++) await scenes[k].rt.renderAt(scenes[k].local + i * scenes[k].speed / fps, { fps: fps, skipPaint: true });
         var one = { js: performance.now() - s, layout: flushLayout(scenes), gpu: -1 };
         // Lo que tarda la GPU en el WebGL de ese paso (la página lo encarga en el JS y sigue sin esperarlo).
         for (k = 0; k < scenes.length; k++) if (scenes[k].rt.gpuWait) one.gpu = Math.max(one.gpu, scenes[k].rt.gpuWait());

@@ -24,9 +24,16 @@ export type MenuEntry =
   | { label: string; icon?: string; desc?: string; sub: MenuEntry[] }
   | { sep: true }
 
-const menus = new Map<string, { title?: string; items: MenuEntry[] }>()
+const menus = new Map<string, { title?: string; items: MenuEntry[]; sig?: string }>()
 let kick = () => {}
-export function registerMenu(key: string, title: string | undefined, items: MenuEntry[]) { menus.set(key, { title, items }); kick() }
+/** Cada pantalla vuelve a registrar sus menús al dibujarse (con las funciones nuevas); sólo si cambió lo que se ve hay
+ * que volver a mandarlos (reproduciendo, el editor se dibuja en cada cuadro). */
+const menuSig = (title: string | undefined, items: MenuEntry[]) => JSON.stringify([title, items], (_k, v) => typeof v === 'function' ? undefined : v)
+export function registerMenu(key: string, title: string | undefined, items: MenuEntry[]) {
+  const prev = menus.get(key), sig = menuSig(title, items)
+  menus.set(key, { title, items, sig })
+  if (prev?.sig !== sig) kick()
+}
 export function unregisterMenu(key: string) { menus.delete(key); kick() }
 /** Medir y mandar ya (no en el próximo cuadro): lo que se mueve con el dedo, para que el vidrio no quede atrás. */
 export let syncGlassNow = () => {}
@@ -142,7 +149,8 @@ export function installNativeGlass() {
   const moving = () => { until = performance.now() + 800; later() }
   new MutationObserver(later).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'style', 'data-glass', 'data-menu', 'hidden'] })
   addEventListener('resize', later)
-  addEventListener('scroll', later, { capture: true, passive: true })
+  // Un desplazamiento que no mueve vidrio ni menús (el timeline, que avanza en cada cuadro al reproducir) no mide nada.
+  addEventListener('scroll', (e) => { const el = e.target; if (!(el instanceof Element) || el.querySelector('[data-glass], [data-menu], .ph-top .tap, .composer')) later() }, { capture: true, passive: true })
   window.visualViewport?.addEventListener('resize', moving)
   for (const e of ['transitionrun', 'animationstart']) addEventListener(e, moving, true)
   for (const e of ['transitionend', 'transitioncancel', 'animationend']) addEventListener(e, later, true)
