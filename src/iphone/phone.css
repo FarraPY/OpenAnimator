@@ -192,8 +192,12 @@ html.kb .sheet-foot { padding-bottom: 12px; }
 html.kb .ed-stage { --sh: calc(var(--vvh) * .2); }
 .ed-stage .stage-wrap { position: absolute; inset: 0; }
 .ed-tapzone { position: absolute; inset: 0; border: 0; background: none; padding: 0; }
-/* Pantalla completa: el video de borde a borde sobre negro y, encima, los controles (vidrio de CSS: el de iOS quedaría
-   debajo del video), que se esconden solos mientras se reproduce. */
+/* En la app el video es una vista de iOS debajo de la página (NativePreview.swift, Stage.tsx): en su lugar la página
+   queda transparente y el negro de la pantalla completa lo pone iOS. */
+.stage-native { position: absolute; }
+html.native-ui .ed-stage, html.native-ui .ed-stage .stage-wrap, html.native-ui .ed.full { background: transparent; }
+/* Pantalla completa: el video de borde a borde sobre negro y, encima, los controles (en la app, vidrio de iOS sobre el
+   video; en Safari, de CSS), que se esconden solos mientras se reproduce. */
 .ed.full { position: fixed; inset: 0; z-index: 400; background: #000; }
 .ed.full .ed-media { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .ed.full .ed-player { padding: 0; }

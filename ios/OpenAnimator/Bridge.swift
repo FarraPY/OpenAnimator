@@ -99,6 +99,14 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "screen.full":
             controller?.setFullScreen(a["on"] as? Bool ?? false, landscape: a["landscape"] as? Bool ?? false)
             replyHandler(true, nil)
+        case "preview.open":
+            controller?.preview.open(a["url"] as? String ?? "", width: (a["width"] as? NSNumber)?.intValue ?? 1920)
+            replyHandler(true, nil)
+        case "preview.close": controller?.preview.close(); replyHandler(true, nil)
+        case "preview.post":
+            if let m = a["m"] { controller?.preview.post(m) }
+            replyHandler(true, nil)
+        case "preview.layout": controller?.preview.layout(a); replyHandler(true, nil)
         case "menu.layout":
             controller?.menus.layout(a["items"] as? [[String: Any]] ?? [])
             replyHandler(true, nil)

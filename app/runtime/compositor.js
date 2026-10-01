@@ -53,7 +53,14 @@
     return base + src.split('/').map(encodeURIComponent).join('/');
   }
   function isImage(src) { return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(src); }
-  function post(msg, transfer) { if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'oa-compositor' }, msg), '*', transfer || []); }
+  // En la app del iPhone la vista previa es una vista web propia (ios/OpenAnimator/NativePreview.swift, native=1): no hay
+  // página de arriba y lo que se manda va por el puente de esa vista.
+  var nativePreview = window.parent === window && qs.get('native') === '1' && window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.oaPreview;
+  function post(msg, transfer) {
+    var m = Object.assign({ source: 'oa-compositor' }, msg);
+    if (window.parent !== window) window.parent.postMessage(m, '*', transfer || []);
+    else if (nativePreview) try { nativePreview.postMessage(m); } catch (e) { /* algo que no se puede copiar (una ImageBitmap) */ }
+  }
   post({ type: 'alive', mode: mode }); // el script corrió (para diagnosticar un compositor que no responde)
 
   async function loadJSON(path) {

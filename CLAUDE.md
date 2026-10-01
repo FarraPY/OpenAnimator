@@ -144,6 +144,30 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   y, reproduciendo, si el reloj no avanza lo rehace y sigue (hasta 2 veces por ▶). La isla dinámica muestra
   `navigator.mediaSession.metadata` (nombre del proyecto e `icon.png`, que build-iphone.mjs copia también a ios/www;
   sin eso, un cuadrado gris) y sus botones van a `togglePlay`.
+- Vista previa del editor en el iPhone: NO va en un iframe de la página. WebKit dibuja lo de adentro de un contenedor con
+  `transform: scale()` a tamaño completo × la densidad (×3): sólo cuenta la escala de página (GraphicsLayerCA, bug 27684
+  de WebKit); el video de 1920×1080 se dibujaba a 5760×3240 y la escena CSS 3D de «Prueba de render» pasaba los ~2 GB
+  del motor web (JetsamEvent: per-process-limit) y se caía toda la app. Va en su propia vista web (`NativePreview.swift`,
+  entre el fondo y el vidrio de NativeChrome; la página deja el hueco `.stage-native` en Stage.tsx, glassUI.ts lo ubica
+  con `preview.layout` y los mensajes del compositor van por `preview.post` / evento `preview`; compositor.js con
+  `native=1` contesta por `messageHandlers.oaPreview`). El compositor tiene viewport del ancho del video y escala de
+  página = ancho de la vista ÷ ancho del video (iOS no aleja menos de 0,1: más chico se achica con una transformación;
+  mientras la hoja se mueve también, y quieta 0,25 s se redibuja a la escala nueva). Las escenas ven devicePixelRatio 1
+  (como al exportar) y sin el agrandado de letra de iOS. Medido en el iPhone 17 Pro Max: inicio 616 → ~180 MB, SVG
+  ~1,3 GB → ~350 MB, CSS 3D más de 2 GB (se caía) → ~470 MB. Es otro proceso: si iOS lo cierra se rehace sólo el video
+  (tres veces en 30 s: se deja hasta que se mueva el cursor). Los controles de pantalla completa son vidrio de iOS sobre
+  el video. Pendiente: los fotogramas para Claude y la exportación del iPhone siguen con compositores en la página.
+- iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
+  go-ios (`go-ios/ios.exe`) y pymobiledevice3 (venv `pmd3/`). Pasos: `ios tunnel start --userspace` (sin administrador);
+  montar la imagen de desarrollador con `pymobiledevice3 mounter mount-personalized <dmg> <trustcache> <BuildManifest>`
+  (la de `ios image auto --basedir=go-ios/devimages`): go-ios no puede pedir la firma porque gs.apple.com usa la raíz de
+  Apple que Windows no trae, pymobiledevice3 la pide por HTTP como las herramientas de Apple; WebDriverAgent de Appium
+  (WebDriverAgentRunner-Runner.zip → IPA, firmado con Feather; anda aun con certificado de distribución):
+  `ios runwda --bundleid=com.facebook.WebDriverAgentRunner.xctrunner --testrunnerbundleid=… --xctestconfig=WebDriverAgentRunner.xctest`
+  y `ios forward 8100 8100` → `scripts/iphone-wda.py` (capturas, toques, deslizar, escribir, abrir apps). La interfaz se
+  maneja con `ios webinspector eval 1 "<js>"` (no espera promesas: guardar en una global y leerla después; texto con
+  acentos, en base64), `window.oa.call(canal, …)` llega al backend. Memoria por proceso en vivo:
+  `.tools/pmd3/Scripts/python.exe scripts/iphone-mem.py`; informes de cierres: `ios crash ls` / `crash cp "JetsamEvent*"`.
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`

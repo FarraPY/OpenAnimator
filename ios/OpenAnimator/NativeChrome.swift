@@ -4,7 +4,8 @@ import UIKit
 /// (azul noche, con un resplandor arriba) y, donde marca `data-glass` (botones, barras, la hoja de abajo), dice dónde
 /// va cada pieza (glass.layout); acá se dibuja el vidrio de iOS en ese lugar y la página dibuja encima sus íconos y
 /// textos. Lo que la página pone por arriba (una ventana, un menú) tapa el vidrio como a cualquier otra cosa.
-/// Antes de iOS 26 sólo queda el fondo y la página dibuja su vidrio con CSS.
+/// Antes de iOS 26 sólo queda el fondo y la página dibuja su vidrio con CSS. Entre el fondo y el vidrio va la vista previa
+/// del editor (NativePreview, embed).
 final class NativeChrome {
     let view = UIView()
     private let background = UIView()
@@ -80,6 +81,10 @@ final class NativeChrome {
     }
 
     func clear() { _ = layout([]) }
+
+    /// La vista previa del editor (NativePreview): arriba del fondo y debajo del vidrio, así los controles de pantalla
+    /// completa son vidrio de iOS sobre el video.
+    func embed(_ v: UIView) { view.insertSubview(v, aboveSubview: background) }
 
     private func rgb(_ hex: Int) -> CGColor {
         UIColor(red: CGFloat(hex >> 16 & 255) / 255, green: CGFloat(hex >> 8 & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1).cgColor

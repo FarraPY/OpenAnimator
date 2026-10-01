@@ -509,14 +509,14 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
 
       {full && <div className={`fs ${chrome ? '' : 'hide'}`} onPointerDown={() => setKick((k) => k + 1)}>
         <div className="fs-top">
-          <button className="fs-btn" aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="chevron-left" size={22} /></button>
-          <MenuButton className="fs-title" align="end" label="Proyecto" title={project.name} items={projectItems}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
-          <MenuButton className="fs-btn" label="Reproducción" title="Reproducción" items={[
+          <button className="fs-btn" data-glass aria-label="Salir de pantalla completa" onClick={() => setFull(false)}><Icon name="chevron-left" size={22} /></button>
+          <MenuButton className="fs-title" glass align="end" label="Proyecto" title={project.name} items={projectItems}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
+          <MenuButton className="fs-btn" glass label="Reproducción" title="Reproducción" items={[
             { label: 'Velocidad', icon: 'gauge', desc: `${rate}×`.replace('.', ','), sub: [0.5, 1, 1.5, 2].map((r) => ({ label: `${r}×`.replace('.', ','), checked: rate === r, onSelect: () => changeRate(r) })) },
             { label: 'Repetir', icon: 'repeat', checked: loop, onSelect: () => setLoop(!loop) },
           ]}><Icon name="more" size={20} /></MenuButton>
         </div>
-        <div className="fs-panel">
+        <div className="fs-panel" data-glass>
           <div className="fs-line">
             <span className="fs-time tabnum"><b>{clock(t, false)}</b> / {clock(tl.duration, false)}</span>
             <input className="fs-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} style={{ ['--pct' as any]: `${(t / (tl.duration || 1)) * 100}%` }} />

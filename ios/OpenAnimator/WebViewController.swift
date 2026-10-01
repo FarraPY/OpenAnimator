@@ -10,6 +10,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     /// Los menús de iOS que salen de los botones de la página (los ubica la página: menu.layout).
     let menus = NativeMenus()
     private let schemes = SchemeHandler()
+    /// La vista previa del editor, en su propia vista web (la ubica la página: preview.*).
+    private(set) lazy var preview = NativePreview(schemes: schemes)
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
     /// Pruebas en el simulador: -OATest e2e corre src/iphone/test/e2e.ts; -OADev '{"env":…}' usa una API de mentira.
@@ -56,6 +58,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         webView = web
         // Abajo el fondo y el vidrio; arriba la página, transparente.
         let root = UIView()
+        chrome.embed(preview.view)
         root.addSubview(chrome.view)
         web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         root.addSubview(web)
@@ -65,6 +68,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         chrome.resize(view.bounds)
+        preview.view.frame = view.bounds
         webView.frame = view.bounds
     }
 
@@ -72,6 +76,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         super.viewDidLoad()
         menus.host = view
         menus.onSelect = { [weak self] key, index in self?.emit("menu", ["key": key, "index": index]) }
+        preview.onMessage = { [weak self] m in self?.emit("preview", m) }
         load()
         let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgePan(_:)))
         edge.edges = .left
@@ -91,6 +96,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private func load(recovered: Bool = false, crashed: Bool = false) {
         chrome.clear()
         menus.layout([])
+        preview.close()
         let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : crashed ? "?crashed=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }
@@ -161,7 +167,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     /// Lo mismo, con el motivo (método privado de WebKit: si está, WebKit llama a éste en vez del de arriba).
     @objc(_webView:webContentProcessDidTerminateWithReason:)
     func webContentProcessDidTerminate(_ webView: WKWebView, reason: Int) {
-        let why = [0: "se pasó del límite de memoria", 1: "se pasó del límite de procesador", 2: "lo pidió la app", 3: "se colgó"][reason]
+        // Un cierre por memoria de iOS (jetsam) también llega como 3: WebKit sólo ve que el proceso se cortó.
+        let why = [0: "se pasó del límite de memoria", 1: "se pasó del límite de procesador", 2: "lo pidió la app", 3: "se colgó o se quedó sin memoria"][reason]
         processTerminated(why ?? "motivo " + String(reason))
     }
 

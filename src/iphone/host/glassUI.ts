@@ -11,6 +11,9 @@
  *
  * Menús de iOS. Los botones con `data-menu` (MenuButton, en PhoneApp) tienen encima un botón invisible de iOS con un
  * UIMenu: sale del botón con su vidrio y su animación; lo elegido vuelve como evento `menu`.
+ *
+ * La vista previa del editor (NativePreview.swift, ver Stage.tsx) va debajo de la página, en el hueco `.stage-native`:
+ * acá se le dice dónde (preview.layout), con las esquinas del video y cuánto se ve; en pantalla completa, sobre negro.
  */
 import { host } from '../../android/host'
 import { isNative, nativeCall } from './native'
@@ -65,7 +68,12 @@ export function installNativeGlass() {
   const actions = new Map<string, Array<() => void>>()
   host().onEvent('menu', (d: { key: string; index: number }) => actions.get(d.key)?.[d.index]?.())
 
-  let seq = 0, raf = 0, last = '', lastMenus = '', until = 0
+  let seq = 0, raf = 0, last = '', lastMenus = '', lastPreview = '', until = 0
+  const opacity = (el: HTMLElement) => {
+    let alpha = 1
+    for (let n: HTMLElement | null = el; n && n !== document.body && alpha > 0.01; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity) || 0
+    return alpha
+  }
   const sync = () => {
     raf = 0
     const items: object[] = []
@@ -80,8 +88,7 @@ export function installNativeGlass() {
       if (!id) { id = 'g' + ++seq; ids.set(el, id) }
       const rad = cs.borderTopLeftRadius
       const kind = el.dataset.glass
-      let alpha = 1
-      for (let n: HTMLElement | null = el; n && n !== document.body && alpha > 0.01; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity) || 0
+      const alpha = opacity(el)
       if (alpha < 0.02) continue
       items.push({
         id, x: r.left, y: r.top, w: r.width, h: r.height, alpha: Math.round(alpha * 100) / 100,
@@ -90,6 +97,17 @@ export function installNativeGlass() {
         clear: kind === 'clear',
       })
     }
+    const pv = document.querySelector<HTMLElement>('.stage-native')
+    let preview: Record<string, unknown> = { hidden: true }
+    if (pv) {
+      const r = pv.getBoundingClientRect(), alpha = opacity(pv), stage = pv.closest<HTMLElement>('.ed-stage')
+      if (r.width >= 1 && r.height >= 1 && alpha >= 0.02 && getComputedStyle(pv).visibility !== 'hidden') {
+        preview = { x: r.left, y: r.top, w: r.width, h: r.height, alpha: Math.round(alpha * 100) / 100,
+          r: stage ? parseFloat(getComputedStyle(stage).borderTopLeftRadius) || 0 : 0, black: !!pv.closest('.ed.full') }
+      }
+    }
+    const pmsg = JSON.stringify(preview)
+    if (pmsg !== lastPreview) { lastPreview = pmsg; nativeCall('preview.layout', preview).catch(() => {}) }
     const msg = JSON.stringify(items)
     if (msg !== last) {
       last = msg
