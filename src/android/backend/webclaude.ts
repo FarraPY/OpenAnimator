@@ -353,10 +353,10 @@ class WebChat extends ClaudeStreamSession {
       }
     } else if (m.type === 'stderr') {
       this.errTail = (this.errTail + m.data).slice(-3000)
-      if (dev().env) console.warn('[claude stderr]', m.data)
+      console.warn('[claude]', String(m.data).trim().slice(0, 3000)) // al registro de la app
     }
     else if (m.type === 'exit') this.stop(w, m.code)
-    else if (m.type === 'crash') { this.errTail += '\n' + m.error; this.stop(w, 1) }
+    else if (m.type === 'crash') { this.errTail += '\n' + m.error; console.error('[claude] se cerró:', m.error); this.stop(w, 1) }
   }
 
   private stop(w: Worker | null, code: number | null) {

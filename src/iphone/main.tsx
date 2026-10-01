@@ -11,6 +11,7 @@ import { installBackend } from '../android/backend'
 import { installPressFeedback } from '../android/ui/press'
 import { createWebHost } from './host/webhost'
 import { isNative } from './host/native'
+import { appLog, installAppLog } from './host/applog'
 import '../styles.css'
 import './phone.css'
 
@@ -19,6 +20,7 @@ const BASE = location.pathname.replace(/[^/]*$/, '')
 
 function fatal(e: unknown) {
   console.error('[arranque]', e)
+  appLog('ERROR', 'arranque', String((e as any)?.stack || e))
   const root = document.getElementById('root')!
   root.innerHTML = ''
   const box = document.createElement('div')
@@ -62,10 +64,12 @@ async function boot() {
     sw.addEventListener('controllerchange', claim)
   }
   installBackend('iphone')
+  installAppLog((ch, cb) => (window as any).oa.on(ch, cb))
   installPressFeedback()
   // La interfaz se importa después: algunos módulos miran la plataforma al cargarse (modelos de Claude…).
   const { default: PhoneApp } = await import('./ui/PhoneApp')
   createRoot(document.getElementById('root')!).render(<PhoneApp />)
+  appLog('INFO', 'app', `Interfaz lista en ${Math.round(performance.now())} ms${location.search.includes('recovered') ? ' (después de un cierre del motor web)' : ''}`)
   // Prueba de punta a punta en el simulador (la app la abre con -OATest e2e).
   if ((window as any).__oaTest === 'e2e') void import('./test/e2e').then((m) => m.runE2E())
 }

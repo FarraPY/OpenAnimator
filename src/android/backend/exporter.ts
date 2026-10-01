@@ -74,7 +74,9 @@ type Diag = {
     stateStart?: DeviceState; stateEnd?: DeviceState
   }
   calls?: { n: number; ms: number; max: number; gap: number; gapMax: number; first?: number }
-  compat?: { n: number; ms: number }
+  compat?: { n: number; ms: number; max?: number }
+  /** iPhone: lo que se esperó a que el codificador terminara el fotograma anterior (si es mucho, el cuello es él). */
+  encWait?: number
   encoderStalls?: number
   /** iPhone: por qué no anduvo WebCodecs (se exportó con AVFoundation). */
   fallback?: string
@@ -267,7 +269,8 @@ class Export {
     const st = (x?: DeviceState) => (x ? `temperatura ${x.thermal != null ? THERMAL[x.thermal] || x.thermal : '—'} · ahorro de energía ${x.powerSave ? 'sí' : 'no'} · memoria libre ${x.availMB ?? '—'} MB${x.lowMemory ? ' (poca)' : ''} · pantalla ${x.screenHz ? Math.round(x.screenHz) : '—'} Hz` : '—')
     if (c?.stateStart || c?.stateEnd) lines.push(`Equipo al empezar: ${st(c.stateStart)}; al terminar: ${st(c.stateEnd)}`)
     if (d.calls && d.calls.n) lines.push(`Desde la interfaz: ${d.calls.n} llamadas, ${msf(d.calls.ms / d.calls.n)} cada una (máx ${msf(d.calls.max)}; la primera ${msf(d.calls.first)}) · entre llamadas ${msf(d.calls.gap / d.calls.n)} (máx ${msf(d.calls.gapMax)})`)
-    if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n})`)
+    if (d.compat && d.compat.n) lines.push(`Método compatible: ${msf(d.compat.ms / d.compat.n)} por fotograma (${d.compat.n}; el más lento ${msf(d.compat.max)})`)
+    if (d.encWait != null) lines.push(`Esperando al codificador: ${secs(d.encWait)} en total (si se acerca a «fotogramas», el que frena es el codificador)`)
     if (d.encoderStalls) lines.push(`El codificador de video se trabó ${d.encoderStalls} veces (se vació y siguió)`)
     if (d.fallback) lines.push(`WebCodecs no anduvo (${d.fallback}): se exportó con AVFoundation`)
     if (d.audio) {
@@ -401,18 +404,24 @@ class Export {
       } else if (bitmaps) {
         const tf = performance.now()
         const bmp = await this.renderer!.bitmap(t, W, H)
-        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + performance.now() - tf }
+        const dt = performance.now() - tf
+        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + dt, max: Math.max(d.compat?.max || 0, dt) }
         this.check()
         if (performance.now() - lastPreview > 1200) shot = previewJpeg(bmp)
+        const tw = performance.now()
         if (inflight) await inflight
+        d.encWait = (d.encWait || 0) + performance.now() - tw
         inflight = host().callAsync('enc.frame', { bitmap: bmp })
         inflight.catch(() => {})
       } else {
         const tf = performance.now()
         const f = await this.renderer!.frame(t, W, H, 'jpeg', quality)
-        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + performance.now() - tf }
+        const dt = performance.now() - tf
+        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + dt, max: Math.max(d.compat?.max || 0, dt) }
         this.check()
+        const tw = performance.now()
         if (inflight) await inflight
+        if (host().kind === 'web') d.encWait = (d.encWait || 0) + performance.now() - tw
         inflight = host().callAsync('enc.frame', { data: f.data })
         inflight.catch(() => {})
         shot = f.data

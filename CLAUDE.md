@@ -117,6 +117,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
   WebCrypto), los Workers de módulos cargan desde el esquema, `fetch` con `Range` y `PUT` con Uint8Array (un Blob llega
   sin cuerpo).
+- Registro (Ajustes › Depuración): `AppLog.swift` escribe `Documentos/logs/app.log` (rota a los 4 MB; sin claves ni
+  códigos de OAuth) con lo que manda la página (`src/iphone/host/applog.ts`: warn/error de la consola —todo con
+  «Registro detallado»—, errores sin atrapar, Claude: pedidos, fin de turno, herramientas que fallan, stderr del
+  Worker; la exportación: velocidad cada 2 s y el informe, con «Esperando al codificador») y lo del sistema (memoria,
+  cierre del motor web, segundo plano, temperatura, ahorro de batería). «En vivo»: POST cada 1 s a
+  `node scripts/registro-remoto.mjs` en la misma wifi (clave en .tools/registro-remoto.key → registro-iphone.log).
 - Trampas del WebKit de iOS 26: no entiende `using`/`await using` (Claude Code los usa) → `lowerUsing` (transform.ts, al
   instalar; envuelve TODO el bloque para no cambiar el alcance; prueba: `scripts/check-lower-using.mjs`) con
   `$oaUse`/`$oaDispose` de claude/node/inject.js. El User-Agent de WKWebView quedó en «iPhone OS 18_7» (la versión real

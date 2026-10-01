@@ -17,6 +17,8 @@ ios/
     Bridge.swift              lo nativo que pide la interfaz: archivos en disco, Claude Code instalado, Fotos y Archivos
                               (elegir), Compartir, guardar en Fotos, vista previa, pantalla encendida
     NativeEncoder.swift       exportación con AVFoundation (venc.*) si el WebCodecs de WebKit no anda en el equipo
+    NetStream.swift           la red de iOS (con streaming) para lo que Claude Code manda a Anthropic
+    AppLog.swift              el registro de la app (logs/app.log) y su envío en vivo a la computadora
     Keychain.swift            claves de los servicios en el Llavero de iOS
     Storage.swift             dónde vive cada cosa (app, Documentos, Application Support/claude-code)
     diag/                     diagnóstico del WebKit de iOS (-OADiag)

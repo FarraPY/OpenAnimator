@@ -58,6 +58,7 @@ targets:
         NSPhotoLibraryAddUsageDescription: Para guardar en Fotos los videos que exportás.
         NSPhotoLibraryUsageDescription: Para agregar tus fotos y videos a un proyecto.
         NSCameraUsageDescription: Para sacar una foto o grabar un video y usarlo en un proyecto.
+        NSLocalNetworkUsageDescription: OpenAnimator manda el registro de depuración a tu computadora por la red wifi, sólo si lo activás en Ajustes › Depuración.
         NSMicrophoneUsageDescription: Para grabar audio y usarlo en un proyecto.
         ITSAppUsesNonExemptEncryption: false
         # Conexiones locales (pruebas con una API de mentira en la Mac del simulador; escenas que miran la red local).

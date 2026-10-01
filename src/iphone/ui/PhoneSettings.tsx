@@ -11,9 +11,10 @@ import PluginsSettings from '../../components/PluginsSettings'
 import { Icon, Logo } from '../../ui/icons'
 import { Button, Progress, Select, Spinner, Switch, TextArea, TextInput } from '../../ui/kit'
 import { Chips, Group, Row, Tap, TopBar } from './PhoneApp'
-import { isNative } from '../host/native'
+import { isNative, nativeCall } from '../host/native'
+import { logVerbose, setLogVerbose } from '../host/applog'
 
-const SECTIONS: Record<string, string> = { ia: 'Claude', plugins: 'Plugins de IA', storage: 'Almacenamiento', about: 'Acerca de' }
+const SECTIONS: Record<string, string> = { ia: 'Claude', plugins: 'Plugins de IA', storage: 'Almacenamiento', debug: 'Depuración', about: 'Acerca de' }
 const ACCENTS: Array<{ id: Settings['ui']['accent']; c: string }> = [
   { id: 'violet', c: '#7b6cff' }, { id: 'blue', c: '#3d8bff' }, { id: 'teal', c: '#14b3a7' }, { id: 'green', c: '#3bb46e' }, { id: 'amber', c: '#e3902b' }, { id: 'rose', c: '#e5537a' },
 ]
@@ -33,7 +34,7 @@ export default function PhoneSettings({ section, onBack }: { section?: string; o
     <>
       <TopBar left={<Tap icon="chevron-left" label="Volver" onClick={back} />} title={sec ? SECTIONS[sec] : 'Ajustes'} />
       <div className="ph-scroll">
-        {!sec ? <Main open={setSec} /> : sec === 'ia' ? <ClaudeSection /> : sec === 'plugins' ? <div className="ph-desk"><PluginsSettings /></div> : sec === 'storage' ? <StorageSection /> : <AboutSection />}
+        {!sec ? <Main open={setSec} /> : sec === 'ia' ? <ClaudeSection /> : sec === 'plugins' ? <div className="ph-desk"><PluginsSettings /></div> : sec === 'storage' ? <StorageSection /> : sec === 'debug' ? <DebugSection /> : <AboutSection />}
       </div>
     </>
   )
@@ -62,7 +63,10 @@ function Main({ open }: { open: (s: string) => void }) {
           <Chips value={s.editor.imageDuration || 5} onChange={(v) => up({ editor: { imageDuration: v } })} options={[3, 5, 8].map((x) => ({ value: x, label: `${x} s` }))} />
         </Row>
       </Group>
-      <Group><Row icon="info" label="Acerca de OpenAnimator" chevron onClick={() => open('about')} /></Group>
+      <Group>
+        {isNative() && <Row icon="terminal" label="Depuración" detail="Registro de la app y envío en vivo" chevron onClick={() => open('debug')} />}
+        <Row icon="info" label="Acerca de OpenAnimator" chevron onClick={() => open('about')} />
+      </Group>
     </>
   )
 }
@@ -204,6 +208,54 @@ function StorageSection() {
         {!!trash?.length && <Row icon="trash" label="Vaciar la papelera" danger onClick={async () => { if (await dlg.confirm({ title: '¿Vaciar la papelera?', message: 'Se borra para siempre.', ok: 'Vaciar', danger: true })) { await call('trash:empty'); load() } }} />}
       </Group>
       {dlg.element}
+    </>
+  )
+}
+
+// ── Depuración ─────────────────────────────────────────────────────────────────
+type LogStatus = { remote?: string; sentAt?: number; error?: string; pending: number; size: number }
+
+/** El registro de la app (ios/OpenAnimator/AppLog.swift): verlo, compartirlo y mandarlo en vivo a la computadora. */
+function DebugSection() {
+  const { toast } = useApp()
+  const [st, setSt] = useState<LogStatus | null>(null)
+  const [url, setUrl] = useState('')
+  const [tail, setTail] = useState<string | null>(null)
+  const [verbose, setVerbose] = useState(logVerbose())
+  const refresh = () => nativeCall<LogStatus>('log.status').then((x) => { setSt(x); setUrl((u) => u || x.remote || '') }).catch(() => {})
+  useEffect(() => { refresh(); const t = setInterval(refresh, 2000); return () => clearInterval(t) }, [])
+  const live = async (on: boolean) => {
+    try { setSt(await nativeCall<LogStatus>('log.remote', { url: on ? url.trim() : '' })); toast(on ? 'Registro en vivo encendido' : 'Registro en vivo apagado') } catch (e: any) { toast(e.message, true) }
+  }
+  const view = async () => {
+    try {
+      const r = await fetch('/fs/logs/app.log', { cache: 'no-store' })
+      setTail(r.ok ? (await r.text()).trimEnd().split('\n').slice(-400).join('\n') : 'Todavía no hay nada en el registro.')
+    } catch (e: any) { toast(e.message, true) }
+  }
+  if (!st) return <div className="ph-center"><Spinner /></div>
+  const ago = st.sentAt ? Math.max(0, Math.round((Date.now() - st.sentAt) / 1000)) : null
+  const state = !st.remote ? 'Apagado' : st.error ? `Sin conexión: ${st.error}` : ago != null ? `Enviando · lo último hace ${ago} s` : 'Conectando…'
+  return (
+    <>
+      <Group title="Registro de la app" foot="Errores, avisos, lo que hace Claude y cada exportación (con su velocidad y el informe), más lo del sistema: falta de memoria, cierres, temperatura. Queda en el iPhone (Archivos › OpenAnimator › logs) y nunca guarda tus claves.">
+        <Row icon="file" label="Ver lo último" chevron onClick={view} />
+        <Row icon="share" label="Compartir el registro" detail={fmtSize(st.size)} chevron onClick={() => nativeCall('share', { path: 'logs/app.log' }).catch((e) => toast(e.message, true))} />
+        <Row label="Registro detallado" detail="También todo lo que la app escribe en la consola"><Switch checked={verbose} onChange={(v) => { setVerbose(v); setLogVerbose(v) }} /></Row>
+      </Group>
+      <Group title="En vivo a tu computadora" foot={<>Con el iPhone y la computadora en la misma red wifi: en la computadora corré <code>node scripts/registro-remoto.mjs</code> (o pedíselo a Claude Code) y pegá acá la dirección que muestra. Cada línea llega al instante; si se corta, se guarda y se manda después.</>}>
+        <div className="prow2 stack">
+          <span className="row-main">
+            <TextInput value={url} onChange={setUrl} placeholder="http://192.168.0.10:8799/k/…" mono />
+            <span className="row gap8 mt8">
+              <span className="grow t3">{state}</span>
+              {st.remote ? <Button onClick={() => live(false)}>Apagar</Button>
+                : <Button variant="primary" icon="send" disabled={!/^https?:\/\/\S+/.test(url.trim())} onClick={() => live(true)}>Encender</Button>}
+            </span>
+          </span>
+        </div>
+      </Group>
+      {tail != null && <Group title="Lo último"><div className="prow2"><pre className="viewer-text" style={{ maxHeight: '60vh', overflow: 'auto', fontSize: 11 }}>{tail}</pre></div></Group>}
     </>
   )
 }

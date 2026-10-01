@@ -91,7 +91,10 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     // MARK: navegación
 
     /// Si iOS cierra el proceso web (falta de memoria), la página vuelve a abrir el proyecto (como en Android).
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { load(recovered: true) }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        AppLog.write("app", "ERROR", "iOS cerró el motor web (casi siempre por falta de memoria): se vuelve a abrir la página")
+        load(recovered: true)
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url, let scheme = url.scheme?.lowercased() else { decisionHandler(.allow); return }

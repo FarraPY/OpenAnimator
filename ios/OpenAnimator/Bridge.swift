@@ -42,7 +42,12 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         // Sólo la interfaz de la app (oa://, marco principal): las escenas de los proyectos (oaproj://, en iframes) son
         // HTML hecho por la IA o bajado de otro lado y no pueden tocar archivos, claves ni la cuenta.
         let frame = message.frameInfo
-        if op != "log", !(frame.isMainFrame && frame.securityOrigin.protocol == "oa") { replyHandler(nil, "No permitido"); return }
+        guard frame.isMainFrame && frame.securityOrigin.protocol == "oa" else {
+            // Las pruebas copian la consola de todos los marcos (WebViewController): eso sólo se imprime.
+            if op == "log" { print("[web] " + (a["text"] as? String ?? "")) }
+            replyHandler(op == "log" ? true : nil, op == "log" ? nil : "No permitido")
+            return
+        }
         switch op {
         case "diag.result":
             print("OA-DIAG-RESULT " + (a["json"] as? String ?? "{}"))
@@ -50,8 +55,19 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             replyHandler(true, nil)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
         case "log":
-            print("[web] " + (a["text"] as? String ?? ""))
+            // Las líneas del registro (src/iphone/host/applog.ts) van a AppLog; un texto suelto es la consola de las pruebas.
+            if let lines = a["lines"] as? [[Any]] {
+                let parsed = lines.map(Bridge.logLine)
+                AppLog.add(parsed)
+                if WebViewController.diagMode || WebViewController.argument("-OATest") != nil {
+                    for l in parsed where l.0 != "INFO" { print("[app] \(l.0) [\(l.1)] \(l.2)") }
+                }
+            } else {
+                print("[web] " + (a["text"] as? String ?? ""))
+            }
             replyHandler(true, nil)
+        case "log.remote": replyHandler(AppLog.setRemote(a["url"] as? String), nil)
+        case "log.status": replyHandler(AppLog.status(), nil)
         case "info": replyHandler(info(), nil)
         case "awake":
             // Pantalla encendida mientras Claude trabaja o se exporta; y si el usuario sale de la app, iOS da un rato
@@ -98,10 +114,14 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         }
     }
 
+    /// [nivel, origen, texto, ms] de la página.
+    private static func logLine(_ l: [Any]) -> (String, String, String, Double?) {
+        let s = { (i: Int) -> String? in i < l.count ? l[i] as? String : nil }
+        return (s(0) ?? "INFO", s(1) ?? "web", s(2) ?? "", l.count > 3 ? (l[3] as? NSNumber)?.doubleValue : nil)
+    }
+
     private func info() -> [String: Any] {
-        var u = utsname()
-        uname(&u)
-        let machine = withUnsafePointer(to: &u.machine) { $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) } }
+        let machine = AppLog.machine()
         let values = try? Storage.data.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey])
         return [
             "model": machine, "name": UIDevice.current.model, "system": UIDevice.current.systemVersion,
