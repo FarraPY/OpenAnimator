@@ -103,7 +103,7 @@ export default function Projects() {
             </div>
           )}
       </div>
-      {!!list?.length && <button className="fab" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo</button>}
+      {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo</button>}
 
       {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }} />}
       {acting && <Actions title={acting.name} onClose={() => setActing(null)} items={[

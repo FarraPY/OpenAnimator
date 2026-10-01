@@ -1,8 +1,9 @@
 /**
- * El editor en el iPhone: el video arriba (se achica con el teclado abierto), los controles de reproducción y abajo
- * tres pestañas: Claude (el chat), Timeline (al estilo de los editores de teléfono: cursor fijo en el centro, se
- * desliza el tiempo) y Medios. La lógica de edición (deshacer, cortar, duplicar, agregar medios) es la del editor de
- * la PC; la forma de tocarla es la del teléfono.
+ * El editor en el iPhone: botones de vidrio arriba, el video, la barra de reproducción y el timeline siempre a la vista
+ * (al estilo de los editores de teléfono: cursor fijo en el centro, se desliza el tiempo); abajo, una hoja de vidrio con
+ * Claude (el chat) y Medios, que con la pestaña Timeline queda chica y se agranda arrastrando la manija. Con el teclado
+ * abierto queda el video chico y la hoja. La lógica de edición (deshacer, cortar, duplicar, agregar medios) es la del
+ * editor de la PC; la forma de tocarla es la del teléfono.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { afterPaint, Asset, call, Clip, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../../api'
@@ -15,6 +16,7 @@ import { Spinner } from '../../ui/kit'
 import { Actions, Tap, TopBar } from './PhoneApp'
 import PhoneTimeline from './PhoneTimeline'
 import PhoneMedia from './PhoneMedia'
+import PhoneInspector from './PhoneInspector'
 import PhoneExport from './PhoneExport'
 import { PreviewAudio } from './previewAudio'
 
@@ -23,6 +25,8 @@ const TRACK_NAME: Record<TrackType, string> = { scene: 'Escenas', video: 'Video'
 /** Los clips que se ven en x (escenas y videos): si cambian, la vista previa tiene que cargar algo. */
 const visualAt = (d: TL, x: number) => d.tracks.map((tr) => tr.type === 'audio' ? '' : tr.clips.find((c) => x >= c.start && x < c.start + c.duration)?.id || '').join()
 type Tab = 'claude' | 'timeline' | 'media'
+/** La hoja de abajo: sólo las pestañas, a media altura o casi toda la pantalla (el timeline de arriba se esconde). */
+type Sheet = 'min' | 'mid' | 'max'
 
 export default function PhoneEditor({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { toast, settings, go } = useApp()
@@ -35,6 +39,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   const [sel, setSel] = useState<string[]>([])
   const [assets, setAssets] = useState<Asset[]>([])
   const [tab, setTab] = useState<Tab>('claude')
+  const [sheet, setSheet] = useState<Sheet>('mid')
   const [full, setFull] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [menu, setMenu] = useState(false)
@@ -128,29 +133,37 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   const patchClip = (id: string, p: Partial<Clip>, commit = true) => { if (!tl) return; const d = structuredClone(tl); const f = findClip(d, id); if (f) Object.assign(f.c, p); change(d, commit) }
   const patchTrack = (id: string, p: Partial<Track>) => mutate((d) => { const tr = d.tracks.find((x) => x.id === id); if (tr) Object.assign(tr, p) })
 
-  const addAsset = async (a: Asset) => {
+  const addAssets = async (list: Asset[]) => {
     if (!tl) return
-    const type = KIND_TRACK[a.kind]
-    if (!type) { toast('Ese archivo no va en el timeline', true); return }
-    toast(`Agregando «${a.name}»…`, 'info')
-    let dur = a.kind === 'image' ? (settings?.editor.imageDuration || 5) : 5, srcDur: number | undefined
-    try {
-      if (a.kind === 'scene') { const r = await stage.current!.probe(a.path); dur = r.duration || 10 }
-      else if (a.kind === 'audio' || a.kind === 'video') { const r = await call('media:probe', projectId, a.path); if (r.duration) { dur = r.duration; srcDur = r.duration } }
-    } catch { /* duración por defecto */ }
-    const at = tRef.current
+    const ok = list.filter((a) => KIND_TRACK[a.kind])
+    if (!ok.length) { toast('Ese archivo no va en el timeline', true); return }
+    toast(ok.length === 1 ? `Agregando «${ok[0].name}»…` : `Agregando ${ok.length} archivos…`, 'info')
+    const items = await Promise.all(ok.map(async (a) => {
+      let dur = a.kind === 'image' ? (settings?.editor.imageDuration || 5) : 5, srcDur: number | undefined
+      try {
+        if (a.kind === 'scene') { const r = await stage.current!.probe(a.path); dur = r.duration || 10 }
+        else if (a.kind === 'audio' || a.kind === 'video') { const r = await call('media:probe', projectId, a.path); if (r.duration) { dur = r.duration; srcDur = r.duration } }
+      } catch { /* duración por defecto */ }
+      return { a, dur, srcDur }
+    }))
+    const at = tRef.current, ids: string[] = []
     mutate((d) => {
-      let tr = d.tracks.find((x) => x.type === type)
-      if (!tr) { tr = { id: uid('t'), name: TRACK_NAME[type], type, clips: [] }; if (type === 'audio') d.tracks.push(tr); else d.tracks.unshift(tr) }
-      // En el cursor; si ahí ya hay algo en esa pista, a continuación del último clip.
-      const busy = tr.clips.some((c) => at < c.start + c.duration && at + dur > c.start)
-      const start = busy ? Math.max(0, ...tr.clips.map((c) => c.start + c.duration)) : at
-      const c: any = { id: uid('c'), src: a.path, start: +start.toFixed(3), duration: +dur.toFixed(3), in: 0 }
-      if (srcDur) c.srcDur = srcDur
-      tr.clips.push(c)
-      setSel([c.id])
+      for (const { a, dur, srcDur } of items) {
+        const type = KIND_TRACK[a.kind]
+        let tr = d.tracks.find((x) => x.type === type)
+        if (!tr) { tr = { id: uid('t'), name: TRACK_NAME[type], type, clips: [] }; if (type === 'audio') d.tracks.push(tr); else d.tracks.unshift(tr) }
+        // En el cursor; si ahí ya hay algo en esa pista, a continuación del último clip.
+        const busy = tr.clips.some((c) => at < c.start + c.duration && at + dur > c.start)
+        const start = busy ? Math.max(0, ...tr.clips.map((c) => c.start + c.duration)) : at
+        const c: any = { id: uid('c'), src: a.path, start: +start.toFixed(3), duration: +dur.toFixed(3), in: 0 }
+        if (srcDur) c.srcDur = srcDur
+        tr.clips.push(c)
+        ids.push(c.id)
+      }
+      setSel(ids)
     })
-    setTab('timeline')
+    // Se ve en el timeline y abajo quedan sus ajustes.
+    setTab('timeline'); setSheet('mid')
   }
 
   // ── reproducción: el reloj de la página; el sonido lo pone PreviewAudio ────
@@ -208,7 +221,26 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
   useEffect(() => { if (exporting) setPlaying(false) }, [exporting])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
-  const askClaude = (text: string) => { setTab('claude'); setInject({ text, n: Date.now() }) }
+  /** Abrir una pestaña de la hoja (si estaba minimizada, sube a media altura). */
+  const openTab = (id: Tab) => { setTab(id); setSheet((s) => (s === 'min' ? 'mid' : s)) }
+  /** Tocar una pestaña: la abre; tocar la que ya está abierta minimiza la hoja. */
+  const pickTab = (id: Tab) => { if (id === tab && sheet !== 'min') setSheet('min'); else openTab(id) }
+  const askClaude = (text: string) => { openTab('claude'); setInject({ text, n: Date.now() }) }
+  // La manija: tocarla alterna media altura y casi toda la pantalla; arrastrarla, un paso hacia donde va el dedo.
+  const grab = useRef<number | null>(null)
+  const grabDown = (e: React.PointerEvent) => { grab.current = e.clientY; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }
+  const grabUp = (e: React.PointerEvent) => {
+    if (grab.current == null) return
+    const dy = e.clientY - grab.current
+    grab.current = null
+    const order: Sheet[] = ['min', 'mid', 'max'], i = order.indexOf(sheet)
+    setSheet(Math.abs(dy) < 12 ? (sheet === 'mid' ? 'max' : 'mid') : order[Math.max(0, Math.min(2, i + (dy < 0 ? 1 : -1)))])
+  }
+  /** 00:28.24 (o 01:15 sin centésimas). */
+  const clock = (x: number, frac = true) => {
+    const cs = Math.round(Math.max(0, x) * 100), m = Math.floor(cs / 6000), sec = (cs % 6000) / 100
+    return `${String(m).padStart(2, '0')}:${frac ? sec.toFixed(2).padStart(5, '0') : String(Math.floor(sec)).padStart(2, '0')}`
+  }
 
   // ── timelines y proyecto ───────────────────────────────────────────────────
   const switchTl = async (id: string) => {
@@ -234,56 +266,73 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   if (!project || !tl) return <><TopBar left={<Tap icon="chevron-left" label="Volver" onClick={onClose} back />} /><div className="ph-center"><Spinner size={22} /><span className="t3">Abriendo el proyecto…</span></div></>
 
   const ar = project.height / project.width
+  const tabs = [['claude', 'sparkles', 'Claude'], ['timeline', 'film', 'Timeline'], ['media', 'folder', 'Medios']] as const
+  const timeline = (
+    <PhoneTimeline tl={tl} tlId={tlId} t={t} fps={fps} playing={playing} sel={sel} projectId={projectId}
+      onScrub={scrub} onSelect={setSel} onChange={change} onSplit={() => splitAt(tRef.current)} onDelete={delSel} onDuplicate={dupSel}
+      onPatchTrack={patchTrack} onAdd={() => openTab('media')} onNote={addNote} onAsk={askClaude} onInspect={() => openTab('timeline')} />
+  )
   return (
-    <div className={`ed ${full ? 'full' : ''}`}>
-      <TopBar left={<Tap icon="chevron-left" label="Proyectos" onClick={onClose} back />}
-        title={<button className="ed-name" onClick={() => setMenu(true)}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={14} /></button>}
-        right={<>
-          <Tap icon="undo" label="Deshacer" onClick={undo} disabled={!hist.current.past.length} />
-          <Tap icon="redo" label="Rehacer" onClick={redo} disabled={!hist.current.future.length} />
-          <button className="ed-export" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
-        </>} />
+    <div className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}>
+      <div className="ph-top ed-top">
+        <button className="g-btn" data-glass aria-label="Proyectos" data-back onClick={onClose}><Icon name="chevron-left" size={22} /></button>
+        <button className="ed-name" data-glass onClick={() => setMenu(true)}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></button>
+        <div className="grow" />
+        <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
+        <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
+        <button className="ed-export" data-glass="accent" onClick={() => setExporting(true)}><Icon name="export" size={17} />Exportar</button>
+      </div>
 
-      <div className="ed-player" style={{ ['--ar' as any]: ar }}>
-        {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={hold ?? t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={full ? 0 : 6} bg="black" onError={(m) => toast(m, true)} />}
-        <button className="ed-tapzone" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
-        {full && <div className="ed-fullbar">
-          <Tap icon="minimize" label="Salir de pantalla completa" onClick={() => setFull(false)} />
-          <span className="tabnum">{fmtTime(t)} / {fmtTime(tl.duration)}</span>
-          <input className="ed-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} />
-          <Tap icon={playing ? 'pause' : 'play'} label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
+      <div className="ed-media">
+        <div className="ed-player" style={{ ['--ar' as any]: ar }}>
+          <div className="ed-stage">
+            {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={hold ?? t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={0} bg="black" onError={(m) => toast(m, true)} />}
+            <button className="ed-tapzone" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
+            {full && <div className="ed-fullbar">
+              <Tap icon="minimize" label="Salir de pantalla completa" onClick={() => setFull(false)} />
+              <span className="tabnum">{fmtTime(t)} / {fmtTime(tl.duration)}</span>
+              <input className="ed-seek" type="range" min={0} max={tl.duration || 1} step={1 / fps} value={t} onChange={(e) => seek(+e.target.value)} />
+              <Tap icon={playing ? 'pause' : 'play'} label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
+            </div>}
+          </div>
+        </div>
+
+        {!full && <div className="ed-transport" data-glass>
+          <span className="ed-time tabnum"><b>{clock(t)}</b><span> / {clock(tl.duration, false)}</span></span>
+          <div className="ed-tp" data-glass>
+            <button className="ed-tpb" aria-label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)}><Icon name="skip-back" size={20} /></button>
+            <button className="ed-play" data-glass="light" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={22} /></button>
+            <button className="ed-tpb" aria-label="Ir al final" disabled={t >= tl.duration} onClick={() => seek(tl.duration)}><Icon name="skip-fwd" size={20} /></button>
+          </div>
+          <button className="ed-tpb ed-fs" aria-label="Pantalla completa" onClick={() => setFull(true)}><Icon name="maximize" size={19} /></button>
         </div>}
       </div>
 
       {!full && <>
-        <div className="ed-transport">
-          <span className="tabnum ed-time"><b>{fmtTime(t, true, fps)}</b><span className="t3"> / {fmtTime(tl.duration)}</span></span>
-          <div className="grow" />
-          <Tap icon="skip-back" label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)} />
-          <Tap icon="step-back" label="Fotograma anterior" onClick={() => seek(t - 1 / fps)} />
-          <button className="ed-play" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={24} /></button>
-          <Tap icon="step-fwd" label="Fotograma siguiente" onClick={() => seek(t + 1 / fps)} />
-          <div className="grow" />
-          <Tap icon="maximize" label="Pantalla completa" onClick={() => setFull(true)} />
-        </div>
+        {sheet !== 'max' && <div className="ed-tl">{timeline}</div>}
 
-        <div className="ed-tabs" role="tablist">
-          {([['claude', 'sparkles', 'Claude'], ['timeline', 'film', 'Timeline'], ['media', 'folder', 'Medios']] as const).map(([id, icon, label]) => (
-            <button key={id} role="tab" aria-selected={tab === id} className={`ed-tab ${tab === id ? 'on' : ''}`} onClick={() => setTab(id)}>
-              <Icon name={icon} size={17} />{label}
-              {id === 'claude' && (chat.waiting ? <span className="ed-dot warn" /> : chat.busy ? <span className="ed-dot busy" /> : unread ? <span className="ed-count">{unread}</span> : null)}
-            </button>
-          ))}
-        </div>
-
-        <div className="ed-pane">
-          <div className="ed-chat" style={{ display: tab === 'claude' ? 'flex' : 'none' }}>
-            <ChatPanel projectId={projectId} visible={tab === 'claude'} context={() => ({ timeline: tlId, t: tRef.current })} onStatus={setChat} inject={inject} />
+        {/* La hoja de abajo (vidrio) con sus pestañas: Claude, Timeline (los ajustes del clip) y Medios. */}
+        <div className="ed-sheet" data-glass>
+          <div className="ed-grab" onPointerDown={grabDown} onPointerUp={grabUp} onPointerCancel={() => { grab.current = null }}><i /></div>
+          <div className="ed-tabs" role="tablist" data-glass>
+            {tabs.map(([id, icon, label]) => (
+              <button key={id} role="tab" aria-selected={tab === id} className={`ed-tab ${tab === id ? 'on' : ''}`} data-glass={tab === id ? 'accent' : undefined} onClick={() => pickTab(id)}>
+                <Icon name={icon} size={17} />{label}
+                {id === 'claude' && (chat.waiting ? <span className="ed-dot warn" /> : chat.busy ? <span className="ed-dot busy" /> : unread ? <span className="ed-count">{unread}</span> : null)}
+              </button>
+            ))}
           </div>
-          {tab === 'timeline' && <PhoneTimeline tl={tl} t={t} fps={fps} playing={playing} sel={sel} projectId={projectId}
-            onScrub={scrub} onSelect={setSel} onChange={change} onSplit={() => splitAt(tRef.current)} onDelete={delSel} onDuplicate={dupSel}
-            onPatchClip={patchClip} onPatchTrack={patchTrack} onAdd={() => setTab('media')} onNote={addNote} onAsk={askClaude} />}
-          {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAsset} onAsk={askClaude} />}
+          <div className="ed-pane" style={{ display: sheet === 'min' ? 'none' : undefined }}>
+            <div className="ed-chat" style={{ display: tab === 'claude' ? 'flex' : 'none' }}>
+              <ChatPanel projectId={projectId} visible={tab === 'claude' && sheet !== 'min'} context={() => ({ timeline: tlId, t: tRef.current })} onStatus={setChat} inject={inject} />
+            </div>
+            {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAssets} onAsk={askClaude} full={sheet === 'max'} />}
+            {tab === 'timeline' && <div className="ed-montage">
+              {sheet === 'max' && <div className="ed-montage-tl">{timeline}</div>}
+              <PhoneInspector projectId={projectId} tlId={tlId} tl={tl} sel={sel} t={t} fps={fps} onSelect={setSel} onPatch={patchClip}
+                onSplit={() => splitAt(tRef.current)} onDuplicate={dupSel} onDelete={delSel} />
+            </div>}
+          </div>
         </div>
       </>}
 

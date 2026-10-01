@@ -1,42 +1,66 @@
 /**
  * Timeline del teléfono, como en los editores de video de celular: el cursor queda fijo en el centro y se desliza el
  * tiempo con el dedo (deslizar = buscar). Pellizcar acerca o aleja. Tocar un clip lo selecciona: seleccionado se
- * arrastra para moverlo y sus manijas lo recortan; abajo aparecen sus acciones.
+ * arrastra para moverlo y sus manijas lo recortan; abajo aparecen sus acciones. Las escenas se ven como tarjetas con
+ * una miniatura del video en ese momento; el audio, con su onda.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Clip, fmtTime, Timeline as TL, Track } from '../../api'
+import { call, Clip, fmtTime, on, Timeline as TL, Track } from '../../api'
 import { useApp } from '../../App'
 import { TYPE_COLOR, TYPE_ICON, WAVE, Wave, trackRole } from '../../components/Timeline'
 import { Icon, IconName } from '../../ui/icons'
-import { Slider, Switch } from '../../ui/kit'
-import { Actions, Group, Row, Sheet } from './PhoneApp'
-import { isNative, nativeCall } from '../host/native'
+import { Actions } from './PhoneApp'
 
-const RULER = 26
-
-/** Cómo se ve el vidrio de la columna de pistas (GlassOverlay.swift): esmerilado o transparente y cuánto color de cada
- *  pista (con 0,2 se veía pálido). Mientras se prueba se elige en Ajustes › Depuración. */
-export type GlassLook = { style: 'clear' | 'regular'; tint: number }
-export function glassLook(): GlassLook {
-  const d: GlassLook = { style: 'regular', tint: 0.5 }
-  try { return { ...d, ...JSON.parse(localStorage.getItem('oa.glass2') || '{}') } } catch { return d }
-}
-export const setGlassLook = (l: GlassLook) => { try { localStorage.setItem('oa.glass2', JSON.stringify(l)) } catch { /* sin almacenamiento */ } }
+const RULER = 28
+const COL = 48 // la columna de las pistas (ícono)
 const STEPS = [1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 const isImage = (src: string) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(src)
 const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v))
+const ruler = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
 type Props = {
-  tl: TL; t: number; fps: number; playing: boolean; sel: string[]; projectId: string
+  tl: TL; tlId: string; t: number; fps: number; playing: boolean; sel: string[]; projectId: string
   onScrub: (t: number, phase: 'start' | 'move' | 'end') => void
   onSelect: (ids: string[]) => void
   onChange: (next: TL, commit?: boolean) => void
   onSplit: () => void; onDelete: () => void; onDuplicate: () => void
-  onPatchClip: (id: string, p: Partial<Clip>, commit?: boolean) => void
   onPatchTrack: (id: string, p: Partial<Track>) => void
   onAdd: () => void; onNote: () => void; onAsk: (text: string) => void
+  /** Abrir los ajustes del clip elegido (la pestaña Timeline de la hoja). */
+  onInspect: () => void
 }
+
+// ── miniaturas de las escenas ─────────────────────────────────────────────────
+// Un fotograma del video en cada escena (frames:png, el compositor oculto), de a uno y en segundo plano; quedan
+// guardadas mientras no cambien el clip ni los archivos del proyecto.
+const thumbs = new Map<string, string>()
+const thumbKey = (projectId: string, tlId: string, c: Clip) => `${projectId}|${tlId}|${c.id}|${c.src}|${c.start}|${c.in || 0}|${c.duration}`
+function useSceneThumbs(projectId: string, tlId: string, clips: Clip[], busy: boolean) {
+  const [, bump] = useState(0)
+  useEffect(() => on('project:changed', (e: { id: string; kind: string }) => {
+    if (e.id !== projectId || e.kind === 'timeline') return
+    for (const k of [...thumbs.keys()]) if (k.startsWith(projectId + '|')) thumbs.delete(k)
+    bump((x) => x + 1)
+  }), [projectId])
+  const want = clips.filter((c) => !thumbs.has(thumbKey(projectId, tlId, c)))
+  useEffect(() => {
+    if (busy || !want.length) return
+    let stop = false
+    const timer = window.setTimeout(async () => {
+      for (const c of want) {
+        if (stop) return
+        const k = thumbKey(projectId, tlId, c)
+        try { thumbs.set(k, 'data:image/png;base64,' + await call<string>('frames:png', projectId, tlId, c.start + Math.min(1.5, c.duration / 2), 240)) } catch { thumbs.set(k, '') }
+        if (!stop) bump((x) => x + 1)
+      }
+    }, 600)
+    return () => { stop = true; clearTimeout(timer) }
+  }, [busy, want.map((c) => c.id).join()])
+  return (c: Clip) => sceneThumb(projectId, tlId, c)
+}
+/** La miniatura de una escena, si ya está hecha (también la usa el inspector del clip). */
+export const sceneThumb = (projectId: string, tlId: string, c: Clip) => thumbs.get(thumbKey(projectId, tlId, c)) || ''
 
 export default function PhoneTimeline(p: Props) {
   const { tl, t } = p
@@ -47,7 +71,6 @@ export default function PhoneTimeline(p: Props) {
   const [vh, setVh] = useState(320)
   const [left, setLeft] = useState(0)
   const [pps, setPps] = useState(() => clamp((window.innerWidth * 0.85) / Math.max(4, tl.duration), 6, 120))
-  const [clipSheet, setClipSheet] = useState(false)
   const [trackAct, setTrackAct] = useState<Track | null>(null)
   const ppsRef = useRef(pps); ppsRef.current = pps
   const pRef = useRef(p); pRef.current = p
@@ -55,8 +78,8 @@ export default function PhoneTimeline(p: Props) {
   const ours = useRef(NaN) // el scrollLeft que puso el programa (no es el dedo; con -1, llegar a 0 no movía el cursor)
   const half = vw / 2
   const width = half * 2 + tl.duration * pps + 80
-  // Las pistas llenan el alto que hay (antes quedaba espacio vacío abajo): entre 54 y 112 px cada una.
-  const row = clamp(Math.floor((vh - RULER - 12) / Math.max(1, tl.tracks.length)), 54, 112)
+  // Las pistas llenan el alto que hay: entre 38 y 96 px cada una (con la hoja de Claude abierta queda compacto).
+  const row = clamp(Math.floor((vh - RULER - 8) / Math.max(1, tl.tracks.length)), 38, 96)
 
   useEffect(() => {
     const el = sc.current!
@@ -117,11 +140,16 @@ export default function PhoneTimeline(p: Props) {
     }
   }, [])
 
+  // La regla: un número cada tanto (que entre cómodo) y marcas chicas entre medio.
   const ticks = useMemo(() => {
-    const step = STEPS.find((s) => s * pps >= 64) || 600
+    const step = STEPS.find((s) => s * pps >= 70) || 600
+    const minor = step / (step / 5 * pps >= 7 ? 5 : 2)
     const a = Math.max(0, Math.floor((left - half) / pps / step) * step), b = Math.min(tl.duration + step, (left + vw) / pps + step)
-    const out: Array<{ x: number; label: string }> = []
-    for (let s = a; s <= b; s += step) out.push({ x: half + s * pps, label: fmtTime(s, step < 1, p.fps) })
+    const out: Array<{ x: number; label?: string }> = []
+    for (let s = a; s <= b + 1e-6; s += minor) {
+      const major = Math.abs(s / step - Math.round(s / step)) < 1e-6
+      out.push({ x: half + s * pps, label: major ? (step < 1 ? fmtTime(s, true, p.fps) : ruler(s)) : undefined })
+    }
     return out
   }, [pps, left, vw, tl.duration, p.fps])
 
@@ -182,107 +210,80 @@ export default function PhoneTimeline(p: Props) {
 
   const selClip = useMemo(() => { for (const tr of tl.tracks) { const c = tr.clips.find((x) => p.sel.includes(x.id)); if (c) return { c, tr } } return null }, [tl, p.sel])
   const underCursor = tl.tracks.some((tr) => tr.clips.some((c) => t > c.start + 0.02 && t < c.start + c.duration - 0.02 && (!p.sel.length || p.sel.includes(c.id))))
-  const hasAudio = selClip && (selClip.tr.type === 'audio' || (selClip.tr.type === 'video' && !isImage(selClip.c.src)))
   const color = (tr: Track, c: Clip) => TYPE_COLOR[tr.type === 'video' && isImage(c.src) ? 'image' : tr.type === 'audio' ? trackRole(tr) : tr.type] || 'var(--accent)'
   const icon = (tr: Track): IconName => TYPE_ICON[tr.type === 'audio' ? trackRole(tr) : tr.type] || 'film'
 
-  // Liquid Glass de iOS 26 (nativo: GlassOverlay.swift) sobre la columna de nombres: la página le dice dónde va cada
-  // pista y con qué color; los toques siguen siendo de la página. Con un menú, una hoja o una ventana encima se saca
-  // (lo nativo quedaría por arriba). Sin iOS 26 (o en Safari) queda el vidrio dibujado con CSS.
-  const [glass, setGlass] = useState(false)
-  useEffect(() => {
-    if (!isNative()) return
-    const look = glassLook()
-    let raf = 0, last = ''
-    const sync = () => {
-      raf = 0
-      const el = sc.current
-      const covered = !!document.querySelector('.sheet-back, .modal-backdrop, .menu')
-      const box = el?.getBoundingClientRect()
-      const items = !el || !box || covered ? [] : [...el.querySelectorAll<HTMLElement>('.tlp-trk')].map((b) => {
-        const r = b.getBoundingClientRect()
-        return { id: b.dataset.id, name: b.dataset.name, kind: b.dataset.kind, color: getComputedStyle(b).color, x: r.left, y: r.top, w: r.width, h: r.height }
-      })
-      const clip = box ? { x: box.left, y: box.top, w: box.width, h: box.height } : null
-      const msg = JSON.stringify([clip, items])
-      if (msg === last) return
-      last = msg
-      nativeCall<boolean>('glass.set', { clip, ruler: RULER, items, ...look }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
-    }
-    const later = () => { if (!raf) raf = requestAnimationFrame(sync) }
-    later()
-    const el = sc.current!
-    el.addEventListener('scroll', later, { passive: true })
-    window.addEventListener('resize', later)
-    const ro = new ResizeObserver(later)
-    ro.observe(el)
-    const mo = new MutationObserver(later)
-    mo.observe(document.body, { childList: true })
-    mo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-name', 'data-kind', 'style'] })
-    return () => {
-      cancelAnimationFrame(raf)
-      el.removeEventListener('scroll', later)
-      window.removeEventListener('resize', later)
-      ro.disconnect(); mo.disconnect()
-      void nativeCall('glass.set', { clip: null, items: [] }).catch(() => {})
-    }
-  }, [])
+  // Las escenas: su número (en orden) y una miniatura, para las que están cerca de la pantalla.
+  const scenes = useMemo(() => {
+    const num = new Map<string, number>()
+    for (const tr of tl.tracks) if (tr.type === 'scene') [...tr.clips].sort((a, b) => a.start - b.start).forEach((c, i) => num.set(c.id, i + 1))
+    return num
+  }, [tl])
+  const near = (c: Clip) => { const cx = half + c.start * pps, cw = Math.max(4, c.duration * pps); return !(cx + cw < left - vw || cx > left + 2 * vw) }
+  const thumb = useSceneThumbs(p.projectId, p.tlId, tl.tracks.filter((tr) => tr.type === 'scene' && !tr.hidden).flatMap((tr) => tr.clips.filter(near)), p.playing)
 
   return (
-    <div className={`tlp ${glass ? 'native-glass' : ''}`}>
-      <div className="tlp-scroll" ref={sc} onScroll={onScroll} onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('tlp-track')) p.onSelect([]) }}>
-        <div className="tlp-content" style={{ width, height: RULER + Math.max(1, tl.tracks.length) * row + 12, ['--row' as any]: `${row}px` }}>
-          <div className="tlp-ruler">
-            <div className="tlp-corner" />
-            {ticks.map((k) => <span key={k.x} className="tlp-tick" style={{ left: k.x }}>{k.label}</span>)}
-            {(tl.notes || []).map((n) => <button key={n.id} className="tlp-note" style={{ left: half + n.t * pps }} aria-label={n.text} onClick={() => { p.onScrub(n.t, 'move'); toast(`Nota: ${n.text}`, 'info') }} />)}
-          </div>
-          {tl.tracks.map((tr, i) => (
-            <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
-              <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}
-                data-id={tr.id} data-name={tr.name} data-kind={tr.muted ? 'muted' : tr.hidden ? 'hidden' : tr.type === 'audio' ? trackRole(tr) : tr.type}>
-                <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={15} />
-                <span className="tlp-trk-name">{tr.name}</span>
-              </button>
-              {tr.clips.map((c) => {
-                const on = p.sel.includes(c.id)
-                // Sólo lo que está en pantalla (más una pantalla de margen a cada lado): con cientos de clips el
-                // timeline sigue liviano. El seleccionado se dibuja siempre (se puede estar arrastrando).
-                const cx = half + c.start * pps, cw = Math.max(4, c.duration * pps)
-                if (!on && (cx + cw < left - vw || cx > left + 2 * vw)) return null
-                return (
-                  <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''} ${waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) ? 'wave' : ''}`} style={{ left: half + c.start * pps, width: Math.max(4, c.duration * pps), ['--c' as any]: color(tr, c) }}
-                    onPointerDown={(e) => down(e, c, tr, 'move')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { tap.current = null; up() }}>
-                    {waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) && (() => {
-                      // La onda real, dibujada sólo cerca de lo que se ve del clip, en tramos de una pantalla: al
-                      // desplazar el timeline se redibuja una vez por pantalla y no en cada cuadro.
-                      const x = half + c.start * pps, w = Math.max(4, c.duration * pps)
-                      const q = Math.max(1, vw), a = Math.floor((left - x) / q) * q
-                      const x0 = Math.max(0, a), x1 = Math.min(w, a + 2 * q)
-                      return x1 > x0 && <div className="tlp-wave"><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={x0} x1={x1} height={Math.max(14, row - 31)} color={WAVE[tr.type === 'audio' ? trackRole(tr) : 'video'] || WAVE.audio} /></div>
-                    })()}
-                    {c.fadeIn ? <span className="tlp-fade l" style={{ width: c.fadeIn * pps }} /> : null}
-                    {c.fadeOut ? <span className="tlp-fade r" style={{ width: c.fadeOut * pps }} /> : null}
-                    <span className="tlp-clip-name">{clipName(c)}</span>
-                    {on && <>
-                      <span className="tlp-h l" onPointerDown={(e) => down(e, c, tr, 'l')} onPointerMove={move} onPointerUp={up}><i /></span>
-                      <span className="tlp-h r" onPointerDown={(e) => down(e, c, tr, 'r')} onPointerMove={move} onPointerUp={up}><i /></span>
-                    </>}
-                  </div>
-                )
-              })}
+    <div className="tlp">
+      <div className="tlp-view">
+        <div className="tlp-scroll" ref={sc} onScroll={onScroll} onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('tlp-track')) p.onSelect([]) }}>
+          <div className="tlp-content" style={{ width, height: RULER + Math.max(1, tl.tracks.length) * row + 8, ['--row' as any]: `${row}px` }}>
+            <div className="tlp-ruler">
+              <div className="tlp-corner" />
+              {ticks.map((k) => k.label ? <span key={k.x} className="tlp-tick" style={{ left: k.x }}>{k.label}</span> : <i key={k.x} className="tlp-minor" style={{ left: k.x }} />)}
+              {(tl.notes || []).map((n) => <button key={n.id} className="tlp-note" style={{ left: half + n.t * pps }} aria-label={n.text} onClick={() => { p.onScrub(n.t, 'move'); toast(`Nota: ${n.text}`, 'info') }} />)}
             </div>
-          ))}
-          <button className="tlp-add" style={{ left: half + tl.duration * pps + 14, top: RULER + 6, height: row - 12 }} aria-label="Agregar medios" onClick={p.onAdd}><Icon name="plus" size={22} /></button>
+            {tl.tracks.map((tr, i) => (
+              <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
+                <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}>
+                  <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={19} />
+                  {row >= 62 && <span className="tlp-trk-name">{tr.name}</span>}
+                </button>
+                {tr.clips.map((c) => {
+                  const on = p.sel.includes(c.id)
+                  // Sólo lo que está en pantalla (más una pantalla de margen a cada lado): con cientos de clips el
+                  // timeline sigue liviano. El seleccionado se dibuja siempre (se puede estar arrastrando).
+                  if (!on && !near(c)) return null
+                  const w = Math.max(4, c.duration * pps)
+                  const wave = waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src)))
+                  // Los fundidos: el clip se angosta en esa punta (como en los editores de audio).
+                  const fi = Math.min(w / 2, (c.fadeIn || 0) * pps), fo = Math.min(w / 2, (c.fadeOut || 0) * pps)
+                  const shape = !on && (fi || fo) ? `polygon(${fi}px 0, calc(100% - ${fo}px) 0, 100% 100%, 0 100%)` : undefined
+                  const n = scenes.get(c.id)
+                  return (
+                    <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''} ${wave ? 'wave' : ''} ${n ? 'scene' : ''}`}
+                      style={{ left: half + c.start * pps, width: w, clipPath: shape, ['--c' as any]: color(tr, c), ...(n && thumb(c) ? { ['--thumb' as any]: `url(${thumb(c)})` } : {}) }}
+                      onPointerDown={(e) => down(e, c, tr, 'move')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { tap.current = null; up() }}>
+                      {wave && (() => {
+                        // La onda real, dibujada sólo cerca de lo que se ve del clip, en tramos de una pantalla: al
+                        // desplazar el timeline se redibuja una vez por pantalla y no en cada cuadro.
+                        const x = half + c.start * pps
+                        const q = Math.max(1, vw), a = Math.floor((left - x) / q) * q
+                        const x0 = Math.max(0, a), x1 = Math.min(w, a + 2 * q)
+                        const named = row >= 50 && w >= 64
+                        return x1 > x0 && <div className={`tlp-wave ${named ? '' : 'full'}`}><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={x0} x1={x1} height={Math.max(12, row - (named ? 30 : 16))} color={WAVE[tr.type === 'audio' ? trackRole(tr) : 'video'] || WAVE.audio} fill /></div>
+                      })()}
+                      {n ? <span className="tlp-clip-name"><small>{String(n).padStart(2, '0')}</small>{clipName(c)}</span>
+                        : (!wave || (row >= 50 && w >= 64)) && <span className="tlp-clip-name">{clipName(c)}</span>}
+                      {on && <>
+                        <span className="tlp-h l" onPointerDown={(e) => down(e, c, tr, 'l')} onPointerMove={move} onPointerUp={up}><i /></span>
+                        <span className="tlp-h r" onPointerDown={(e) => down(e, c, tr, 'r')} onPointerMove={move} onPointerUp={up}><i /></span>
+                      </>}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+            <button className="tlp-add" style={{ left: half + tl.duration * pps + 14, top: RULER + 5, height: row - 10 }} aria-label="Agregar medios" onClick={p.onAdd}><Icon name="plus" size={22} /></button>
+          </div>
         </div>
+        <div className="tlp-cursor" />
       </div>
-      <div className="tlp-cursor" />
 
-      <div className="tlp-bar">
+      <div className="tlp-bar" data-glass>
         {selClip ? <>
           <BarBtn icon="scissors" label="Dividir" disabled={!underCursor} onClick={p.onSplit} />
           <BarBtn icon="copy" label="Duplicar" onClick={p.onDuplicate} />
-          <BarBtn icon={hasAudio ? 'volume-2' : 'sliders'} label={hasAudio ? 'Sonido' : 'Ajustes'} onClick={() => setClipSheet(true)} />
+          <BarBtn icon="sliders" label="Ajustes" onClick={p.onInspect} />
           <BarBtn icon="sparkles" label="Claude" onClick={() => p.onAsk(`Sobre el clip «${clipName(selClip.c)}» (${selClip.c.src}, de ${fmtTime(selClip.c.start, true, p.fps)} a ${fmtTime(selClip.c.start + selClip.c.duration, true, p.fps)}): `)} />
           <BarBtn icon="trash" label="Borrar" danger onClick={p.onDelete} />
         </> : <>
@@ -294,7 +295,6 @@ export default function PhoneTimeline(p: Props) {
         </>}
       </div>
 
-      {clipSheet && selClip && <ClipSheet clip={selClip.c} track={selClip.tr} fps={p.fps} audio={!!hasAudio} onPatch={(x, commit) => p.onPatchClip(selClip.c.id, x, commit)} onClose={() => setClipSheet(false)} />}
       {trackAct && <Actions title={trackAct.name} onClose={() => setTrackAct(null)} items={[
         ...(trackAct.type !== 'scene' ? [{ label: trackAct.muted ? 'Activar el sonido' : 'Silenciar la pista', icon: trackAct.muted ? 'volume-2' : 'volume-x', onSelect: () => p.onPatchTrack(trackAct.id, { muted: !trackAct.muted }) }] : []),
         ...(trackAct.type !== 'audio' ? [{ label: trackAct.hidden ? 'Mostrar la pista' : 'Ocultar la pista', icon: trackAct.hidden ? 'eye' : 'eye-off', onSelect: () => p.onPatchTrack(trackAct.id, { hidden: !trackAct.hidden }) }] : []),
@@ -306,23 +306,4 @@ export default function PhoneTimeline(p: Props) {
 
 function BarBtn({ icon, label, onClick, disabled, danger }: { icon: IconName; label: string; onClick: () => void; disabled?: boolean; danger?: boolean }) {
   return <button className={`tlp-btn ${danger ? 'danger' : ''}`} disabled={disabled} onClick={onClick}><Icon name={icon} size={21} /><span>{label}</span></button>
-}
-
-/** Ajustes del clip: volumen y fundidos (con sonido) o la duración (escenas e imágenes). */
-function ClipSheet({ clip, track, fps, audio, onPatch, onClose }: { clip: Clip; track: Track; fps: number; audio: boolean; onPatch: (p: Partial<Clip>, commit?: boolean) => void; onClose: () => void }) {
-  const vol = clip.volume ?? 1
-  const maxFade = Math.max(0.1, Math.min(5, clip.duration / 2))
-  return (
-    <Sheet title={clipName(clip)} onClose={onClose}>
-      <div className="t3 sheet-sub">{track.name} · {fmtTime(clip.start, true, fps)} → {fmtTime(clip.start + clip.duration, true, fps)} ({clip.duration.toFixed(2)} s)</div>
-      <Group>
-        {audio && <>
-          <Row label="Silenciar el clip"><Switch checked={!!clip.muted} onChange={(v) => onPatch({ muted: v })} /></Row>
-          <Row label="Volumen" detail={`${Math.round(vol * 100)} %`} stack><Slider value={vol} min={0} max={2} step={0.01} onChange={(v) => onPatch({ volume: +v.toFixed(2) }, false)} onCommit={() => onPatch({}, true)} /></Row>
-        </>}
-        <Row label="Entrada gradual" detail={`${(clip.fadeIn || 0).toFixed(1)} s`} stack><Slider value={clip.fadeIn || 0} min={0} max={maxFade} step={0.1} onChange={(v) => onPatch({ fadeIn: +v.toFixed(2) }, false)} onCommit={() => onPatch({}, true)} /></Row>
-        <Row label="Salida gradual" detail={`${(clip.fadeOut || 0).toFixed(1)} s`} stack><Slider value={clip.fadeOut || 0} min={0} max={maxFade} step={0.1} onChange={(v) => onPatch({ fadeOut: +v.toFixed(2) }, false)} onCommit={() => onPatch({}, true)} /></Row>
-      </Group>
-    </Sheet>
-  )
 }

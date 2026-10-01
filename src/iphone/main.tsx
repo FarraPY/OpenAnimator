@@ -12,6 +12,7 @@ import { installPressFeedback } from '../android/ui/press'
 import { createWebHost } from './host/webhost'
 import { isNative } from './host/native'
 import { appLog, installAppLog } from './host/applog'
+import { installNativeGlass } from './host/glassUI'
 import '../styles.css'
 import './phone.css'
 
@@ -66,6 +67,7 @@ async function boot() {
   installBackend('iphone')
   installAppLog((ch, cb) => (window as any).oa.on(ch, cb))
   installPressFeedback()
+  installNativeGlass()
   // La interfaz se importa después: algunos módulos miran la plataforma al cargarse (modelos de Claude…).
   const { default: PhoneApp } = await import('./ui/PhoneApp')
   createRoot(document.getElementById('root')!).render(<PhoneApp />)

@@ -1,8 +1,8 @@
 /**
- * Capturas del timeline en el simulador (la integración continua abre la app con `-OATest glass`): arma un proyecto de
- * muestra con escenas, voz, música y efectos (el audio se hace acá, para que se vean ondas de verdad), lo abre en la
- * pestaña Timeline y avisa «OA-SHOT <nombre>» para que el workflow saque la captura con simctl. El vidrio de la columna
- * de pistas es el Liquid Glass de iOS (GlassOverlay.swift).
+ * Capturas del editor en el simulador (la integración continua abre la app con `-OATest glass`): arma un proyecto de
+ * muestra (16:9) con escenas, voz, música y efectos (el audio se hace acá, para que se vean ondas de verdad), lo abre y
+ * recorre las pestañas de la hoja de abajo y sus alturas; en cada una avisa «OA-SHOT <nombre>» para que el workflow saque
+ * la captura con simctl. El vidrio es el Liquid Glass de iOS (NativeChrome.swift).
  */
 import { host } from '../../android/host'
 import { b64encode, nativeCall } from '../host/native'
@@ -31,7 +31,7 @@ export async function runGlass() {
   try {
     if (localStorage.getItem('oa.glassShots') !== '2') {
       const tpl = await oa.call('projects:templates')
-      const p = await oa.call('projects:create', { name: 'Mi video', template: tpl[0]?.id || '', width: 1080, height: 1920, fps: 30 })
+      const p = await oa.call('projects:create', { name: 'Mi video', template: tpl[0]?.id || '', width: 1920, height: 1080, fps: 30 })
       const put = (name: string, sec: number, f: (t: number) => number) => host().call('fs.writeBase64', { path: `projects/${p.id}/assets/${name}`, data: wav(sec, f) })
       put('narracion-1.wav', 6.5, voice(2.3)); put('narracion-2.wav', 9, voice(1.9)); put('musica.wav', 20, music); put('whoosh.wav', 1, whoosh); put('click.wav', 0.8, click)
       for (const [name, title, hue] of [['intro', 'Intro', 255], ['desarrollo', 'Desarrollo', 170], ['cierre', 'Cierre', 30]] as const) {
@@ -57,18 +57,34 @@ body{margin:0;height:100vh;display:grid;place-items:center;background:linear-gra
       return
     }
     localStorage.removeItem('oa.glassShots')
-    const tab = () => [...document.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === 'Timeline')
-    for (let i = 0; i < 60 && !tab(); i++) await wait(250)
-    tab()?.click()
+    const btn = (text: string) => [...document.querySelectorAll<HTMLElement>('button')].find((b) => b.textContent?.trim() === text)
+    for (let i = 0; i < 60 && !btn('Timeline'); i++) await wait(250)
     await wait(5000)
-    // Al principio y con los clips pasando por detrás del vidrio.
-    await say('OA-SHOT vidrio-1')
-    await wait(7000)
-    const sc = document.querySelector<HTMLElement>('.tlp-scroll')
-    if (sc) sc.scrollLeft = 260
+    const shot = async (name: string) => { await say(`OA-SHOT ${name}`); await wait(7000) }
+    /** Un toque (abajo y arriba en el mismo lugar), como el dedo. */
+    const tap = (el: Element | null | undefined) => {
+      if (!el) return
+      const r = el.getBoundingClientRect(), x = r.left + Math.min(24, r.width / 2), y = r.top + r.height / 2
+      for (const type of ['pointerdown', 'pointerup']) el.dispatchEvent(new PointerEvent(type, { bubbles: true, clientX: x, clientY: y, pointerId: 1, isPrimary: true }))
+    }
+    await shot('editor-claude')
+    btn('Timeline')?.click()
+    await wait(800)
+    tap(document.querySelectorAll('.tlp-clip.scene')[1])
     await wait(2500)
-    await say('OA-SHOT vidrio-2')
-    await wait(7000)
+    await shot('editor-timeline')
+    btn('Timeline')?.click() // la pestaña abierta: la hoja se minimiza
+    await wait(2500)
+    await shot('editor-min')
+    btn('Medios')?.click()
+    await wait(3000)
+    await shot('editor-medios')
+    tap(document.querySelector('.ed-grab')) // la manija: casi toda la pantalla
+    await wait(3000)
+    await shot('editor-medios-max')
+    btn('Timeline')?.click()
+    await wait(3000)
+    await shot('editor-timeline-max')
   } catch (e: any) { await say('ERROR ' + (e?.stack || e)) }
   await nativeCall('diag.result', { json: '{}' })
 }

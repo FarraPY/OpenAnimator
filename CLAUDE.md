@@ -123,6 +123,14 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   6 h, con wifi o datos, sin conversaciones trabajando): `update()` instala, prueba que arranque (la misma consulta) y
   recién ahí la marca en uso (`oa.claudeVersion`); si falla, la borra y no la reintenta (`oa.claudeFailed`). Las
   versiones viejas se borran al próximo arranque (una conversación abierta puede estar usándolas).
+- Liquid Glass (iOS 26): la página es transparente (`html.native-ui`) sobre `NativeChrome.swift`: el fondo azul noche y,
+  debajo de la página, una `UIGlassEffect` por cada elemento con `data-glass` ("", "accent", "light", "clear"; también
+  `.ph-top .tap` y el cuadro del chat en la hoja), que mide `src/iphone/host/glassUI.ts` y manda con `glass.layout`
+  (cambios, desplazamientos, transiciones). Como va debajo, lo que la página pone encima (ventanas, menús) lo tapa, pero
+  no refracta contenido de la página: no usarlo dentro de listas que se desplazan (iría un cuadro atrasado y sin recorte).
+  Sin iOS 26 (o en Safari) el vidrio es CSS. Editor (diseño del usuario): botones de vidrio, video redondeado, cápsula de
+  reproducción, timeline compacto (escenas como tarjetas con miniatura de `frames:png`, onda rellena) y una hoja de
+  vidrio con Claude / Timeline (inspector del clip, PhoneInspector) / Medios en tres alturas (`sheet` min/mid/max).
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`

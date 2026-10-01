@@ -54,8 +54,9 @@ function loadPeaks(projectId: string, src: string) {
   }).catch(() => null))
   return peaksCache.get(k)!
 }
-/** La forma de onda real de un archivo (sus picos, cacheados), sólo en la parte visible del clip: de x0 a x1. */
-export const Wave = memo(function Wave({ projectId, src, inSec, pps, x0, x1, height, color }: { projectId: string; src: string; inSec: number; pps: number; x0: number; x1: number; height: number; color: string }) {
+/** La forma de onda real de un archivo (sus picos, cacheados), sólo en la parte visible del clip: de x0 a x1. Con
+ *  `fill`, una forma rellena (el teléfono); si no, una barra por píxel. */
+export const Wave = memo(function Wave({ projectId, src, inSec, pps, x0, x1, height, color, fill }: { projectId: string; src: string; inSec: number; pps: number; x0: number; x1: number; height: number; color: string; fill?: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [peaks, setPeaks] = useState<{ rate: number; data: Uint8Array } | null>(null)
   useEffect(() => { let on = true; loadPeaks(projectId, src).then((p) => on && setPeaks(p)); return () => { on = false } }, [projectId, src])
@@ -70,15 +71,24 @@ export const Wave = memo(function Wave({ projectId, src, inSec, pps, x0, x1, hei
     g.clearRect(0, 0, w, height)
     g.fillStyle = color
     const mid = height / 2
+    const hs = new Float32Array(w)
     for (let x = 0; x < w; x++) {
       const a = inSec + (x0 + x) / pps, b = inSec + (x0 + x + 1) / pps
       const i0 = Math.floor(a * peaks.rate), i1 = Math.max(i0 + 1, Math.floor(b * peaks.rate))
       let m = 0
       for (let i = i0; i < i1 && i < peaks.data.length; i++) if (peaks.data[i] > m) m = peaks.data[i]
-      const hh = Math.max(0.5, (m / 255) * (height / 2 - 2))
-      g.fillRect(x, mid - hh, 1, hh * 2)
+      hs[x] = Math.max(0.5, (m / 255) * (height / 2 - (fill ? 1 : 2)))
+      if (!fill) g.fillRect(x, mid - hs[x], 1, hs[x] * 2)
     }
-  }, [peaks, w, height, inSec, pps, x0, color])
+    if (fill) {
+      g.beginPath()
+      g.moveTo(0, mid)
+      for (let x = 0; x < w; x++) g.lineTo(x + 0.5, mid - hs[x])
+      for (let x = w - 1; x >= 0; x--) g.lineTo(x + 0.5, mid + hs[x])
+      g.closePath()
+      g.fill()
+    }
+  }, [peaks, w, height, inSec, pps, x0, color, fill])
   return <canvas ref={ref} style={{ position: 'absolute', left: x0, top: 0, width: w, height }} />
 })
 

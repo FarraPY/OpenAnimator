@@ -1,12 +1,12 @@
 import UIKit
 import WebKit
 
-/// La pantalla de la app: un WKWebView con la interfaz, servida por SchemeHandler y conectada a lo nativo por Bridge.
+/// La pantalla de la app: un WKWebView transparente con la interfaz (servida por SchemeHandler y conectada a lo nativo
+/// por Bridge) sobre el fondo y el Liquid Glass de iOS (NativeChrome, que ubica la página: glass.layout).
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private(set) var webView: WKWebView!
     private let backHint = UIImageView(image: UIImage(systemName: "chevron.backward.circle.fill"))
-    /// Liquid Glass de iOS sobre la columna de pistas del timeline (lo ubica la página: glass.set).
-    private(set) lazy var glass = GlassOverlay(in: view)
+    let chrome = NativeChrome()
     private let schemes = SchemeHandler()
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
@@ -16,8 +16,6 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         guard let i = args.firstIndex(of: name), i + 1 < args.count else { return nil }
         return args[i + 1]
     }
-    private static let background = UIColor(red: 11 / 255, green: 12 / 255, blue: 15 / 255, alpha: 1)
-
     override func loadView() {
         let config = WKWebViewConfiguration()
         config.setURLSchemeHandler(schemes, forURLScheme: "oa")
@@ -48,13 +46,24 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         web.navigationDelegate = self
         web.uiDelegate = self
         web.isOpaque = false
-        web.backgroundColor = Self.background
-        web.scrollView.backgroundColor = Self.background
+        web.backgroundColor = .clear
+        web.scrollView.backgroundColor = .clear
         web.scrollView.contentInsetAdjustmentBehavior = .never // la página maneja las áreas seguras (viewport-fit=cover)
         web.scrollView.bounces = false
         web.allowsBackForwardNavigationGestures = false
         webView = web
-        view = web
+        // Abajo el fondo y el vidrio; arriba la página, transparente.
+        let root = UIView()
+        root.addSubview(chrome.view)
+        web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        root.addSubview(web)
+        view = root
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        chrome.resize(view.bounds)
+        webView.frame = view.bounds
     }
 
     override func viewDidLoad() {
@@ -76,7 +85,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     private func load(recovered: Bool = false) {
-        glass.hide()
+        chrome.clear()
         let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }
