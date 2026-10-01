@@ -5,6 +5,8 @@
  * El resultado va a Swift (diag.result), que lo imprime y cierra la app.
  */
 import { nativeCall } from '../host/native'
+import { host } from '../../android/host'
+import type { WebHost } from '../host/webhost'
 
 const call = <T = any>(ch: string, ...a: unknown[]): Promise<T> => (window as any).oa.call(ch, ...a)
 const on = (ch: string, cb: (p: any) => void): (() => void) => (window as any).oa.on(ch, cb)
@@ -59,21 +61,27 @@ export async function runE2E() {
       const files = await call<any[]>('project:files', project.id).catch(() => [])
       R.sceneWritten = JSON.stringify(files).includes('e2e.html')
       await call('chat:kill', chat.id).catch(() => {})
+      // Si Claude no la escribió, la escena igual existe (la exportación se prueba aparte).
+      if (!R.sceneWritten) (host() as WebHost).fs.writeText(`projects/${project.id}/scenes/e2e.html`, scene)
     }
     // La escena al principio del timeline, 3 s.
     await step(R, 'timeline:add', async () => {
       const tl = await call<any>('timeline:get', project.id, project.activeTimeline || 'main')
       let tr = tl.tracks.find((t: any) => t.type === 'scene')
       if (!tr) { tr = { id: 't-e2e', name: 'Escenas', type: 'scene', clips: [] }; tl.tracks.unshift(tr) }
-      tr.clips = [{ id: 'c-e2e', src: 'scenes/e2e.html', start: 0, duration: 3, in: 0 }]
-      tl.duration = 3
+      tr.clips = [{ id: 'c-e2e', src: 'scenes/e2e.html', start: 0, duration: 2, in: 0 }]
+      // Sólo la escena de la prueba (la plantilla trae otras pistas y clips).
+      tl.tracks = [tr]
+      tl.duration = 2
       await call('timeline:save', project.id, project.activeTimeline || 'main', tl)
       return true
     })
     const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''
+      let shown = 0
       const off = on('export:progress', (p: any) => {
         if (id && p.id !== id) return
+        if (Date.now() - shown > 3000 || p.phase !== 'render') { shown = Date.now(); log(`  exportando: ${p.phase} · ${p.message} · ${p.done}/${p.total}`) }
         if (p.phase === 'listo') { off(); resolve({ file: p.file, size: p.size, fps: p.fps, encoder: p.encoder }) }
         else if (p.phase === 'error' || p.phase === 'cancelado') { off(); reject(new Error(p.message + '\n' + (p.details || ''))) }
       })

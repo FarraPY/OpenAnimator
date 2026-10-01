@@ -33,7 +33,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
               addEventListener('unhandledrejection', (e) => send('unhandled', [e.reason]))
             })()
             """
-            config.userContentController.addUserScript(WKUserScript(source: forward, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+            config.userContentController.addUserScript(WKUserScript(source: forward, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
         if let test = Self.argument("-OATest") {
             var js = "window.__oaTest = \(Self.json(test));"

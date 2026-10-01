@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   ipa:
-    runs-on: macos-15
+    runs-on: macos-26 # Xcode 26 y el simulador de iOS 26 (el JavaScript de Claude Code necesita el WebKit de iOS 26+)
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
