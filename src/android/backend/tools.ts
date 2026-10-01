@@ -4,7 +4,7 @@
  * Todas trabajan dentro de la carpeta del proyecto.
  */
 import { appManifest, assetUsage, listAssets, projectDir, readProject, readTimeline, writeTimeline } from './projects'
-import { base64ToBytes, blobToBase64, extname, fs, join, normalizeRel } from './fsx'
+import { base64ToBytes, canvasBase64, extname, fs, join, normalizeRel } from './fsx'
 import * as F from './frames'
 import * as M from './media'
 import * as PL from './plugins'
@@ -111,8 +111,8 @@ async function imageBlock(bytes: ArrayBuffer, mime: string, maxSide = 1568): Pro
   const cv = document.createElement('canvas'); cv.width = w; cv.height = h
   cv.getContext('2d')!.drawImage(bmp, 0, 0, w, h); bmp.close()
   const png = /png|gif|webp/.test(mime)
-  const blob = await new Promise<Blob>((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('No se pudo leer la imagen'))), png ? 'image/png' : 'image/jpeg', 0.88))
-  return { type: 'image', source: { type: 'base64', media_type: png ? 'image/png' : 'image/jpeg', data: await blobToBase64(blob) } }
+  const e = canvasBase64(cv, png ? 'image/png' : 'image/jpeg', 0.88)
+  return { type: 'image', source: { type: 'base64', media_type: e.mime === 'image/png' ? 'image/png' : 'image/jpeg', data: e.data } }
 }
 
 /** Vista previa chica de una imagen generada + % de píxeles transparentes (como la PC). */
@@ -127,8 +127,7 @@ async function previewOf(rel: string) {
     const px = g.getImageData(0, 0, w, h).data
     let clear = 0
     for (let i = 3; i < px.length; i += 4) if (px[i] < 16) clear++
-    const blob = await new Promise<Blob>((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('sin vista previa'))), 'image/png'))
-    return { png: await blobToBase64(blob), transparent: Math.round((clear / (px.length / 4)) * 100) }
+    return { png: canvasBase64(cv, 'image/png').data, transparent: Math.round((clear / (px.length / 4)) * 100) }
   } catch { return null }
 }
 

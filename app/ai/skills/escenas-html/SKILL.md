@@ -52,6 +52,9 @@ y la app).
 - Imágenes del tamaño en que se ven (una foto de 6000×4000 ocupa ~90 MB decodificada) y canvas del tamaño
   del cuadro.
 - Nada de Babel en el navegador (`type="text/babel"`): JS directo.
+- WebGL: lo que dibuja la GPU no entra en esos ~10 ms, pero la exportación espera a la GPU en cada fotograma
+  (un shader de raymarching a 1080p tardaba ~50 ms: no más de ~18 fps). Pocos pasos por píxel, o un canvas más
+  chico (escalado con CSS) si el efecto lo permite.
 - En la tablet, `oa_ver_fotogramas` y `oa_hoja_contactos` dicen lo que cuesta cada escena, medido en el
   equipo. Si dicen que es pesada, simplificala antes de seguir.
 

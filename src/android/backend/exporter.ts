@@ -159,6 +159,7 @@ class Export {
 
   async run() {
     const release = holdAwake()
+    document.documentElement.classList.add('exporting') // las animaciones de la app, en pausa (tablet.css)
     let started = false
     try {
       const r = await this.inner(() => { started = true })
@@ -181,6 +182,7 @@ class Export {
       this.renderer?.destroy()
       this.renderer = null
       try { host().call('cap.close') } catch { /* ignore */ }
+      document.documentElement.classList.remove('exporting')
       release()
     }
   }

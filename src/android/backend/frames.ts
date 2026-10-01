@@ -4,7 +4,8 @@
  * (oa_ver_fotogramas, oa_hoja_contactos, oa_auditar_layout), las miniaturas y la exportación.
  */
 import { compositorUrl } from '../../platform'
-import { base64ToBytes, fs, join } from './fsx'
+import { host } from '../host'
+import { base64ToBytes, canvasBase64, fs, join } from './fsx'
 import { readProject, readTimeline } from './projects'
 
 type Pending = { resolve: (v: any) => void; reject: (e: Error) => void; type: string }
@@ -14,6 +15,8 @@ export type SceneCost = {
   seekMs: number; frameMs: number; loadMs: number; fps: number; scenes: string[]
   /** Pasar al fotograma siguiente: el JS de la escena y recalcular estilos y maquetar (sin pasos si no se pudo medir). */
   stepJsMs?: number; stepLayoutMs?: number
+  /** Lo que tarda la GPU en el WebGL de ese paso (sólo escenas con WebGL). */
+  stepGpuMs?: number
   weight: { elements: number; filters: number; bigBlurs: number; svgFilters: number; backdrops: number; blends: number; shadows: number; layers: number; turbulence: number; babel: number; canvasPx: number; imagePx: number; videos: number; animations: number; ms: number }
 }
 let seq = 0
@@ -157,14 +160,89 @@ async function getRenderer(projectId: string, tlId: string) {
   return cur
 }
 
+// ── con la GPU (Snap.java) ────────────────────────────────────────────────────
+/**
+ * Fotogramas con la GPU: el compositor en una pantalla virtual y lo que el motor dibuja de verdad (Snap.java). Con el
+ * compositor oculto de arriba, cada fotograma de una escena pesada tardaba 8–14 s en la tablet (rasterizar el DOM con
+ * modern-screenshot) y el primer cuadro de un canvas WebGL salía vacío. Hay uno solo en toda la app; si no se puede
+ * (p. ej. durante una exportación, que usa la GPU), se sigue con el compositor oculto.
+ */
+class SnapRenderer {
+  usedAt = Date.now()
+  timer = 0
+  private jobs = 0
+  private busy: Promise<unknown> = Promise.resolve()
+  constructor(readonly key: string) {}
+  get idle() { return !this.jobs }
+
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    this.jobs++
+    const run = async () => { this.usedAt = Date.now(); try { return await fn() } finally { this.jobs--; this.usedAt = Date.now() } }
+    const job = this.busy.then(run, run)
+    this.busy = job.catch(() => {})
+    return job
+  }
+
+  open(projectId: string, tlId: string, width: number, height: number) {
+    const url = compositorUrl(projectId, { p: projectId, tl: tlId, mode: 'export', capture: '1' })
+    return this.exclusive(() => host().callAsync('snap.open', { url, width, height }))
+  }
+
+  reload() { return this.exclusive(() => host().callAsync('snap.reload')) }
+
+  frame(t: number, width: number, _height: number, format: 'jpeg' | 'png' = 'png', quality = 0.92, cost = false) {
+    return this.exclusive(async () => {
+      const r = await host().callAsync<{ data: string; mime: string; width: number; height: number; ms: number; cost?: SceneCost }>('snap.frame', { t, width, format, quality, cost })
+      return { ...r, cost: r.cost ? { ...r.cost, seekMs: r.ms, frameMs: r.ms } : null }
+    })
+  }
+
+  destroy() { clearTimeout(this.timer); try { host().call('snap.close') } catch { /* sin puente */ } }
+}
+let snap: SnapRenderer | null = null
+
+/** El de la GPU para projectId|tlId, o null si no se puede (va el compositor oculto). */
+async function getSnap(projectId: string, tlId: string): Promise<SnapRenderer | null> {
+  // Con el tamaño: la pantalla virtual se abre a la medida del proyecto (si cambia, se abre otra).
+  const p = readProject(projectId)
+  const key = `${projectId}|${tlId}|${p.width}x${p.height}`
+  try {
+    if (snap && snap.key !== key) {
+      if (!snap.idle) return null // lo está usando otro proyecto: éste va por el compositor oculto
+      snap.destroy(); snap = null
+    }
+    // Recargar: el timeline pudo cambiar en disco (si no anda, se abre de nuevo).
+    if (snap) try { await snap.reload() } catch { snap.destroy(); snap = null }
+    if (!snap) {
+      const s = snap = new SnapRenderer(key)
+      try { await s.open(projectId, tlId, p.width, p.height) } catch (e) { if (snap === s) snap = null; s.destroy(); throw e }
+    }
+  } catch (e) {
+    console.warn('Fotogramas sin la GPU:', e)
+    return null
+  }
+  const cur = snap!
+  cur.usedAt = Date.now()
+  clearTimeout(cur.timer)
+  const expire = () => {
+    const left = cur.usedAt + 90_000 - Date.now()
+    if (!cur.idle || left > 0) { cur.timer = window.setTimeout(expire, Math.max(1000, left)); return }
+    cur.destroy(); if (snap === cur) snap = null
+  }
+  cur.timer = window.setTimeout(expire, 90_000)
+  return cur
+}
+
 export function closeFramePool(projectId?: string) {
   for (const [k, r] of pool) if (!projectId || k.startsWith(projectId + '|')) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
+  if (snap && (!projectId || snap.key.startsWith(projectId + '|'))) { snap.destroy(); snap = null }
 }
 
 /** Poca memoria: cierra los compositores ocultos que no están dibujando nada (se vuelven a abrir al pedirlos). */
 export function trimFramePool() {
   // Entre dos fotogramas de un mismo trabajo el compositor queda libre un instante: no cerrar uno recién usado.
   for (const [k, r] of pool) if (r.idle && Date.now() - r.usedAt > 10_000) { clearTimeout(r.timer); r.destroy(); pool.delete(k) }
+  if (snap && snap.idle && Date.now() - snap.usedAt > 10_000) { snap.destroy(); snap = null }
 }
 
 /**
@@ -201,13 +279,6 @@ function drawLabel(g: CanvasRenderingContext2D, text: string, w: number) {
   g.fillText(text, Math.round(fs * 0.5) + pad, Math.round(fs * 0.4) + fs * 0.7)
 }
 
-async function toBase64(cv: HTMLCanvasElement | OffscreenCanvas, mime = 'image/png', quality?: number) {
-  const blob = cv instanceof HTMLCanvasElement
-    ? await new Promise<Blob>((res, rej) => cv.toBlob((b) => (b ? res(b) : rej(new Error('No se pudo codificar la imagen'))), mime, quality))
-    : await cv.convertToBlob({ type: mime, quality })
-  const { blobToBase64 } = await import('./fsx')
-  return blobToBase64(blob)
-}
 
 /**
  * Renderiza fotogramas en los instantes pedidos y devuelve PNG (base64). measure: en cuántos de ellos
@@ -217,19 +288,33 @@ export async function renderFrames(projectId: string, tlId: string | undefined, 
   const pr = readProject(projectId)
   const tid = tlId || pr.activeTimeline
   const { w, h } = sizeFor(projectId, width)
-  const r = await getRenderer(projectId, tid)
+  let r: SnapRenderer | Renderer = (await getSnap(projectId, tid)) || (await getRenderer(projectId, tid))
   const out: Array<{ t: number; data: string; mime: string; cost?: SceneCost | null }> = []
   const every = measure > 0 ? Math.max(1, Math.ceil(times.length / measure)) : 0
   for (let i = 0; i < times.length; i++) {
     const t = times[i]
-    const f = await r.frame(t, w, h, withTime ? 'png' : format, 0.9, every > 0 && i % every === 0)
+    const cost = every > 0 && i % every === 0
+    // Con la GPU va JPEG casi sin pérdida (el PNG de Java es lento) cuando después se le dibuja la hora encima.
+    const one = (x: SnapRenderer | Renderer) => x instanceof SnapRenderer
+      ? x.frame(t, w, h, withTime ? 'jpeg' : format, withTime ? 0.95 : 0.9, cost)
+      : x.frame(t, w, h, withTime ? 'png' : format, 0.9, cost)
+    let f
+    try { f = await one(r) } catch (e) {
+      // La GPU se cortó a mitad (p. ej. empezó una exportación): el resto, con el compositor oculto.
+      if (!(r instanceof SnapRenderer)) throw e
+      console.warn('Fotogramas sin la GPU desde', t, e)
+      // Una escena que no termina de dibujarse deja trabada esa página: el próximo pedido abre otra.
+      r.destroy(); if (snap === r) snap = null
+      r = await getRenderer(projectId, tid)
+      f = await one(r)
+    }
     if (!withTime) { out.push({ t, data: f.data, mime: f.mime, cost: f.cost }); continue }
     const bmp = await decode(f.data, f.mime)
     const cv = document.createElement('canvas'); cv.width = w; cv.height = h
     const g = cv.getContext('2d')!
-    g.drawImage(bmp, 0, 0); bmp.close()
+    g.drawImage(bmp, 0, 0, w, h); bmp.close() // la de la GPU no se agranda: un proyecto más angosto viene más chico
     drawLabel(g, label(t), w)
-    out.push({ t, data: await toBase64(cv, format === 'png' ? 'image/png' : 'image/jpeg', 0.9), mime: format === 'png' ? 'image/png' : 'image/jpeg', cost: f.cost })
+    out.push({ t, data: canvasBase64(cv, format === 'png' ? 'image/png' : 'image/jpeg', 0.9).data, mime: format === 'png' ? 'image/png' : 'image/jpeg', cost: f.cost })
   }
   return out
 }
@@ -262,7 +347,7 @@ export async function contactSheet(projectId: string, tlId: string | undefined, 
     g.drawImage(bmp, pad + (i % cols) * (w + pad), pad + Math.floor(i / cols) * (h + pad), w, h)
     bmp.close()
   }
-  return { jpeg: await toBase64(cv, 'image/jpeg', 0.88), times, costs: frames.map((f) => f.cost).filter((c): c is SceneCost => !!c) }
+  return { jpeg: canvasBase64(cv, 'image/jpeg', 0.88).data, times, costs: frames.map((f) => f.cost).filter((c): c is SceneCost => !!c) }
 }
 
 /**
@@ -304,6 +389,9 @@ export function costNote(costs: SceneCost[]): string {
     if (w.videos > 2) flags.push(`${w.videos} videos a la vez`)
     if (w.babel) flags.push('Babel en el navegador (compila al cargar)')
     if (load > 2500) flags.push(`tarda ${(load / 1000).toFixed(1)} s en cargar`)
+    // El WebGL no cuenta en el JS: la GPU lo dibuja después, y cada fotograma de la exportación la espera.
+    const gpu = Math.max(0, ...cs.map((c) => c.stepGpuMs || 0))
+    if (gpu > 16) flags.push(`WebGL: ~${ms(gpu)} ms de GPU por fotograma (la exportación no pasa de ~${Math.max(1, Math.floor(1000 / gpu))} fps: menos pasos en el shader o un canvas más chico)`)
     const stepText = step == null ? '' : `${ms(step)} ms por fotograma de JS y estilos`
     if ((step == null || step <= budget) && !flags.length) { light.push(`${scenes} ${stepText ? '~' + stepText : 'sin pasos medidos'}`); continue }
     const split = slow ? ` (JS ${ms(slow.stepJsMs!)} + estilos y maquetado ${ms(slow.stepLayoutMs!)}; a ${fps} fps debería quedar bajo ~${budget} ms, y pintar va aparte)` : ''

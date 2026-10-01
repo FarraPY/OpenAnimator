@@ -26,6 +26,9 @@
   var capture = qs.get('capture') === '1';
   var marker = capture && qs.get('marker') === '1';
   var MARK_PX = 16; // alto de la franja de marca en píxeles de la pantalla (Capture.MARK)
+  // Alto que se ve (captura por GPU): Java hace la vista más alta que la pantalla virtual para que el motor le dé
+  // más memoria de mosaicos (se calcula con el tamaño de la vista); la página se acomoda a lo que se ve.
+  var viewH = capture ? +qs.get('vh') || 0 : 0;
   // El compositor se sirve desde <origen>/p/<proyecto>/__oa/ (oa:// en la PC, https en Android):
   // la carpeta del proyecto es lo que está antes de __oa/.
   var base = location.href.split('?')[0].replace(/__oa\/[^/]*$/, '');
@@ -74,12 +77,15 @@
   function fitCapture() {
     var W = project.width || 1920, H = project.height || 1080;
     var vv = window.visualViewport;
-    var vw = vv ? vv.width : window.innerWidth, vh = vv ? vv.height : window.innerHeight;
+    var vw = vv ? vv.width : window.innerWidth, vh = viewH || (vv ? vv.height : window.innerHeight);
     var mh = marker ? MARK_PX / (window.devicePixelRatio || 1) : 0;
     document.body.style.width = '100vw';
-    document.body.style.height = '100vh';
+    document.body.style.height = viewH ? vh + 'px' : '100vh';
     stage.style.transform = 'scale(' + (vw / W) + ',' + ((vh - mh) / H) + ')';
-    if (markEl) markEl.style.height = mh + 'px';
+    if (markEl) {
+      markEl.style.height = mh + 'px';
+      if (viewH) { markEl.style.bottom = 'auto'; markEl.style.top = (vh - mh) + 'px'; }
+    }
     if (testEl) testEl.style.height = (vh - mh) + 'px';
   }
   if (capture) {
@@ -215,6 +221,8 @@
   }
 
   var renderSeq = 0;
+  /** Alguna capa pasó a verse en el último renderAt (su documento se pinta de cero: ver __oaCap). */
+  var newlyShown = false;
   /** Deja el compositor exactamente en t. Devuelve cuando todas las capas están listas. */
   async function renderAt(t, opts) {
     opts = opts || {};
@@ -234,9 +242,18 @@
         var local = (c.in || 0) + (t - c.start);
         jobs.push(L.ready.then(async function () {
           if (seq !== renderSeq && !opts.force) return;
+          if (L.el.style.display !== 'block') {
+            // Con su tamaño antes de dibujar: oculta (display:none) la escena mide 0×0 y la que calcula su lienzo o
+            // su escala con innerWidth dibujaba su primer cuadro en 1×1 (un color liso) o a escala 0 (vacío).
+            newlyShown = true;
+            L.el.style.visibility = 'hidden';
+            L.el.style.display = 'block';
+            void L.el.offsetWidth;
+          }
           if (L.kind === 'scene') {
             var rt = L.el.contentWindow && L.el.contentWindow.__oaRuntime;
             if (rt) await rt.renderAt(local, { fps: project.fps || 30, skipPaint: true });
+            if (rt && capture && rt.gpuSync) rt.gpuSync(); // WebGL pesado: que se muestre antes de pedir el próximo
           } else if (L.kind === 'video') {
             if (playing && mode === 'preview') {
               if (L.el.paused || Math.abs(L.el.currentTime - local) > 0.25) { L.el.currentTime = local; }
@@ -248,7 +265,6 @@
             }
           }
           L.el.style.opacity = clipOpacity(c, t);
-          L.el.style.display = 'block';
           L.el.style.visibility = 'visible';
         }));
       }
@@ -503,10 +519,14 @@
       for (var i = 1; i <= 3; i++) {
         var s = performance.now();
         for (var k = 0; k < scenes.length; k++) await scenes[k].rt.renderAt(scenes[k].local + i / fps, { fps: fps, skipPaint: true });
-        var one = { js: performance.now() - s, layout: flushLayout(scenes) };
+        var one = { js: performance.now() - s, layout: flushLayout(scenes), gpu: -1 };
+        // Lo que tarda la GPU en el WebGL de ese paso (la página lo encarga en el JS y sigue sin esperarlo).
+        for (k = 0; k < scenes.length; k++) if (scenes[k].rt.gpuWait) one.gpu = Math.max(one.gpu, scenes[k].rt.gpuWait());
         steps.push(one);
         if (one.js + one.layout > 150) break;
       }
+      var gpus = steps.map(function (x) { return x.gpu; }).sort(function (a, b) { return a - b; });
+      if (gpus[0] >= 0) cost.stepGpuMs = gpus[Math.floor(gpus.length / 2)];
       steps.sort(function (a, b) { return (a.js + a.layout) - (b.js + b.layout); });
       var mid = steps[Math.floor(steps.length / 2)];
       cost.stepJsMs = mid.js; cost.stepLayoutMs = mid.layout;
@@ -521,16 +541,10 @@
     cost.fps = fps;
   }
 
+  // toDataURL y no toBlob: en el WebView de la tablet toBlob espera un momento libre del hilo que no llega (4 s siempre).
   function canvasData(cv, mime, quality) {
-    return new Promise(function (res, rej) {
-      cv.toBlob(function (b) {
-        if (!b) return rej(new Error('No se pudo codificar el fotograma'));
-        var fr = new FileReader();
-        fr.onload = function () { var s = String(fr.result); res(s.slice(s.indexOf(',') + 1)); };
-        fr.onerror = function () { rej(fr.error); };
-        fr.readAsDataURL(b);
-      }, mime, quality);
-    });
+    var url = cv.toDataURL(mime, quality);
+    return Promise.resolve(url.slice(url.indexOf(',') + 1));
   }
 
   function setMsg(s) { msgEl.textContent = s || ''; }
@@ -648,8 +662,27 @@
   if (capture) {
     window.__oaCap = function (t, n) {
       var got = clock();
-      return capStep(function () { showTest(false); return renderAt(t, { force: true, skipPaint: true }); }, n, true, got);
+      return capStep(function () {
+        showTest(false);
+        newlyShown = false;
+        return renderAt(t, { force: true, skipPaint: true }).then(function () {
+          // Una escena que recién se muestra no sale en su primer cuadro (el motor pinta su documento de cero: salía
+          // vacía, gris o blanca): con la franja en 0 se esperan dos cuadros. En la exportación pasa sólo al empezar
+          // cada escena; en los fotogramas para Claude, en cada salto a otra escena.
+          if (newlyShown) return afterCommit().then(afterCommit);
+        });
+      }, n, true, got);
     };
     window.__oaCapTest = function (n) { return capStep(function () { showTest(true); }, n); };
+    // Lo que le cuesta a la escena el fotograma en t (para Claude: Snap.java lo pide después de tomar la imagen). La
+    // medición mueve la escena unos cuadros: la franja queda en 0, así ninguna imagen de esos pasos pasa por un pedido.
+    window.__oaCapCost = function (t) {
+      window.__oaCapCostResult = '';
+      capChain = capChain.then(function () {
+        setMark(0);
+        var c = {};
+        return measureCost(t, c).then(function () { window.__oaCapCostResult = JSON.stringify(c); });
+      }).catch(function (err) { window.__oaCapCostResult = JSON.stringify({ error: String(err && err.message || err) }); });
+    };
   }
 })();

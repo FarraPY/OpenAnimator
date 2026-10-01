@@ -90,8 +90,9 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
   }, [chat.session])
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
   useEffect(() => { if (chat.session) seenChat.set(projectId, { session: chat.session, n: seen }) }, [seen, chat.session])
-  // El visor se desmonta en la pestaña de Claude: la reproducción se detiene.
-  useEffect(() => { if (tab === 'claude') setPlaying(false) }, [tab])
+  // El visor se desmonta en la pestaña de Claude y al exportar: la reproducción se detiene (si no, el reloj seguía
+  // redibujando el editor detrás del diálogo).
+  useEffect(() => { if (tab === 'claude' || showExport) setPlaying(false) }, [tab, showExport])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
   const askClaude = (text: string) => { setTab('claude'); setInject({ text, n: Date.now() }) }
   const fittedTl = useRef(false)
@@ -512,9 +513,10 @@ export default function Editor({ projectId, onClose }: { projectId: string; onCl
               <Button size="sm" variant="ghost" icon="maximize" tip="Pantalla completa" kbd="F" onClick={toggleFull} />
               </>}
             </div>
-            {/* En la tablet, con la pestaña de Claude al frente el visor no se ve: se desmonta para no tener otra
-                copia viva de la escena mientras Claude trabaja (con escenas pesadas la memoria no alcanzaba). */}
-            {!touch || tab === 'edit' ? <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
+            {/* En la tablet, con la pestaña de Claude al frente o exportando el visor no se ve: se desmonta para no
+                tener otra copia viva de la escena (con escenas pesadas la memoria no alcanzaba; al exportar comparte
+                el motor web con la captura). */}
+            {!touch || (tab === 'edit' && !showExport) ? <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={reloadKey}
               onError={(m) => toast(m, true)} bg={full ? 'black' : ed!.stageBg} safeAreas={!full && ed!.safeAreas} thirds={!full && ed!.thirds} onScale={setScale} pad={full ? 0 : 20} />
               : <div className="stage-wrap" />}
             {full && <div className="fs-tap" onPointerDown={tapFull} />}

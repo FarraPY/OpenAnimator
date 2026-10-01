@@ -73,6 +73,7 @@ public final class Bridge {
     private final AtomicBoolean moveCancel = new AtomicBoolean();
     private final Encoder encoder;
     private final Capture capture;
+    private final Snap snap;
     private final TermuxLink termux;
     private volatile String token;
 
@@ -93,6 +94,7 @@ public final class Bridge {
         this.secrets = secrets;
         this.encoder = new Encoder(fs);
         this.capture = new Capture(act, encoder);
+        this.snap = new Snap(act);
         this.termux = new TermuxLink(act, this);
         newPageToken();
     }
@@ -112,14 +114,16 @@ public final class Bridge {
         new SecureRandom().nextBytes(b);
         String t = Base64.encodeToString(b, Base64.NO_WRAP | Base64.URL_SAFE);
         token = t;
-        // La página se volvió a cargar: una captura de exportación que quedara abierta ya no la usa nadie.
+        // La página se volvió a cargar: una captura de exportación (o de fotogramas) que quedara abierta ya no la usa nadie.
         if (capture != null) capture.close();
+        if (snap != null) snap.close();
         return t;
     }
 
     void destroy() {
         for (Http.Handle h : requests.values()) h.cancel();
         capture.close();
+        snap.close();
         encoder.cancel();
         termux.closeAll();
         pool.shutdownNow();
@@ -343,6 +347,9 @@ public final class Bridge {
             case "cap.close":
                 capture.close();
                 return true;
+            case "snap.close":
+                snap.close();
+                return true;
             default:
                 throw new IllegalArgumentException("Método desconocido: " + method);
         }
@@ -467,10 +474,24 @@ public final class Bridge {
                 return;
             // Captura nativa de la exportación (Capture): abrir el compositor, un fotograma, cerrar.
             case "cap.start":
+                capture.reserve(); // desde ya, un snap.open ve la exportación
+                snap.close(); // la memoria de la GPU, para la exportación
                 resolve(id, ok(capture.start(a.getString("url"), a.getInt("width"), a.getInt("height"), a.optString("mode", "draw"))));
                 return;
             case "cap.frame":
                 resolve(id, ok(capture.frame(a.getDouble("t"), a.optJSONArray("next"), a.optBoolean("preview"))));
+                return;
+            // Fotogramas con la GPU para Claude y las miniaturas (Snap): abrir el compositor, recargarlo, un fotograma.
+            case "snap.open":
+                if (capture.active()) throw new IOException("Hay una exportación en curso");
+                resolve(id, ok(snap.open(a.getString("url"), a.getInt("width"), a.getInt("height"))));
+                return;
+            case "snap.reload":
+                snap.reload();
+                resolve(id, ok(true));
+                return;
+            case "snap.frame":
+                resolve(id, ok(snap.frame(a.getDouble("t"), a.getInt("width"), a.optString("format", "jpeg"), a.optDouble("quality", 0.92), a.optBoolean("cost"))));
                 return;
             case "enc.frames":
                 resolve(id, ok(encoder.frames()));

@@ -17,7 +17,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import type { Attachment, ChatEvent, ChatItem, ChatStats } from '../../api'
 import { host } from '../host'
 import { projectChanged, send } from './events'
-import { basename, blobToBase64, dirname, fs, hash, join, uniqueName } from './fsx'
+import { basename, blobToBase64, canvasBase64, dirname, fs, hash, join, uniqueName } from './fsx'
 import { projectDir } from './projects'
 import { buildSystem, PLAN_NOTE, SAVER_API as SAVER } from './prompt'
 import { getSettings } from './settings'
@@ -809,8 +809,8 @@ async function fitImage(im: { mediaType: string; data: string }): Promise<{ medi
     cv.getContext('2d')!.drawImage(bmp, 0, 0, cv.width, cv.height)
     bmp.close()
     const png = im.mediaType === 'image/png'
-    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, png ? 'image/png' : 'image/jpeg', 0.9))
-    return blob ? { mediaType: png ? 'image/png' : 'image/jpeg', data: await blobToBase64(blob) } : im
+    const e = canvasBase64(cv, png ? 'image/png' : 'image/jpeg', 0.9)
+    return { mediaType: e.mime, data: e.data }
   } catch { return im }
 }
 
@@ -825,8 +825,7 @@ async function imagePreview(path: string): Promise<string | undefined> {
     const g = cv.getContext('2d')!
     g.fillStyle = '#fff'; g.fillRect(0, 0, w, h) // JPEG no tiene transparencia
     g.drawImage(bmp, 0, 0, w, h); bmp.close()
-    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, 'image/jpeg', 0.88))
-    return blob ? await blobToBase64(blob) : undefined
+    return canvasBase64(cv, 'image/jpeg', 0.88).data
   } catch { return undefined }
 }
 

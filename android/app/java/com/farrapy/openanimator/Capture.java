@@ -15,6 +15,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.WebView;
+import android.widget.FrameLayout;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -108,9 +109,17 @@ final class Capture {
         this.encoder = encoder;
     }
 
-    /** An export's capture is open (for the record of why the web engine closed). */
+    /** From reserve() until start() ends (then web says it). */
+    private volatile boolean starting;
+
+    /** An export's capture is open or opening (for the record of why the web engine closed, and Snap waits). */
     boolean active() {
-        return web != null;
+        return starting || web != null;
+    }
+
+    /** cap.start, before closing Snap: a snap.open arriving meanwhile already sees the export. */
+    void reserve() {
+        starting = true;
     }
 
     /**
@@ -118,6 +127,15 @@ final class Capture {
      * encoder already started (the virtual display draws into it); if it fails, the caller tries "draw".
      */
     synchronized JSONObject start(final String url, final int width, final int height, String mode) throws Exception {
+        starting = true;
+        try {
+            return open(url, width, height, mode);
+        } finally {
+            starting = false;
+        }
+    }
+
+    private JSONObject open(final String url, final int width, final int height, String mode) throws Exception {
         stop();
         if (url == null || !url.startsWith(PREFIX) || !url.contains("capture=1")) throw new IOException("Dirección de captura inválida");
         if (width < 16 || height < 16 || width > 4096 || height > 4096) throw new IOException("Tamaño de captura inválido");
@@ -141,6 +159,22 @@ final class Capture {
         o.put("height", height);
         o.put("mode", gpu ? "gpu" : "draw");
         return o;
+    }
+
+    /**
+     * Alto de la vista de captura por GPU en pantallas virtuales: 4 con 8 GB de memoria, 3 con 6 GB, ~1,7 con 4 GB.
+     * En la Tab S8+, con 3 un fundido entre dos escenas pesadas todavía dejó un cuadro con partes sin dibujar
+     * (1 de 3600); con 4, ninguno (y el pico de gráficos de la app pasó de 835 a 980 MB).
+     */
+    static float memViews(Context ctx) {
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) ctx.getSystemService(Context.ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            return Math.max(1f, Math.min(4f, (mi.totalMem / (float) (1L << 30) - 1f) / 1.5f));
+        } catch (Exception e) {
+            return 1f;
+        }
     }
 
     private int generation() {
@@ -227,7 +261,14 @@ final class Capture {
                     }
                     // Con el contexto de la pantalla virtual (160 dpi): un píxel de la página es un píxel del video.
                     v = act.captureWebView(pr.getContext());
-                    pr.setContentView(v, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                    // El motor le da a cada WebView memoria de mosaicos según su tamaño (con pre-raster: 20 × 4 bytes
+                    // por píxel, ~165 MB a 1080p). Una escena con cientos de capas 3D no entraba y se dibujaba con
+                    // mosaicos faltantes (cuadros sin partes, marcas ilegibles). La vista es más alta (memViews): lo de
+                    // abajo queda fuera de la pantalla virtual (no se ve ni se dibuja) y la página se acomoda arriba
+                    // (vh). En la Tab S8+ la escena CSS 3D de «Prueba de render» pasó de 2,7 a 16 fps y SVG de 20 a 31.
+                    FrameLayout box = new FrameLayout(pr.getContext());
+                    box.addView(v, new FrameLayout.LayoutParams(width, Math.round((height + MARK) * memViews(act))));
+                    pr.setContentView(box, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
                     pr.show();
                     synchronized (viewsLock) {
                         if (gen != generation) return; // se cerró mientras se creaba: se cierra acá abajo
@@ -240,7 +281,7 @@ final class Capture {
                     pr = null;
                     v = null;
                     act.preferFastDisplay(true);
-                    mine.loadUrl(url + "&marker=1");
+                    mine.loadUrl(url + "&marker=1&vh=" + (height + MARK));
                 } catch (Exception e) {
                     err[0] = e;
                 } finally {
@@ -591,7 +632,10 @@ final class Capture {
             } catch (Exception ignored) {
                 // la pantalla ya no estaba
             }
-            if (w != null) w.destroy();
+            if (w != null) {
+                if (w.getParent() instanceof ViewGroup) ((ViewGroup) w.getParent()).removeView(w);
+                w.destroy();
+            }
         } else if (w != null) act.removeCaptureView(w);
         if (d != null) d.release();
         if (s != null) {

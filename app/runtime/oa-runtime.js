@@ -77,6 +77,56 @@
   VDate.parse = RealDate.parse; VDate.UTC = RealDate.UTC;
   window.Date = VDate;
 
+  // ── WebGL: esperar a la GPU (captura) ─────────────────────────────────────
+  // Referencias débiles: un contexto que la escena suelta (p. ej. para ver si hay WebGL) no queda vivo por esto
+  // (pasados ~16 vivos, Chromium pierde el más viejo, que puede ser el de la escena).
+  var glContexts = [];
+  var realGetContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type) {
+    var g = realGetContext.apply(this, arguments);
+    if (g && /webgl/i.test(type) && typeof WeakRef === 'function') {
+      glContexts = glContexts.filter(function (r) { return r.deref(); });
+      if (!glContexts.some(function (r) { return r.deref() === g; })) glContexts.push(new WeakRef(g));
+    }
+    return g;
+  };
+  /** Lee un píxel de lo que se ve, sin que la escena note nada (framebuffer, PBO y parámetros de lectura como estaban). */
+  function readOne(g) {
+    var gl2 = typeof WebGL2RenderingContext !== 'undefined' && g instanceof WebGL2RenderingContext;
+    var target = gl2 ? g.READ_FRAMEBUFFER : g.FRAMEBUFFER;
+    var fb = g.getParameter(gl2 ? g.READ_FRAMEBUFFER_BINDING : g.FRAMEBUFFER_BINDING);
+    var pbo = gl2 ? g.getParameter(g.PIXEL_PACK_BUFFER_BINDING) : null;
+    var pack = gl2 ? [g.PACK_ROW_LENGTH, g.PACK_SKIP_PIXELS, g.PACK_SKIP_ROWS].map(function (p) { return [p, g.getParameter(p)]; }).filter(function (x) { return x[1]; }) : [];
+    if (fb) g.bindFramebuffer(target, null);
+    if (pbo) g.bindBuffer(g.PIXEL_PACK_BUFFER, null);
+    pack.forEach(function (x) { g.pixelStorei(x[0], 0); });
+    g.readPixels(0, 0, 1, 1, g.RGBA, g.UNSIGNED_BYTE, px);
+    pack.forEach(function (x) { g.pixelStorei(x[0], x[1]); });
+    if (pbo) g.bindBuffer(g.PIXEL_PACK_BUFFER, pbo);
+    if (fb) g.bindFramebuffer(target, fb);
+  }
+  /**
+   * Captura: espera a que la GPU termine lo que dibujó la escena. Sin esperar, con un WebGL pesado la página entrega el
+   * cuadro siguiente antes de que se muestre éste, el motor lo reemplaza y la GPU lo dibujó en vano (raymarching de
+   * «Prueba de render»: 70 de 180 dos veces; 14,3 → 16,8 fps). finish() de WebGL es sólo un flush: leer un píxel espera.
+   * Si la espera es corta (la escena usa poco la GPU) frenar cuesta más de lo que ahorra (puntos GPU: 96 → 84 fps):
+   * se vuelve a medir cada 60 cuadros.
+   */
+  var px = new Uint8Array(4), syncSkip = 0;
+  function gpuSync() {
+    if (syncSkip > 0) { syncSkip--; return; }
+    var ms = gpuWait();
+    if (ms >= 0 && ms < 12) syncSkip = 60;
+  }
+  /** Espera a la GPU y devuelve cuánto tardó (ms), o -1 si la escena no tiene WebGL (también para el costo, ver measureCost). */
+  function gpuWait() {
+    var live = glContexts.map(function (r) { return r.deref(); }).filter(function (g) { return g && g.canvas.isConnected && !g.isContextLost(); });
+    if (!live.length) return -1;
+    var t0 = realPerfNow();
+    live.forEach(readOne);
+    return realPerfNow() - t0;
+  }
+
   // ── animaciones CSS / Web Animations ──────────────────────────────────────
   var animFirstSeen = new WeakMap();
   var cssPaused = new WeakSet();
@@ -266,6 +316,8 @@
     mode: detectMode,
     getDuration: getDuration,
     audit: async function (t) { await renderAt(t, { skipPaint: true }); return auditNow(); },
+    gpuSync: gpuSync,
+    gpuWait: gpuWait,
     realSetTimeout: realSetTimeout
   };
 })();

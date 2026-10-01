@@ -412,6 +412,12 @@ html.touch .hist-row { min-height: 64px; }
 .xp-est { display: flex; align-items: center; gap: 14px; margin-top: 22px; padding: 14px 16px; border-radius: 14px; background: var(--bg-0); border: 1px solid var(--line); color: var(--t2); font-size: 14px; }
 .xp-est b { color: var(--t1); }
 .xp-run { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 24px; align-items: center; }
+/* Exportando, nada de la app se anima sin parar: cada cuadro de la app se dibuja en el mismo motor web y el mismo hilo
+   de dibujo que la captura. La barra de progreso avanza cada 250 ms y con transición se animaba siempre («Prueba de
+   render» desde el editor: 171 → 141 s); un solo punto que late (Claude trabajando) bajaba la escena CSS 3D de 16 a
+   11 fps. */
+.xp-run .progress > div { transition: none; }
+html.exporting *, html.exporting *::before, html.exporting *::after { animation-play-state: paused !important; }
 .xp-preview { position: relative; border-radius: 16px; overflow: hidden; background: #000; border: 1px solid var(--line-2); aspect-ratio: 16 / 9; display: grid; place-items: center; }
 .xp-preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .xp-big { font: 600 44px/1 var(--font-display); letter-spacing: -1px; }

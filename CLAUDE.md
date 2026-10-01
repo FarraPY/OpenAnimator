@@ -199,13 +199,42 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
      MP4 se escribe en otro hilo (`writer`): una escritura lenta en la tarjeta SD no puede demorar al que toma imágenes.
      Antes de Android 11 la ventana necesita `TYPE_PRIVATE_PRESENTATION`. Antes, `__oaCapTest` (patrón de 6 colores) comprueba
      colores, orientación y recorte. Errores de la página: `__oaCapError` (queda aunque sigan pedidos).
+     Memoria de mosaicos: el motor le da a un WebView 20 × 4 bytes por píxel de su tamaño (con pre-raster; ~165 MB a
+     1080p). Con cientos de capas 3D no alcanzaba (TileManager: `had_enough_memory_to_schedule_tiles_needed_now: false`)
+     y se dibujaban cuadros con mosaicos faltantes: la marca ilegible cuenta como «cambiando» (cada uno, un dibujo tirado)
+     y los que pasaban salían sin partes (el HUD de «Prueba de render» faltaba en ~22 % de la escena CSS 3D), a 2,7 fps.
+     La vista es más alta que la pantalla virtual (`memViews`: 4× con 8 GB; con 3× un fundido entre dos escenas pesadas
+     dejó 1 cuadro incompleto de 3600) y la página se acomoda arriba (`vh`): 16–17 fps y cuadros completos (dos
+     exportaciones iguales dan 60 dB); el video de 2:00 de «Prueba de render» pasó de 404 a 149 s (137 s con lo de abajo,
+     empezando con la tablet fría; dentro de esos 2 minutos ya la estrangula la temperatura). En la Tab S8+ no hay ADPF (PerformanceHintManager:
+     `getPreferredUpdateRateNanos` = -1) y la prioridad alta del contexto EGL no cambió nada.
+     Todo lo que se anima en la app durante la exportación le quita a la captura: los WebView comparten el hilo del
+     motor web, el compositor (VizWebView) y el RenderThread de Android, y cada cuadro de la app recompone toda la
+     ventana. Por eso el visor del editor se desmonta con el diálogo de exportar abierto (y la reproducción se detiene),
+     la barra de progreso no tiene transición (se animaba sin parar a 120 Hz; desde el editor, 191 → 141 s) y
+     exportando (`html.exporting`, exporter.ts) las animaciones CSS de la app quedan en pausa: un solo punto que late
+     (Claude trabajando) bajaba la escena CSS 3D de 16,2 a 11,1 fps. WebGL pesado: la página entregaba el cuadro siguiente antes de que se mostrara el anterior, el
+     motor lo reemplazaba y la GPU lo había dibujado en vano; `gpuSync` (oa-runtime.js, sólo al capturar) lee un píxel de
+     cada contexto WebGL para esperar a la GPU (`finish()` en Chromium es sólo un flush) si eso tarda más de 12 ms
+     (raymarching 14,3 → 17 fps y 0 pérdidas; los WebGL livianos no se frenan: se vuelve a medir cada 60 cuadros). La
+     escena CSS 3D (360 capas con preserve-3d) está limitada por Viz: ~36 ms de CPU por cuadro en
+     `DirectRenderer::DrawRenderPass` (trazas con CDP Tracing desde la página principal; la de captura no devuelve eventos).
+     Probado sin resultado: llevar VizWebView y RenderThread al núcleo X2 (`taskset` desde la app; el X2 suele estar
+     pausado por core_ctl y la afinidad sólo a él falla, y sólo núcleos grandes dio lo mismo). Al medir: después de unos
+     minutos exportando, Samsung baja los topes a ~60 % (A710 1,55 GHz, X2 1,84 GHz, GPU 492 MHz) con «Thermal Status: 0»;
+     comparar sólo con la tablet fría (`scaling_max_freq` de cada policy, `kgsl-3d0/max_gpuclk`).
   2. `draw`: un WebView del tamaño del video, detrás de la app; `postVisualStateCallback` y `WebView.draw` en un
      bitmap (dos que se turnan) → `Encoder.frameBitmap`. El motor dibuja por software (lento; los videos pueden salir
      negros). Si el primer fotograma sale vacío prueba `LAYER_TYPE_SOFTWARE`.
   3. compatible: modern-screenshot (era ~90 % del tiempo). La vista de captura nunca carga la página de la app
      (AppServer le daría otro token al puente). En la PC (server.mjs) el modo gpu se imita con capturas de pantalla.
 - Fotogramas (miniaturas, Claude y el método compatible): el compositor rasteriza el DOM con modern-screenshot
-  (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL). El audio de la exportación lo mezcla Java
+  (`rasterAt`, mensaje `frame`) → JPEG a `enc.frame` (MediaCodec + EGL). Los de Claude se sacan primero con la GPU
+  (`Snap.java`, `snap.*`: la misma página de captura en otra pantalla virtual, ImageReader, marca y un rato de calma;
+  una hoja de 12 pasó de 143 a 3,8 s) y, si falla, con el compositor oculto. Canvas → base64 con `canvasBase64`
+  (toDataURL): en este WebView `toBlob`/`convertToBlob` esperan siempre ~4 s (codifican en tareas de tiempo libre
+  que no llegan). Una capa que recién se muestra se hace visible (oculta) antes de dibujar: con display:none la escena
+  mide 0×0 y su primer cuadro salía en 1×1 o vacío; al capturar se esperan dos cuadros más (`newlyShown`). El audio de la exportación lo mezcla Java
   (`AudioMix.java`, `enc.mix`: ventanas de 30 s, sinc a 48 kHz, volumen y fundidos lineales en el tiempo del clip)
   directo al codificador; con JS (ida y vuelta por el puente) tardaba ~30 s por minuto. Se probó en la PC contra una
   mezcla de ffmpeg (68 dB): `Decoder`/`Out` son interfaces para eso. La mezcla corre en paralelo con la captura de los
@@ -222,7 +251,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   uniendo `__oaCapLog` de la página (llegó, empezó, listo, entregado + rAF, en ms de reloj) con Java (`Want`: pedido,
   imagen, codificado; `Encoder.wallMs`), qué era cada imagen (la esperada, cambiando, vieja, posterior) y una muestra.
   El audio de los archivos lo decodifica Java por tramos (`audio.decode`, `audio.peaks` en `AudioDecoder.java`):
-  nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos).
+  nunca leer un video entero en el WebView. Pantalla encendida con `holdAwake()` (`wake.ts`, cuenta pedidos): exportar,
+  Whisper, el chat (API en `run`, el plan en `TermuxChat.state()` según `busy`: sin eso un turno largo de Opus se
+  pausaba a los 2 min), mover proyectos y los .zip; con un proyecto abierto, `holdWhileEditing` hasta 10 min sin tocarla.
 - Pool de compositores ocultos (frames.ts): se cierra a los 90 s *sin uso* (`usedAt`), no a los 90 s de pedirlo; en la
   tablet una hoja de contactos con escenas pesadas tarda más (~12 s por fotograma) y perdía el compositor a mitad
   («cancelado», o 120 s esperando a uno ya cerrado). `trimFramePool` no cierra uno usado en los últimos 10 s.

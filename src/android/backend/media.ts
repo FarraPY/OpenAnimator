@@ -4,7 +4,7 @@
  * y miniaturas de video con <canvas>. Cacheados en data/cache.
  */
 import { host } from '../host'
-import { fs, hash, join } from './fsx'
+import { base64ToBytes, canvasBase64, fs, hash, join } from './fsx'
 
 export const PEAKS_PER_SEC = 100
 const CACHE = 'cache'
@@ -114,9 +114,7 @@ export function videoThumb(rel: string): Promise<string> {
         const w = 320, h = Math.max(2, Math.round((w * (v.videoHeight || 180)) / (v.videoWidth || 320)))
         const c = document.createElement('canvas'); c.width = w; c.height = h
         c.getContext('2d')!.drawImage(v, 0, 0, w, h)
-        const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/jpeg', 0.8))
-        if (!blob) throw new Error('sin miniatura')
-        await fs.writeBytes(out, blob)
+        await fs.writeBytes(out, base64ToBytes(canvasBase64(c, 'image/jpeg', 0.8).data))
         clearTimeout(timer)
         v.removeAttribute('src'); v.load()
         resolve(fs.url(out))

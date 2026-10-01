@@ -62,6 +62,17 @@ export function blobToBase64(b: Blob): Promise<string> {
   })
 }
 
+/**
+ * Canvas → base64 sin toBlob: en el WebView de la app, toBlob y convertToBlob codifican en tareas de "tiempo libre" del
+ * hilo que no llegan (WebView dibuja sincronizado con Android) y tardan siempre 4 s; toDataURL codifica en el momento
+ * (unos ms a 960 px). Devuelve el tipo real: si el formato no se puede, Chromium da PNG.
+ */
+export function canvasBase64(cv: HTMLCanvasElement, mime = 'image/png', quality?: number): { data: string; mime: string } {
+  const url = cv.toDataURL(mime, quality)
+  if (url.length < 8) throw new Error('No hay memoria para la imagen') // "data:,": no se pudo crear el lienzo
+  return { data: url.slice(url.indexOf(',') + 1), mime: url.slice(5, url.indexOf(';')) || mime }
+}
+
 export function base64ToBytes(b64: string): Uint8Array {
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
