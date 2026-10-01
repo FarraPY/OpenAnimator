@@ -90,7 +90,7 @@ export function WhisperSetup({ onChanged }: { onChanged: () => void }) {
 
       <Row label={info.ios ? info.version : info.bin ? `whisper.cpp ${info.version || ''}` : 'Instalación'} desc={
         info.ios ? (cur.installed ? 'Listo para transcribir en el iPhone, sin internet y sin costo.'
-          : downloading ? `Descargando ${cur.label} desde Hugging Face${dl != null ? ` · ${Math.round(dl * cur.mb)} de ${cur.mb} MB` : '…'} Dejá la app abierta: si se corta, sigue desde donde quedó.`
+          : downloading ? `Descargando ${cur.label} desde Hugging Face${dl != null ? ` · ${Math.round(dl * cur.mb)} de ${cur.mb} MB.` : '…'} Dejá la app abierta: si se corta, sigue desde donde quedó.`
             : `Falta descargar ${cur.label} (${cur.mb} MB, desde Hugging Face; cada archivo se verifica). La primera transcripción prepara el modelo para este iPhone (~1 minuto).`)
           : !info.bin ? 'La primera vez compila whisper.cpp en Termux (unos 5 a 10 minutos) y descarga el modelo. Se abre Termux para que veas el avance; cuando diga «Listo», volvé acá.'
             : cur.installed ? 'Listo para transcribir en la tablet, sin internet y sin costo.'

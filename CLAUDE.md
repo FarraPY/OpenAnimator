@@ -203,6 +203,19 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (sin esa variable Git Bash convierte `/…` en una ruta de Windows) y en Feather: + › Import from Files › En mi iPhone ›
   OpenAnimator › Open, Sign, Start Signing, Abrir, Install (compartirlo desde OpenAnimator a Feather no lo importaba).
   La pantalla se bloquea fuera de OpenAnimator: para trabajar así, Bloqueo automático en Nunca (lo cambia el usuario).
+- Whisper en el iPhone (`LocalWhisper.swift`, operaciones `whisper.*` del puente; en plugins.ts `iosWhisper()`): WhisperKit
+  (paquete `argmax-oss-swift` 1.1.0 en project.yml, MIT) corre Whisper en Core ML sobre el Neural Engine. Se eligió por
+  velocidad: whisper.cpp en el iPhone usa la GPU (más lento y sin GPU en segundo plano) y SpeechTranscriber de Apple no es
+  Whisper ni detecta el idioma. Modelos `large-v3-turbo` (openai_whisper-large-v3-v20240930_626MB, por defecto) y `small`,
+  fijados a una revisión de Hugging Face con el SHA-256 de cada archivo (`whisper-models.json`, lo genera
+  `scripts/whisperkit-models.py`); van a Application Support/whisper/<modelo> (sin respaldo) y `.ok` marca uno completo y
+  verificado; una descarga cortada sigue (lo verificado no se vuelve a bajar). El tokenizador va dentro de la carpeta del
+  modelo (WhisperKit lo busca ahí). El audio lo decodifica AVFoundation (AVAssetReaderAudioMixOutput a 16 kHz mono, de
+  cualquier audio o video) y se transcribe con `wordTimestamps`, `chunkingStrategy: .vad` y detección de idioma si no se
+  pasa. Medido en el iPhone 17 Pro Max con turbo: 629 MB bajados y verificados en 48 s; la primera carga 79 s (Core ML
+  prepara el modelo para el chip; iOS lo guarda y lo borra al actualizarse); 10,5 min de narración en español en 52 s
+  (12×, 1628 palabras en orden), un video de 75 s sin idioma en 8,3 s, un archivo de 3 s en 1,2 s (mínimo de una ventana
+  de 30 s). La prueba de Ajustes hace hablar a la voz de iOS (AVSpeechSynthesizer.write) y la transcribe.
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`
