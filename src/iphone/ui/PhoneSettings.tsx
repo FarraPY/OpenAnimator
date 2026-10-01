@@ -33,7 +33,7 @@ export default function PhoneSettings({ section, onBack }: { section?: string; o
   const back = () => (sec && !section ? setSec(null) : onBack())
   return (
     <>
-      <TopBar left={<Tap icon="chevron-left" label="Volver" onClick={back} back />} title={sec ? SECTIONS[sec] : 'Ajustes'} />
+      <TopBar left={<Tap icon="chevron-left" label="Volver" onClick={back} back />} title={sec ? SECTIONS[sec] : undefined} />
       <div className="ph-scroll" key={sec || ''}>
         {!sec ? <Main open={setSec} /> : sec === 'ia' ? <ClaudeSection /> : sec === 'plugins' ? <div className="ph-desk"><PluginsSettings /></div> : sec === 'storage' ? <StorageSection /> : sec === 'debug' ? <DebugSection /> : <AboutSection />}
       </div>
@@ -48,7 +48,7 @@ function Main({ open }: { open: (s: string) => void }) {
     <>
       <h1 className="ph-title">Ajustes</h1>
       <Group>
-        <Row icon="sparkles" label="Claude" detail={info?.claude ? 'Conectado · con tu plan' : 'Sin configurar'} chevron onClick={() => open('ia')} />
+        <Row icon="sparkles" label="Claude" detail={info?.claude ? <><i className="dot-ok" />Conectado · con tu plan</> : 'Sin configurar'} chevron onClick={() => open('ia')} />
         <Row icon="plug" label="Plugins de IA" detail="Imágenes, voz, efectos, otras IA" chevron onClick={() => open('plugins')} />
         <Row icon="drive" label="Almacenamiento" detail="Espacio, papelera y caché" chevron onClick={() => open('storage')} />
       </Group>

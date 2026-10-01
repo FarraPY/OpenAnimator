@@ -42,7 +42,8 @@ html.native-glass [data-glass], html.native-glass .ph-top .tap, html.native-glas
 .ph-top-title { flex: 1; min-width: 0; text-align: center; font: 600 17px var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; display: flex; justify-content: center; }
 .ph-brand { display: flex; align-items: center; gap: 9px; padding-left: 8px; font: 700 17px var(--font-display); flex: none; }
 .ph-scroll { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain; padding: 0 16px calc(var(--safe-b) + 96px); }
-.ph-title { font: 700 32px/1.15 var(--font-display); letter-spacing: -.5px; margin: 6px 0 14px; }
+.ph-title { font: 700 34px/1.15 var(--font-display); letter-spacing: -.5px; margin: 6px 0 14px; }
+.ph-sub { margin: -10px 2px 16px; font-size: 16px; color: color-mix(in srgb, var(--accent-t) 50%, var(--t2)); }
 .ph-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 200px; }
 .ph-label { display: block; margin: 18px 2px 8px; font-size: 13px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .4px; }
 .ph-desk { padding-top: 6px; }
@@ -61,7 +62,7 @@ html.native-glass [data-glass], html.native-glass .ph-top .tap, html.native-glas
 .tap.on { color: var(--accent-t); }
 .tap.accent { background: var(--accent); color: #fff; }
 
-.fab { position: fixed; z-index: 30; right: calc(18px + var(--safe-r)); bottom: calc(var(--safe-b) + 18px); height: 56px; padding: 0 22px 0 18px; display: flex; align-items: center; gap: 8px;
+.fab { position: fixed; z-index: 30; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-b) + 14px); height: 58px; padding: 0 28px 0 22px; white-space: nowrap; display: flex; align-items: center; gap: 8px;
   border: 0; border-radius: 28px; background: var(--accent); color: #fff; font: 600 17px var(--font-display); box-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 2px 6px rgba(0, 0, 0, .3); }
 .banner { width: 100%; display: flex; align-items: center; gap: 12px; text-align: left; padding: 14px; margin: 0 0 16px; border-radius: 16px; border: 1px solid var(--accent-line);
   background: linear-gradient(135deg, var(--accent-soft), transparent); color: var(--t1); }
@@ -98,30 +99,44 @@ html.kb .sheet-foot { padding-bottom: 12px; }
 
 /* ── listas agrupadas (Ajustes) ───────────────────────────────────────── */
 .grp { margin: 18px 0; }
-.grp-title { font-size: 13px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .4px; margin: 0 14px 7px; }
-.grp-box { border-radius: 14px; background: var(--bg-2); overflow: hidden; }
+.grp-title { font-size: 13px; font-weight: 600; color: color-mix(in srgb, var(--accent-t) 45%, var(--t3)); text-transform: uppercase; letter-spacing: .9px; margin: 0 18px 8px; }
+.grp-box { border-radius: 20px; background: rgba(20, 32, 64, .5); border: 1px solid rgba(150, 175, 255, .14); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); overflow: hidden; }
 .grp-foot { font-size: 13px; color: var(--t3); line-height: 1.45; margin: 7px 14px 0; }
-.prow2 { width: 100%; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 9px 14px; border: 0; background: none; color: var(--t1); text-align: left; font-size: 16px; }
-.prow2 + .prow2 { border-top: 1px solid var(--line); }
+.prow2 { width: 100%; display: flex; align-items: center; gap: 14px; min-height: 58px; padding: 11px 16px; border: 0; background: none; color: var(--t1); text-align: left; font-size: 16px; }
+.prow2 + .prow2 { border-top: 1px solid rgba(150, 175, 255, .1); }
 .prow2.stack { flex-direction: column; align-items: stretch; gap: 10px; }
 .prow2.stack > .row-main { flex: none; }
 .prow2.danger { color: var(--err); } .prow2.danger .row-ic { background: var(--err-soft); color: var(--err); }
-.row-ic { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-t); flex: none; }
+.row-ic { width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center; background: rgba(150, 175, 255, .1); color: var(--accent-t); flex: none; }
+.dot-ok { display: inline-block; width: 8px; height: 8px; border-radius: 4px; background: #34c759; margin-right: 7px; vertical-align: 1px; }
 .row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .row-label { overflow-wrap: anywhere; }
-.row-detail { font-size: 13.5px; color: var(--t3); line-height: 1.4; overflow-wrap: anywhere; }
+.row-detail { font-size: 14px; color: color-mix(in srgb, var(--accent-t) 40%, var(--t3)); line-height: 1.4; overflow-wrap: anywhere; }
 .row-chev { color: var(--t4); }
 .gap8 { gap: 8px; } .mt8 { margin-top: 8px; }
 .prow2 .select, .prow2 .textarea { width: 100%; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { min-height: 40px; padding: 6px 14px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--bg-2); color: var(--t2); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; font-size: 15px; font-weight: 500; }
+.chip { min-height: 40px; padding: 6px 14px; border-radius: 12px; border: 1px solid rgba(150, 175, 255, .18); background: rgba(255, 255, 255, .03); color: var(--t2); display: flex; flex-direction: column; align-items: flex-start; justify-content: center; font-size: 15px; font-weight: 500; }
 .chip small { font-size: 11.5px; color: var(--t3); font-weight: 400; }
-.chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--t1); }
+.chip.on { border-color: transparent; background: var(--accent); color: #fff; }
 
 /* ── inicio ───────────────────────────────────────────────────────────── */
 .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.pcard2 { min-width: 0; border-radius: 16px; overflow: hidden; background: var(--bg-2); }
+.pcard2 { min-width: 0; border-radius: 20px; overflow: hidden; background: rgba(20, 32, 64, .5); border: 1px solid rgba(150, 175, 255, .16); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); }
+/* inicio: buscador, cuadrícula o lista y orden */
+.pj-tools { display: flex; gap: 10px; margin-bottom: 12px; }
+.pj-search { flex: 1; min-width: 0; height: 48px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-radius: 24px; background: rgba(120, 150, 255, .08); border: 1px solid rgba(150, 175, 255, .16); color: color-mix(in srgb, var(--accent-t) 45%, var(--t3)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07); }
+.pj-search input { flex: 1; min-width: 0; border: 0; background: none; color: var(--t1); font-size: 16px; outline: none; }
+.pj-search input::placeholder { color: color-mix(in srgb, var(--accent-t) 45%, var(--t3)); }
+.pj-view { flex: none; display: flex; gap: 2px; padding: 4px; border-radius: 24px; background: rgba(120, 150, 255, .08); border: 1px solid rgba(150, 175, 255, .16); }
+.pj-view button { width: 46px; height: 38px; border: 0; border-radius: 19px; background: none; color: var(--t2); display: grid; place-items: center; }
+.pj-view button.on { background: var(--accent); color: #fff; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 40%, transparent); }
+.pj-sort { height: 40px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; margin-bottom: 14px; border-radius: 20px; background: rgba(120, 150, 255, .08); border: 1px solid rgba(150, 175, 255, .16); color: var(--t1); font: 600 15px var(--font-display); }
+.pj-none { padding: 6px 2px 14px; }
+.plist { display: flex; flex-direction: column; gap: 10px; }
+.prow3 { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 8px 4px 8px 8px; border-radius: 18px; background: rgba(20, 32, 64, .5); border: 1px solid rgba(150, 175, 255, .16); }
+.prow3-thumb { width: 100px; aspect-ratio: 16 / 9; border-radius: 12px; background: #050608 center / cover no-repeat; display: grid; place-items: center; color: var(--t4); flex: none; }
 .pcard2-thumb { position: relative; aspect-ratio: 1; background: #050608 center / contain no-repeat; display: grid; place-items: center; color: var(--t4); }
 .pcard2-dur { position: absolute; right: 6px; bottom: 6px; padding: 2px 7px; border-radius: 8px; background: rgba(0, 0, 0, .65); font-size: 12px; font-variant-numeric: tabular-nums; color: #fff; }
 .pcard2-info { display: flex; align-items: center; gap: 2px; padding: 8px 2px 8px 12px; }

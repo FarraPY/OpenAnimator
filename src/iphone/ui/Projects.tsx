@@ -1,8 +1,9 @@
 /**
- * Inicio en el iPhone: los proyectos en una grilla de dos columnas, el botón para crear uno nuevo (formato vertical
- * por defecto: es un teléfono) y las acciones de cada proyecto en una hoja de acciones.
+ * Inicio en el iPhone (el diseño del usuario): los proyectos con buscador, en cuadrícula o en lista, ordenados por fecha,
+ * nombre o duración; cada uno con su menú de iOS (⋯) y abajo el botón para crear uno nuevo (formato vertical por
+ * defecto: es un teléfono).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { call, fmtTime, on, ProjectSummary, Template } from '../../api'
 import { useApp } from '../../App'
 import { useDialogs } from '../../components/Dialogs'
@@ -29,6 +30,10 @@ function ago(iso?: string) {
 const ratio = (w: number, h: number) => FORMATS.find((f) => f.w * h === f.h * w)?.sub || `${w}×${h}`
 
 let lastList: ProjectSummary[] | null = null
+const SORTS = { recent: 'Recientes', old: 'Más antiguos', name: 'Nombre', long: 'Más largos' } as const
+type Sort = keyof typeof SORTS
+const pref = (k: string, d: string) => { try { return localStorage.getItem(k) || d } catch { return d } }
+const time = (p: ProjectSummary) => new Date(p.updatedAt || 0).getTime()
 
 export default function Projects() {
   const { go, toast, info, settings } = useApp()
@@ -37,6 +42,16 @@ export default function Projects() {
   const [templates, setTemplates] = useState<Template[]>([])
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [q, setQ] = useState('')
+  const [view, setView] = useState(() => pref('oa.homeView', 'grid'))
+  const [sort, setSort] = useState<Sort>(() => pref('oa.homeSort', 'recent') as Sort)
+  useEffect(() => { try { localStorage.setItem('oa.homeView', view); localStorage.setItem('oa.homeSort', sort) } catch { /* sin almacenamiento */ } }, [view, sort])
+  const shown = useMemo(() => {
+    const k = q.trim().toLowerCase()
+    const xs = (list || []).filter((p) => !k || p.name.toLowerCase().includes(k))
+    return xs.sort(sort === 'name' ? (a, b) => a.name.localeCompare(b.name) : sort === 'old' ? (a, b) => time(a) - time(b)
+      : sort === 'long' ? (a, b) => (b.duration || 0) - (a.duration || 0) : (a, b) => time(b) - time(a))
+  }, [list, q, sort])
 
   const refresh = () => call<ProjectSummary[]>('projects:list').then((l) => { lastList = l; setList(l) }).catch((e) => toast(e.message, true))
   useEffect(() => {
@@ -63,6 +78,17 @@ export default function Projects() {
     try { const p = await call('projects:importZip'); if (p) { refresh(); toast(`«${p.name}» importado`) } } catch (e: any) { toast(e.message, true) } finally { setImporting(false) }
   }
 
+  const more = (p: ProjectSummary) => (
+    <MenuButton className="pcard2-more" label="Opciones" title={p.name} items={[
+      { label: 'Abrir', icon: 'folder-open', onSelect: () => open(p.id) },
+      { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(p) },
+      { label: 'Duplicar', icon: 'copy', onSelect: async () => { await call('projects:duplicate', p.id).catch((e) => toast(e.message, true)); refresh() } },
+      { label: 'Compartir proyecto (.zip)', icon: 'share', onSelect: () => zip(p, 'share') },
+      { sep: true },
+      { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(p) },
+    ]}><Icon name="more" size={20} /></MenuButton>
+  )
+
   return (
     <>
       <TopBar left={<div className="ph-brand"><Logo size={26} /><b>OpenAnimator</b></div>}
@@ -75,6 +101,7 @@ export default function Projects() {
         </>} />
       <div className="ph-scroll">
         <h1 className="ph-title">Proyectos</h1>
+        {!!list?.length && <div className="ph-sub">{list.length === 1 ? '1 proyecto' : `${list.length} proyectos`}</div>}
         {info && !info.claude && (
           <button className="banner" onClick={() => go({ page: 'settings', section: 'ia' })}>
             <span className="banner-ic"><Icon name="sparkles" size={22} /></span>
@@ -87,9 +114,30 @@ export default function Projects() {
             <Empty icon="film" title="Tu primer video" desc="Creá un proyecto y pedile a Claude las escenas: las arma, las mira y las corrige solo.">
               <Button variant="primary" size="lg" icon="plus" onClick={() => setCreating(true)}>Nuevo proyecto</Button>
             </Empty>
-          ) : (
-            <div className="pgrid">
-              {list.map((p) => (
+          ) : <>
+            <div className="pj-tools">
+              <label className="pj-search"><Icon name="search" size={18} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Buscar proyectos" enterKeyHint="search" /></label>
+              <div className="pj-view" role="radiogroup">
+                <button className={view === 'grid' ? 'on' : ''} aria-label="Cuadrícula" onClick={() => setView('grid')}><Icon name="grid" size={19} /></button>
+                <button className={view === 'list' ? 'on' : ''} aria-label="Lista" onClick={() => setView('list')}><Icon name="list" size={19} /></button>
+              </div>
+            </div>
+            <MenuButton className="pj-sort" align="start" label="Ordenar" title="Ordenar por" items={(Object.keys(SORTS) as Sort[]).map((k) => ({ label: SORTS[k], checked: sort === k, onSelect: () => setSort(k) }))}>
+              {SORTS[sort]}<Icon name="chevron-down" size={15} />
+            </MenuButton>
+            {!shown.length && <div className="t3 pj-none">Ningún proyecto con «{q.trim()}».</div>}
+            {view === 'list'
+              ? <div className="plist">{shown.map((p) => (
+                <div key={p.id} className="prow3" role="button" tabIndex={0} onClick={() => open(p.id)}>
+                  <div className="prow3-thumb" style={p.thumb ? { backgroundImage: `url("${p.thumb}?${p.updatedAt}")` } : undefined}>{!p.thumb && <Icon name="film" size={20} stroke={1.4} />}</div>
+                  <div className="grow">
+                    <div className="pcard2-name ellipsis">{p.name}</div>
+                    <div className="pcard2-meta ellipsis">{ratio(p.width, p.height)} · {fmtTime(p.duration)} · {ago(p.updatedAt)}</div>
+                  </div>
+                  {more(p)}
+                </div>
+              ))}</div>
+              : <div className="pgrid">{shown.map((p) => (
                 <div key={p.id} className="pcard2" role="button" tabIndex={0} onClick={() => open(p.id)}>
                   <div className="pcard2-thumb" style={p.thumb ? { backgroundImage: `url("${p.thumb}?${p.updatedAt}")` } : undefined}>
                     {!p.thumb && <Icon name="film" size={30} stroke={1.3} />}
@@ -100,21 +148,13 @@ export default function Projects() {
                       <div className="pcard2-name ellipsis">{p.name}</div>
                       <div className="pcard2-meta ellipsis">{ratio(p.width, p.height)} · {ago(p.updatedAt)}</div>
                     </div>
-                    <MenuButton className="pcard2-more" label="Opciones" title={p.name} items={[
-                      { label: 'Abrir', icon: 'folder-open', onSelect: () => open(p.id) },
-                      { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(p) },
-                      { label: 'Duplicar', icon: 'copy', onSelect: async () => { await call('projects:duplicate', p.id).catch((e) => toast(e.message, true)); refresh() } },
-                      { label: 'Compartir proyecto (.zip)', icon: 'share', onSelect: () => zip(p, 'share') },
-                      { sep: true },
-                      { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(p) },
-                    ]}><Icon name="more" size={20} /></MenuButton>
+                    {more(p)}
                   </div>
                 </div>
-              ))}
-            </div>
-          )}
+              ))}</div>}
+          </>}
       </div>
-      {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo</button>}
+      {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo proyecto</button>}
 
       {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }} />}
       {dlg.element}
