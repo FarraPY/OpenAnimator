@@ -103,8 +103,15 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   backend; `isNative()` (src/iphone/host/native.ts) dentro de la app. También corre como app web (`npm run build:iphone`).
 - Claude Code con el plan del usuario y sin PC: el instalador (Worker) baja `@anthropic-ai/claude-code-linux-arm64` de
   npm, saca los módulos del ejecutable de Bun y los adapta (`claude/transform.ts`); corre en un Worker con un "Node" de
-  navegador (`claude/node/`). Cuenta: token de `claude setup-token` (el OAuth no admite navegadores) →
-  `CLAUDE_CODE_OAUTH_TOKEN`. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la página (`backend/webclaude.ts`).
+  navegador (`claude/node/`). Cuenta → `CLAUDE_CODE_OAUTH_TOKEN`: «Iniciar sesión con Claude» hace lo mismo que
+  `claude setup-token` con el código del propio Claude Code (`login` en worker.js: su clase de OAuth, que la app busca
+  con `cc.find`, con inferencia sola y un año); iOS muestra la página (ASWebAuthenticationSession), la vuelta a
+  `http://localhost:<puerto>/callback` la recibe un NWListener sólo de loopback que redirige a `openanimator://login/…`
+  (Bridge.swift `login.open`) y el Worker la recibe por `http-request` (servidor emulado en sys.js, sólo en ese modo);
+  el canje y el perfil van por `http.fetch` (URLSession: platform.claude.com no admite CORS desde la app; sin
+  XMLHttpRequest, axios usa fetch). También se puede pegar un token. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la
+  página (`backend/webclaude.ts`). El puente nativo sólo atiende al marco principal de `oa://` (las escenas, en
+  iframes `oaproj://`, no).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
   WebCrypto), los Workers de módulos cargan desde el esquema, `fetch` con `Range` y `PUT` con Uint8Array (un Blob llega
   sin cuerpo).

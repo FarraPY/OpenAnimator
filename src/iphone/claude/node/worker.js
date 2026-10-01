@@ -3,11 +3,13 @@
  * Un Worker por conversación: cerrarlo es matar el proceso. Ahí no hay window ni document, así que el SDK de Anthropic
  * que viene adentro no se cree en un navegador.
  *
- * Mensajes de la página: start {opts}, stdin {data}, stdin-end, mcp-reply {id, status, headers, body}.
+ * Mensajes de la página: start {opts}, stdin {data}, stdin-end, mcp-reply {id, status, headers, body},
+ *   net-reply {id, status, headers, body | error}, http-request {port, url}.
  * Mensajes a la página: stdout/stderr {data}, exit {code}, crash {error}, fs {files: [ruta, bytes|null][]},
- *   mcp {id, url, method, headers, body}, ready {ms}.
+ *   mcp {id, url, method, headers, body}, ready {ms}, net {id, url, method, headers, body};
+ *   al iniciar sesión: login-url {manual, automatic}, login-token {token, expiresAt}, login-error {error}.
  */
-import { install, mod, ProcessExit } from './index.js'
+import { install, mod, ProcessExit, servers } from './index.js'
 
 globalThis.__oaMod = mod
 let rt = null
@@ -15,15 +17,28 @@ const mcpWaiting = new Map()
 let mcpSeq = 0
 const nativeFetch = globalThis.fetch.bind(globalThis)
 const ANTHROPIC = /^https:\/\/api\.anthropic\.com\//
+/** Lo de Anthropic que no admite CORS desde la app (la cuenta: el canje del código, el perfil): va por la red de iOS. */
+const NATIVE = /^https:\/\/(platform\.claude\.com|claude\.ai|console\.anthropic\.com)\/|^https:\/\/api\.anthropic\.com\/api\/oauth\//
+const netWaiting = new Map()
+let netSeq = 0
 
 /**
  * fetch de Claude Code: el MCP de OpenAnimator (http://oa.mcp/…) lo atiende la página (ahí están el proyecto y las
  * herramientas); a la API de Anthropic se le agrega el encabezado que habilita CORS: el pedido va directo desde el
  * teléfono, sin servidores en el medio.
  */
-function makeFetch(extraAnthropicBase) {
+function makeFetch(extraAnthropicBase, viaApp) {
   return async function fetch(input, init = {}) {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (viaApp && NATIVE.test(url)) {
+      const req = new Request(input, init)
+      const id = ++netSeq
+      const body = req.method === 'GET' || req.method === 'HEAD' ? '' : Buffer.from(await req.arrayBuffer()).toString('base64')
+      postMessage({ type: 'net', id, url, method: req.method, headers: Object.fromEntries(req.headers), body })
+      const r = await new Promise((res) => netWaiting.set(id, res))
+      if (r.error) throw new TypeError(r.error)
+      return new Response([101, 204, 205, 304].includes(r.status) ? null : Buffer.from(r.body || '', 'base64'), { status: r.status, headers: r.headers })
+    }
     if (url.startsWith('http://oa.mcp/')) {
       const req = new Request(input, init)
       const id = ++mcpSeq
@@ -53,7 +68,29 @@ globalThis.__oaChunk = (p) => {
   return m
 }
 
+/**
+ * Iniciar sesión (lo mismo que `claude setup-token`, sin la interfaz de la terminal): la clase de OAuth del Claude Code
+ * instalado (o.login.chunk, la encuentra la app) arma la dirección de la página de Claude, espera la vuelta en su
+ * servidor local (se la entrega la app: http-request) y canjea el código por un token de un año, sólo para usar Claude.
+ */
+async function login(o) {
+  await globalThis.__oaPreload()
+  const m = await import(o.base + o.login.chunk)
+  const OAuth = Object.values(m).find((v) => typeof v === 'function' && typeof v.prototype?.startOAuthFlow === 'function')
+  if (!OAuth) throw new Error('Esta versión de Claude Code no trae el inicio de sesión que usa la app.')
+  const t = await new OAuth().startOAuthFlow(async (manual, automatic) => postMessage({ type: 'login-url', manual, automatic }), {
+    loginWithClaudeAi: true, inferenceOnly: true, expiresIn: 365 * 24 * 3600, skipBrowserOpen: true,
+  })
+  postMessage({ type: 'login-token', token: t.accessToken, expiresAt: t.expiresAt })
+}
+
 function start(o) {
+  if (o.login) {
+    globalThis.__oaAllowListen = true
+    // Sin XMLHttpRequest, axios (lo que usa Claude Code para la cuenta) va por fetch y de ahí a la red de iOS.
+    try { delete globalThis.XMLHttpRequest } catch { /* ignore */ }
+    if (globalThis.XMLHttpRequest) globalThis.XMLHttpRequest = undefined
+  }
   const dirty = new Set()
   let timer = null
   const flush = () => {
@@ -72,13 +109,14 @@ function start(o) {
     exit: (code) => { if (timer) flush(); postMessage({ type: 'exit', code }) },
     // Se guarda lo de la carpeta personal (configuración, sesiones y conversaciones de Claude Code).
     onFsChange: (p) => { if (typeof p === 'string' && p.startsWith(o.home + '/')) { dirty.add(p); if (!timer) timer = setTimeout(flush, 300) } },
-    fetch: makeFetch(o.env?.ANTHROPIC_BASE_URL),
+    fetch: makeFetch(o.env?.ANTHROPIC_BASE_URL, !!o.login),
   })
   const t0 = performance.now()
   globalThis.__oaPreload = async () => {
     for (const n of o.preload || []) chunks.set('/$bunfs/root/' + n, await import(o.base + '$bunfs/root/' + n))
     postMessage({ type: 'ready', ms: Math.round(performance.now() - t0) })
   }
+  if (o.login) { login(o).catch((e) => { if (!(e instanceof ProcessExit)) postMessage({ type: 'login-error', error: String(e?.message || e) }) }); return }
   import(o.base + '$bunfs/root/cli').catch((e) => { if (!(e instanceof ProcessExit)) postMessage({ type: 'crash', error: String(e?.stack || e) }) })
 }
 
@@ -87,6 +125,12 @@ self.addEventListener('message', ({ data: m }) => {
   else if (m.type === 'stdin') rt?.stdin(m.data)
   else if (m.type === 'stdin-end') rt?.stdinEnd()
   else if (m.type === 'mcp-reply') { mcpWaiting.get(m.id)?.(m); mcpWaiting.delete(m.id) }
+  else if (m.type === 'net-reply') { netWaiting.get(m.id)?.(m); netWaiting.delete(m.id) }
+  else if (m.type === 'http-request') {
+    // La vuelta del navegador, que recibió la app: al servidor local que la espera (sólo lee url y host).
+    const res = { statusCode: 200, writeHead(code) { this.statusCode = code; return this }, setHeader() {}, getHeader() {}, removeHeader() {}, write() { return true }, end() { return this } }
+    servers.get(m.port)?.emit('request', { url: m.url, method: 'GET', headers: { host: `localhost:${m.port}` } }, res)
+  }
 })
 // Como Node: los errores sin atrapar van a los manejadores de process, si los hay.
 self.addEventListener('unhandledrejection', (e) => {

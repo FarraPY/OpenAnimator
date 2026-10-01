@@ -1,5 +1,7 @@
+import AuthenticationServices
 import AVFoundation
 import Foundation
+import Network
 import Photos
 import PhotosUI
 import QuickLook
@@ -20,6 +22,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private var pickerAccept: [String] = []
     private var preview: URL?
     private var background: UIBackgroundTaskIdentifier = .invalid
+    private var authSession: ASWebAuthenticationSession?
+    private var callbackListener: NWListener?
 
     private func endBackground() {
         guard background != .invalid else { return }
@@ -33,6 +37,10 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
 
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage, replyHandler: @escaping Reply) {
         guard let a = message.body as? [String: Any], let op = a["op"] as? String else { replyHandler(nil, "Mensaje inválido"); return }
+        // Sólo la interfaz de la app (oa://, marco principal): las escenas de los proyectos (oaproj://, en iframes) son
+        // HTML hecho por la IA o bajado de otro lado y no pueden tocar archivos, claves ni la cuenta.
+        let frame = message.frameInfo
+        if op != "log", !(frame.isMainFrame && frame.securityOrigin.protocol == "oa") { replyHandler(nil, "No permitido"); return }
         switch op {
         case "diag.result":
             print("OA-DIAG-RESULT " + (a["json"] as? String ?? "{}"))
@@ -64,6 +72,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
         case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
+        case "login.open": login(a, replyHandler)
+        case "http.fetch": httpFetch(a, replyHandler)
         case "keychain.load": replyHandler(Keychain.load(), nil)
         case "keychain.save":
             Keychain.save(a["json"] as? String ?? "{}") ? replyHandler(true, nil) : replyHandler(nil, "No se pudieron guardar las claves en el Llavero")
@@ -154,6 +164,109 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             ]
             DispatchQueue.main.async { reply(result, nil) }
         }
+    }
+
+    // MARK: la cuenta de Claude (el inicio de sesión lo hace el propio Claude Code, en la página)
+
+    /**
+     * La página de inicio de sesión de Claude (la dirección la arma Claude Code). Al terminar, Claude vuelve a
+     * http://localhost:<puerto>/callback: eso lo recibe acá un servidor que sólo escucha en el propio iPhone y redirige a
+     * openanimator://login/…; la hoja de iOS se cierra sola y la dirección (con el código) vuelve a la página.
+     */
+    private func login(_ a: [String: Any], _ reply: @escaping Reply) {
+        guard let s = a["url"] as? String, let url = URL(string: s), url.scheme == "https",
+              let n = (a["port"] as? NSNumber)?.uint16Value, n > 0, let port = NWEndpoint.Port(rawValue: n) else { reply(nil, "Datos inválidos"); return }
+        authSession?.cancel()
+        callbackListener?.cancel()
+        var answered = false
+        let answer: Reply = { [weak self] value, error in
+            DispatchQueue.main.async {
+                guard !answered else { return }
+                answered = true
+                self?.callbackListener?.cancel()
+                self?.callbackListener = nil
+                self?.authSession = nil
+                reply(value, error)
+            }
+        }
+        let params = NWParameters.tcp
+        params.requiredInterfaceType = .loopback
+        params.allowLocalEndpointReuse = true
+        guard let listener = try? NWListener(using: params, on: port) else { answer(nil, "No se pudo esperar la vuelta del inicio de sesión"); return }
+        listener.newConnectionHandler = { conn in
+            conn.start(queue: .main)
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
+                // "GET /callback?code=…&state=… HTTP/1.1" → de vuelta a la app.
+                let first = String(decoding: data ?? Data(), as: UTF8.self).components(separatedBy: "\r\n").first ?? ""
+                let parts = first.split(separator: " ")
+                let target = parts.count > 1 ? String(parts[1]) : "/"
+                let head = "HTTP/1.1 302 Found\r\nLocation: openanimator://login\(target)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                conn.send(content: Data(head.utf8), completion: .contentProcessed { _ in conn.cancel() })
+            }
+        }
+        var opened = false
+        listener.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                guard !opened, let self else { return }
+                opened = true
+                if WebViewController.argument("-OATest") != nil { self.testLogin(url, n, answer); return }
+                let session = ASWebAuthenticationSession(url: url, callbackURLScheme: "openanimator") { callback, error in
+                    if let callback { answer(callback.absoluteString, nil); return }
+                    let canceled = (error as? ASWebAuthenticationSessionError)?.code == .canceledLogin
+                    answer(nil, canceled ? "Cancelaste el inicio de sesión." : (error?.localizedDescription ?? "No se pudo iniciar sesión"))
+                }
+                session.presentationContextProvider = self
+                session.prefersEphemeralWebBrowserSession = false // con la sesión de Claude que ya tengas en Safari
+                self.authSession = session
+                if !session.start() { answer(nil, "iOS no pudo abrir el inicio de sesión") }
+            case .failed(let e):
+                answer(nil, "No se pudo esperar la vuelta del inicio de sesión: \(e.localizedDescription)")
+            default:
+                break
+            }
+        }
+        callbackListener = listener
+        listener.start(queue: .main)
+    }
+
+    /// Pruebas (-OATest): en el simulador no hay quién toque la hoja de iOS, así que esto hace de navegador: pide la
+    /// vuelta con un código de mentira y el estado de la página, y devuelve a dónde la manda el servidor de la app.
+    private func testLogin(_ url: URL, _ port: UInt16, _ answer: @escaping Reply) {
+        let state = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "state" }?.value ?? ""
+        let encoded = state.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        guard let back = URL(string: "http://127.0.0.1:\(port)/callback?code=prueba&state=\(encoded)") else { answer(nil, "Datos inválidos"); return }
+        let session = URLSession(configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil)
+        session.dataTask(with: back) { _, response, error in
+            let location = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Location")
+            DispatchQueue.main.async {
+                if let location { answer(location, nil) } else { answer(nil, error?.localizedDescription ?? "El servidor de la vuelta no respondió") }
+            }
+        }.resume()
+        session.finishTasksAndInvalidate()
+    }
+
+    /// Pedidos a Anthropic que no admiten CORS desde la app (el canje del código por el token, el perfil): con la red de iOS.
+    private static let netHosts: Set<String> = ["platform.claude.com", "claude.ai", "console.anthropic.com", "api.anthropic.com"]
+    private func httpFetch(_ a: [String: Any], _ reply: @escaping Reply) {
+        guard let s = a["url"] as? String, let url = URL(string: s), url.scheme == "https", let host = url.host, Bridge.netHosts.contains(host) else { reply(nil, "Dirección no permitida"); return }
+        var req = URLRequest(url: url, timeoutInterval: 60)
+        req.httpMethod = a["method"] as? String ?? "GET"
+        for (k, v) in a["headers"] as? [String: Any] ?? [:] { if let v = v as? String { req.setValue(v, forHTTPHeaderField: k) } }
+        if let b = a["body"] as? String, !b.isEmpty { req.httpBody = Data(base64Encoded: b) }
+        URLSession.shared.dataTask(with: req) { data, response, error in
+            let r = response as? HTTPURLResponse
+            var headers: [String: String] = [:]
+            // El cuerpo ya viene descomprimido: sin content-encoding ni content-length viejos.
+            for (k, v) in r?.allHeaderFields ?? [:] {
+                let key = String(describing: k).lowercased()
+                if key != "content-encoding" && key != "content-length" { headers[key] = String(describing: v) }
+            }
+            let out: [String: Any] = ["status": r?.statusCode ?? 0, "headers": headers, "body": (data ?? Data()).base64EncodedString()]
+            DispatchQueue.main.async {
+                if let error { reply(nil, error.localizedDescription) } else { reply(out, nil) }
+            }
+        }.resume()
     }
 
     // MARK: elegir archivos (Fotos o Archivos) → .incoming/<id>/
@@ -271,6 +384,17 @@ extension Bridge: UIDocumentPickerDelegate {
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) { finishPick([]) }
 }
 
+extension Bridge: ASWebAuthenticationPresentationContextProviding {
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { controller?.view.window ?? ASPresentationAnchor() }
+}
+
+/// Para la prueba del inicio de sesión: la respuesta de la vuelta tal cual (no seguir la redirección).
+private final class NoRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 extension Bridge: QLPreviewControllerDataSource {
     func numberOfPreviewItems(in controller: QLPreviewController) -> Int { preview == nil ? 0 : 1 }
     func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem { preview! as NSURL }
@@ -382,6 +506,18 @@ enum Files {
                 try d.write(to: url)
             }
             return true
+        case "cc.find":
+            // Qué archivos de una versión instalada tienen un texto (lo que se busca cambia de archivo en cada versión).
+            guard let version = a["version"] as? String, !version.contains("/"), !version.contains(".."),
+                  let needle = (a["text"] as? String)?.data(using: .utf8), !needle.isEmpty else { throw fail("Datos inválidos") }
+            let root = Storage.claude.appendingPathComponent(version, isDirectory: true)
+            var found: [String] = []
+            if let walker = fm.enumerator(atPath: root.path) {
+                for case let rel as String in walker where rel.hasSuffix(".js") {
+                    if let d = try? Data(contentsOf: root.appendingPathComponent(rel), options: .alwaysMapped), d.range(of: needle) != nil { found.append(rel) }
+                }
+            }
+            return found
         case "cc.list":
             let dirs = (try? fm.contentsOfDirectory(atPath: Storage.claude.path)) ?? []
             return dirs.filter { fm.fileExists(atPath: Storage.claude.appendingPathComponent($0).appendingPathComponent("manifest.json").path) }

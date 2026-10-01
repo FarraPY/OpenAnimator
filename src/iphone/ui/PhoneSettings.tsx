@@ -11,6 +11,7 @@ import PluginsSettings from '../../components/PluginsSettings'
 import { Icon, Logo } from '../../ui/icons'
 import { Button, Progress, Select, Spinner, Switch, TextArea, TextInput } from '../../ui/kit'
 import { Chips, Group, Row, Tap, TopBar } from './PhoneApp'
+import { isNative } from '../host/native'
 
 const SECTIONS: Record<string, string> = { ia: 'Claude', plugins: 'Plugins de IA', storage: 'Almacenamiento', about: 'Acerca de' }
 const ACCENTS: Array<{ id: Settings['ui']['accent']; c: string }> = [
@@ -76,6 +77,7 @@ function ClaudeSection() {
   const [token, setToken] = useState('')
   const [editing, setEditing] = useState(false)
   const [test, setTest] = useState<{ busy?: boolean; ok?: boolean; msg?: string } | null>(null)
+  const [logging, setLogging] = useState(false)
   const refresh = () => call<WebStatus>('claude:webStatus').then((x) => { setSt(x); refreshInfo() }).catch((e) => toast(e.message, true))
   useEffect(() => {
     refresh()
@@ -89,6 +91,13 @@ function ClaudeSection() {
   }
   const saveToken = async (value = token) => {
     try { setSt(await call<WebStatus>('claude:setToken', value)); setToken(''); setEditing(false); refreshInfo(); if (value) runTest() } catch (e: any) { toast(e.message, true) }
+  }
+  // La página de Claude que abre iOS; al terminar vuelve sola a la app con la cuenta conectada.
+  const signIn = async () => {
+    setLogging(true)
+    try { setSt(await call<WebStatus>('claude:login')); setEditing(false); refreshInfo(); toast('Cuenta de Claude conectada'); runTest() }
+    catch (e: any) { toast(e.message, !/cancelaste/i.test(e.message)) }
+    finally { setLogging(false) }
   }
   const paste = async () => { try { const v = (await navigator.clipboard.readText()).trim(); if (v) setToken(v) } catch { toast('No se pudo leer el portapapeles: pegalo a mano en el campo', true) } }
   const runTest = async () => {
@@ -117,10 +126,19 @@ function ClaudeSection() {
         </> : <Row icon="download" label="Instalar Claude Code" detail={latest ? `Versión ${latest}` : undefined} chevron onClick={install} />}
       </Group>
 
-      <Group title="2 · Tu cuenta de Claude" foot={<>En una computadora (o en la tablet, en Termux) con Claude Code, corré <code>claude setup-token</code>, iniciá sesión y copiá el token que aparece (empieza con <code>sk-ant-oat</code>; dura un año). No es una clave de la API: usa tu plan. Se guarda cifrado en el iPhone.</>}>
+      <Group title="2 · Tu cuenta de Claude" foot={isNative()
+        ? <>Se abre la página de Claude, entrás con tu cuenta y volvés sola a la app. Usa tu plan, no una clave de la API: el token dura un año y queda cifrado en el iPhone. También podés pegar el de <code>claude setup-token</code>.</>
+        : <>En una computadora (o en la tablet, en Termux) con Claude Code, corré <code>claude setup-token</code>, iniciá sesión y copiá el token que aparece (empieza con <code>sk-ant-oat</code>; dura un año). No es una clave de la API: usa tu plan. Se guarda cifrado en el iPhone.</>}>
+        {isNative() && (!st.token || editing) && (
+          <div className="prow2 stack">
+            <Button variant="primary" icon="key" loading={logging} disabled={logging || !st.installed} onClick={signIn}>
+              {logging ? 'Esperando que inicies sesión…' : 'Iniciar sesión con Claude'}
+            </Button>
+          </div>
+        )}
         {st.token && !editing ? <>
           <Row icon="key" label="Cuenta conectada" detail={st.token} />
-          <Row icon="edit" label="Cambiar el token" chevron onClick={() => setEditing(true)} />
+          <Row icon="edit" label={isNative() ? 'Cambiar de cuenta' : 'Cambiar el token'} chevron onClick={() => setEditing(true)} />
           <Row icon="trash" label="Desconectar" danger onClick={async () => { if (await dlg.confirm({ title: '¿Desconectar tu cuenta?', message: 'Se borra el token del iPhone. Claude deja de funcionar hasta que pegues otro.', ok: 'Desconectar', danger: true })) saveToken('') }} />
         </> : (
           <div className="prow2 stack">
@@ -135,7 +153,7 @@ function ClaudeSection() {
             </span>
           </div>
         )}
-        <Row icon="copy" label="Copiar el comando" detail="claude setup-token" onClick={() => call('clipboard:text', 'claude setup-token').then(() => toast('Comando copiado'))} />
+        {!isNative() && <Row icon="copy" label="Copiar el comando" detail="claude setup-token" onClick={() => call('clipboard:text', 'claude setup-token').then(() => toast('Comando copiado'))} />}
       </Group>
 
       <Group title="3 · Probar">

@@ -52,10 +52,27 @@ class Socket extends EventEmitter {
   setNoDelay() { return this } setKeepAlive() { return this } setTimeout() { return this } ref() { return this } unref() { return this }
   write() { return false } end() { return this } destroy() { this.destroyed = true; return this } address() { return {} }
 }
+/**
+ * Servidores: no hay sockets, así que abrir uno da error. Salvo al iniciar sesión (worker.js, `login`): ahí el de la
+ * vuelta del navegador (http://localhost:<puerto>/callback) "escucha" y el pedido se lo entrega la app (http-request),
+ * que es la que de verdad lo recibe en ese puerto (Bridge.swift, login.open).
+ */
+export const servers = new Map()
 class Server extends EventEmitter {
-  listen(...a) { const cb = a.find((x) => typeof x === 'function'); queueMicrotask(() => { this.emit('error', Object.assign(new Error('No se puede abrir un servidor en el iPhone'), { code: 'EACCES' })) }); void cb; return this }
-  close(cb) { cb?.(); return this } address() { return null } ref() { return this } unref() { return this }
+  listen(...a) {
+    const cb = a.find((x) => typeof x === 'function')
+    if (!globalThis.__oaAllowListen) { queueMicrotask(() => { this.emit('error', Object.assign(new Error('No se puede abrir un servidor en el iPhone'), { code: 'EACCES' })) }); return this }
+    const asked = typeof a[0] === 'number' ? a[0] : a[0]?.port
+    this._port = asked || 49152 + Math.floor(Math.random() * 16000)
+    servers.set(this._port, this)
+    queueMicrotask(() => { this.listening = true; this.emit('listening'); cb?.() })
+    return this
+  }
+  close(cb) { if (this._port) servers.delete(this._port); this.listening = false; queueMicrotask(() => { this.emit('close'); cb?.() }); return this }
+  address() { return this._port ? { port: this._port, address: '127.0.0.1', family: 'IPv4' } : null }
+  ref() { return this } unref() { return this }
 }
+const createServer = (o, handler) => { const s = new Server(); const h = typeof o === 'function' ? o : handler; if (h) s.on('request', h); return s }
 const isIPv4 = (s) => /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(s)
 const isIPv6 = (s) => s.includes(':') && /^[0-9a-f:.]+$/i.test(s)
 /** Dirección → BigInt (IPv4 de 32 bits, IPv6 de 128). */
@@ -81,7 +98,7 @@ class BlockList {
   get rules() { return this._rules.map((r) => `${r.f} ${r.lo}-${r.hi}`) }
 }
 export const net = {
-  Socket, Stream: Socket, Server, createServer: () => new Server(), createConnection: () => new Socket().connect(), connect: () => new Socket().connect(),
+  Socket, Stream: Socket, Server, createServer, createConnection: () => new Socket().connect(), connect: () => new Socket().connect(),
   isIP: (s) => (isIPv4(s) ? 4 : isIPv6(s) ? 6 : 0), isIPv4, isIPv6, BlockList, SocketAddress: class { constructor(o = {}) { Object.assign(this, { address: '127.0.0.1', port: 0, family: 'ipv4', flowlabel: 0 }, o) } },
   getDefaultAutoSelectFamily: () => true, setDefaultAutoSelectFamily: () => {}, getDefaultAutoSelectFamilyAttemptTimeout: () => 250, setDefaultAutoSelectFamilyAttemptTimeout: () => {},
 }
@@ -99,7 +116,7 @@ class ClientRequest extends EventEmitter {
 }
 const httpMod = (proto) => ({
   STATUS_CODES, METHODS: ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PATCH', 'POST', 'PUT'], Agent, globalAgent: new Agent(), ClientRequest, IncomingMessage: class extends Readable {}, OutgoingMessage: class extends Writable {}, ServerResponse: class extends Writable {}, Server,
-  request: () => new ClientRequest(), get: () => new ClientRequest(), createServer: () => new Server(), validateHeaderName: () => {}, validateHeaderValue: () => {}, maxHeaderSize: 16384, setMaxIdleHTTPParsers: () => {}, _proto: proto,
+  request: () => new ClientRequest(), get: () => new ClientRequest(), createServer, validateHeaderName: () => {}, validateHeaderValue: () => {}, maxHeaderSize: 16384, setMaxIdleHTTPParsers: () => {}, _proto: proto,
 })
 export const http = httpMod('http:')
 export const https = httpMod('https:')

@@ -50,6 +50,14 @@ export async function runE2E() {
   await step(R, 'claude:install', async () => (await call('claude:install')).version, 600000)
   R.status = await call('claude:webStatus').catch((e) => String(e))
   await step(R, 'claude:test', () => call<string>('claude:test'), 180000)
+  // Iniciar sesión: el de Claude Code, con la vuelta por el servidor de la app (acá Swift hace de navegador con un código
+  // de mentira) y el canje por la red de iOS. Si todo está conectado, Anthropic rechaza ese código.
+  await step(R, 'claude:login', async () => {
+    let error = ''
+    try { await call('claude:login') } catch (e: any) { error = String(e?.message || e) }
+    if (!/status code 400|invalid/i.test(error)) throw new Error(error || 'Anthropic aceptó un código de mentira')
+    return `Anthropic rechazó el código de prueba (${error})`
+  }, 120000)
   const templates = await call<any[]>('projects:templates').catch(() => [])
   const project = await step(R, 'projects:create', () => call<any>('projects:create', { name: 'Prueba E2E', template: templates[0]?.id || '', width: 1080, height: 1920, fps: 30 }))
   if (project) {

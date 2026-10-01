@@ -5,8 +5,9 @@
  * de la app le llegan por MCP (http://oa.mcp/mcp, atendido acá) y lo que guarda en su carpeta personal (configuración y
  * conversaciones) queda en claude/home/ de la carpeta de datos. Mismas funciones que code.ts, así index.ts elige.
  *
- * La cuenta: el token de larga duración de `claude setup-token` (el inicio de sesión normal de Claude Code no se puede
- * hacer desde una página web). Va cifrado (secrets.ts) y sólo al Worker, como CLAUDE_CODE_OAUTH_TOKEN.
+ * La cuenta: un token de larga duración como el de `claude setup-token`. En la app se saca ahí mismo (login(): el
+ * inicio de sesión del propio Claude Code, con la página de Claude que abre iOS); si no, se pega el de setup-token.
+ * Va cifrado (secrets.ts) y sólo al Worker, como CLAUDE_CODE_OAUTH_TOKEN.
  */
 import { ClaudeStreamSession, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
 import { parseTranscript, sessionInfo, sessionsSlug } from '../../../electron/claude-transcript'
@@ -111,6 +112,62 @@ export function setToken(token: string) {
   if (t && (!/^sk-ant-/.test(t) || /\s/.test(t))) throw new Error('No parece un token de Claude: tiene que empezar con sk-ant-oat y no tener espacios.')
   web().secrets.set(TOKEN, t)
   return status()
+}
+
+/**
+ * Iniciar sesión sin otra computadora (sólo en la app): el Claude Code instalado hace lo mismo que `claude setup-token`
+ * (su propio inicio de sesión, en un Worker; ver login en claude/node/worker.js). iOS muestra la página de Claude
+ * (ASWebAuthenticationSession), la app recibe la vuelta en http://localhost:<puerto>/callback y se la pasa a Claude
+ * Code, y el canje del código por el token va por la red de iOS (Anthropic no admite CORS desde la app). Devuelve un
+ * token de un año que sólo sirve para usar Claude.
+ */
+let loggingIn: Promise<string> | null = null
+export function login(): Promise<string> {
+  if (!loggingIn) loggingIn = loginOnce().finally(() => { loggingIn = null })
+  return loggingIn
+}
+async function loginOnce(): Promise<string> {
+  if (!web().native) throw new Error('Iniciar sesión desde acá sólo se puede en la app del iPhone: pegá el token de «claude setup-token».')
+  const m = await manifest()
+  if (!m) throw new Error('Primero instalá Claude Code (paso 1).')
+  // Dónde está el inicio de sesión de esta versión de Claude Code (el nombre del archivo cambia con cada una).
+  const [chunk] = await nativeCall<string[]>('cc.find', { version: m.version, text: 'async startOAuthFlow(' })
+  if (!chunk) throw new Error(`Claude Code ${m.version} no trae el inicio de sesión que usa la app: pegá el token de «claude setup-token».`)
+  const files = await bunAssets(m)
+  const release = holdAwake()
+  return new Promise<string>((resolve, reject) => {
+    const w = new Worker(`${web().base}claude/worker.js`, { type: 'module' })
+    let over = false
+    const finish = (error: Error | null, token = '') => {
+      if (over) return
+      over = true
+      w.terminate()
+      release()
+      if (error) reject(error); else resolve(token)
+    }
+    w.onmessage = async ({ data: x }) => {
+      if (x.type === 'login-url') {
+        try {
+          const port = +new URL(new URL(x.automatic).searchParams.get('redirect_uri') || '').port
+          const back = new URL(await nativeCall<string>('login.open', { url: x.automatic, port }))
+          w.postMessage({ type: 'http-request', port, url: back.pathname + back.search })
+        } catch (e: any) { finish(new Error(e?.message || String(e))) }
+      } else if (x.type === 'net') {
+        nativeCall('http.fetch', { url: x.url, method: x.method, headers: x.headers, body: x.body }).then(
+          (r) => w.postMessage({ type: 'net-reply', id: x.id, ...r }),
+          (e) => w.postMessage({ type: 'net-reply', id: x.id, error: String(e?.message || e) }),
+        )
+      } else if (x.type === 'login-token') finish(null, x.token)
+      else if (x.type === 'login-error' || x.type === 'crash') finish(new Error(x.error))
+      else if (x.type === 'stderr' && (window as any).__oaTest) console.warn('[claude login]', x.data)
+    }
+    w.onerror = (e) => finish(new Error(e.message || 'El Worker de Claude Code se cerró'))
+    const env: Record<string, string> = {
+      HOME, USER: 'user', LOGNAME: 'user', SHELL: '/bin/sh', PATH: '/usr/bin:/bin', TERM: 'dumb', LANG: 'es_AR.UTF-8', TMPDIR: '/tmp',
+      DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
+    }
+    w.postMessage({ type: 'start', opts: { argv: ['node', '/$bunfs/root/cli'], env, cwd: HOME, home: HOME, files, dirs: [`${HOME}/.claude`], assets: m.loaders, preload: m.preload, base: m.base, login: { chunk } } })
+  })
 }
 
 // ── un "proceso" de Claude Code: un Worker ─────────────────────────────────────

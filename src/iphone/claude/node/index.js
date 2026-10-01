@@ -16,6 +16,7 @@ import { createBun } from './bun.js'
 import { asyncHooks, perfHooks, tty, createVm, v8, workerThreads, inspector, diagnosticsChannel, cluster, dgram, sqlite, wasi, traceEvents, punycode, ws, bunJsc, nodeFetch } from './misc.js'
 
 export { ProcessExit }
+export { servers } from './sys.js'
 let modules = null
 
 const BUILTINS = ['assert', 'assert/strict', 'async_hooks', 'buffer', 'child_process', 'cluster', 'console', 'constants', 'crypto', 'dgram', 'diagnostics_channel', 'dns', 'dns/promises', 'events', 'fs', 'fs/promises', 'http', 'http2', 'https', 'inspector', 'module', 'net', 'os', 'path', 'path/posix', 'path/win32', 'perf_hooks', 'process', 'punycode', 'querystring', 'readline', 'readline/promises', 'stream', 'stream/consumers', 'stream/promises', 'stream/web', 'string_decoder', 'sys', 'timers', 'timers/promises', 'tls', 'trace_events', 'tty', 'url', 'util', 'util/types', 'v8', 'vm', 'wasi', 'worker_threads', 'zlib', 'sqlite']
