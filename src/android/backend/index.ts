@@ -140,8 +140,10 @@ h('projects:importZip', async (path?: string) => {
   send('projects:changed', null)
   return p
 })
-h('projects:exportZip', async (id: string, o: { includeRenders?: boolean; action?: 'share' | 'save' } = {}) => {
+h('projects:exportZip', async (id: string, o: { includeRenders?: boolean; action?: 'share' | 'save' | 'pc' } = {}) => {
   const r = await awake(() => P.exportZip(id, o, (x) => send('projects:progress', { kind: 'export', id, p: x })))
+  // iPhone, depuración: a la computadora del registro en vivo (para que Claude Code vea un proyecto que falla).
+  if (o.action === 'pc') { await host().callAsync('file.toPc', { path: r.path, name: r.name }); return r }
   if (o.action === 'save') return { ...r, ...(await host().callAsync('file.save', { path: r.path, name: r.name, mime: 'application/zip' })) }
   await host().callAsync('file.share', { path: r.path, name: r.name, mime: 'application/zip', title: 'Compartir proyecto' })
   return r

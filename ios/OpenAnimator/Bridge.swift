@@ -69,6 +69,9 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             replyHandler(true, nil)
         case "log.remote": replyHandler(AppLog.setRemote(a["url"] as? String), nil)
         case "log.status": replyHandler(AppLog.status(), nil)
+        case "log.upload":
+            guard let url = fileURL(a) else { replyHandler(nil, "No existe el archivo"); return }
+            AppLog.upload(url, name: a["name"] as? String ?? url.lastPathComponent) { err in DispatchQueue.main.async { replyHandler(err == nil ? true : nil, err) } }
         case "info": replyHandler(info(), nil)
         case "awake":
             // Pantalla encendida mientras Claude trabaja o se exporta; y si el usuario sale de la app, iOS da un rato

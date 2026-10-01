@@ -138,7 +138,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   (PhoneApp) → `NativeMenus.swift` (un botón invisible de iOS encima con un UIMenu, submenús incluidos; lo elegido
   vuelve como evento `menu`); en lo que se desplaza con el dedo, `native={false}` (el botón de iOS no dejaría
   desplazar) y queda el menú de la página anclado. El audio de la vista previa suena con el iPhone en silencio:
-  AVAudioSession `.playback` (AppDelegate) y `navigator.audioSession.type = 'playback'`.
+  AVAudioSession `.playback` (AppDelegate) y `navigator.audioSession.type = 'playback'`. Trampa: iOS a veces deja
+  trabada la salida de un AudioContext (dice «running» pero ni suena ni avanza `currentTime`; entrando y saliendo de
+  pantalla completa, que gira la pantalla) y sólo uno nuevo vuelve a sonar: `PreviewAudio.unlock()` hace uno en cada ▶
+  y, reproduciendo, si el reloj no avanza lo rehace y sigue (hasta 2 veces por ▶). La isla dinámica muestra
+  `navigator.mediaSession.metadata` (nombre del proyecto e `icon.png`, que build-iphone.mjs copia también a ios/www;
+  sin eso, un cuadrado gris) y sus botones van a `togglePlay`.
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`
@@ -152,7 +157,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `node scripts/registro-remoto.mjs` (clave en .tools/registro-remoto.key → registro-iphone.log): en la misma wifi cada
   1 s; desde cualquier red, con `--ntfy`, al tema fijo https://ntfy.sh/oa-<clave> en tandas de 30 s (ntfy.sh: 250
   mensajes por día y guarda 12 h; más de 4 KB va como adjunto). Los túneles gratis no sirvieron: esta red bloquea el
-  DNS de trycloudflare/argotunnel y localhost.run cambia la dirección cada tanto.
+  DNS de trycloudflare/argotunnel y localhost.run cambia la dirección cada tanto. Con el registro en vivo por la wifi,
+  «Enviar un proyecto a la computadora» manda su .zip (`log.upload` → `<dirección>/archivo`) a `.tools/del-iphone/`
+  para ver uno que falla. La línea «Arranca» trae la versión de la interfaz (qué compilación está instalada) y el
+  registro anota interrupciones y cambios de salida del audio de iOS.
 - Trampas del WebKit de iOS 26: no entiende `using`/`await using` (Claude Code los usa) → `lowerUsing` (transform.ts, al
   instalar; envuelve TODO el bloque para no cambiar el alcance; prueba: `scripts/check-lower-using.mjs`) con
   `$oaUse`/`$oaDispose` de claude/node/inject.js. El User-Agent de WKWebView quedó en «iPhone OS 18_7» (la versión real

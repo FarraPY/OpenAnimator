@@ -75,28 +75,31 @@ export class PreviewAudio {
   private nodes = new Set<AudioBufferSourceNode>()
   private gen = 0
   private timer = 0
+  private watch = 0
+  private revived = 0
 
   /** Hay que llamarlo dentro del toque: Safari sólo activa el audio así. */
   unlock() {
     try {
       // Que suene aunque el iPhone esté en silencio (la app además pone la categoría «playback»: AppDelegate).
       const nav = navigator as any
-      if (nav.audioSession && nav.audioSession.type !== 'playback') nav.audioSession.type = 'playback'
-      // Si el contexto no está andando (iOS lo deja «interrumpido» cuando algo cambia el audio de la app y ya no vuelve
-      // con resume: quedaba mudo hasta salir del proyecto), se hace uno nuevo; dentro del toque arranca andando.
-      if (this.ctx && this.ctx.state !== 'running') {
-        console.warn(`Audio de la vista previa: estaba ${this.ctx.state}, se rehace`)
-        void this.ctx.close().catch(() => {})
-        this.ctx = null
+      if (nav.audioSession && nav.audioSession.type !== 'playback') {
+        nav.audioSession.type = 'playback'
+        nav.audioSession.onstatechange = () => { if (nav.audioSession.state === 'interrupted') console.warn('Audio de la vista previa: iOS interrumpió la sesión de audio') }
       }
-      if (!this.ctx) {
-        this.ctx = new AudioContext()
-        this.master = null
-        const ctx = this.ctx
-        ctx.onstatechange = () => { if (ctx.state !== 'running' && ctx.state !== 'closed') console.warn(`Audio de la vista previa: ${ctx.state}`) }
-      }
-      if (this.ctx.state !== 'running') void this.ctx.resume()
+      // Un contexto nuevo en cada ▶: iOS a veces deja trabada la salida del anterior (dice «running» pero no suena ni
+      // avanza: pasó entrando y saliendo de pantalla completa, que gira la pantalla) y sólo uno nuevo vuelve a sonar.
+      this.fresh()
+      this.revived = 0
     } catch (e) { console.warn('Sin audio en la vista previa:', e) } // sin Web Audio: se ve igual, sin sonido
+  }
+
+  private fresh() {
+    void this.ctx?.close().catch(() => {})
+    const ctx = this.ctx = new AudioContext()
+    this.master = null
+    ctx.onstatechange = () => { if (ctx === this.ctx && ctx.state !== 'running' && ctx.state !== 'closed') console.warn(`Audio de la vista previa: ${ctx.state}`) }
+    if (ctx.state !== 'running') void ctx.resume().catch(() => {})
   }
 
   /** Empieza a sonar desde t (segundos del timeline) a la velocidad rate. */
@@ -142,11 +145,30 @@ export class PreviewAudio {
       if (gen === this.gen && next < tl.duration) this.timer = window.setTimeout(pump, 400)
     }
     void pump()
+    // Si el reloj del contexto deja de avanzar (la salida de iOS se trabó aunque diga «running»), se rehace y sigue desde
+    // donde va. A lo sumo dos veces por ▶: con el audio del sistema ocupado (una llamada) no serviría.
+    const wall0 = performance.now()
+    let c0 = ctx.currentTime, w0 = wall0, last = wall0
+    this.watch = window.setInterval(() => {
+      const now = performance.now()
+      if (now - last > 3000 || document.hidden) { c0 = ctx.currentTime; w0 = now } // la app estuvo en segundo plano
+      last = now
+      const dw = (now - w0) / 1000
+      if (dw < 1.5) return
+      const dc = ctx.currentTime - c0
+      c0 = ctx.currentTime; w0 = now
+      if (dc > dw * 0.3 || this.revived >= 2) return
+      this.revived++
+      console.warn(`Audio de la vista previa: el contexto no avanza (${ctx.state}, ${dc.toFixed(2)} s en ${dw.toFixed(1)} s), se rehace`)
+      try { this.fresh() } catch { return }
+      this.play(projectId, tl, Math.min(tl.duration, t + ((now - wall0) / 1000) * rate), rate)
+    }, 500)
   }
 
   stop() {
     this.gen++
     window.clearTimeout(this.timer)
+    window.clearInterval(this.watch)
     for (const n of this.nodes) { try { n.stop() } catch { /* ya terminó */ } }
     this.nodes.clear()
   }

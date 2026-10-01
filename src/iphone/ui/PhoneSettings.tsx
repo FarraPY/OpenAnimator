@@ -11,7 +11,7 @@ import { useDialogs } from '../../components/Dialogs'
 import PluginsSettings from '../../components/PluginsSettings'
 import { Icon, Logo } from '../../ui/icons'
 import { Button, Progress, Select, Spinner, Switch, TextArea, TextInput } from '../../ui/kit'
-import { Chips, Group, Row, Tap, TopBar } from './PhoneApp'
+import { Chips, Group, MenuButton, Row, Tap, TopBar } from './PhoneApp'
 import { isNative, nativeCall } from '../host/native'
 import { logVerbose, setLogVerbose } from '../host/applog'
 
@@ -216,6 +216,27 @@ function StorageSection() {
 }
 
 // ── Depuración ─────────────────────────────────────────────────────────────────
+/** Para que Claude Code vea un proyecto que falla: su .zip (sin cachés ni exportaciones) va a la computadora del
+ *  registro en vivo, que lo guarda en .tools/del-iphone/. */
+function SendProject() {
+  const { toast } = useApp()
+  const [list, setList] = useState<Array<{ id: string; name: string }>>([])
+  const [busy, setBusy] = useState('')
+  useEffect(() => { call<Array<{ id: string; name: string }>>('projects:list').then(setList).catch(() => {}) }, [])
+  const send = async (p: { id: string; name: string }) => {
+    setBusy(p.name)
+    try { await call('projects:exportZip', p.id, { action: 'pc' }); toast(`«${p.name}» llegó a la computadora`) } catch (e: any) { toast(e.message, true) } finally { setBusy('') }
+  }
+  return (
+    <MenuButton className="prow2" label="Enviar un proyecto a la computadora" title="Enviar a la computadora" align="start"
+      items={list.length ? list.map((p) => ({ label: p.name, onSelect: () => void send(p) })) : [{ label: 'No hay proyectos', disabled: true, onSelect: () => {} }]}>
+      <span className="row-ic"><Icon name="send" size={18} /></span>
+      <span className="row-main"><span className="row-label">Enviar un proyecto a la computadora</span><span className="row-detail">{busy ? `Enviando «${busy}»…` : 'Para que Claude Code vea uno que falla'}</span></span>
+      <Icon name="chevron-right" size={16} className="row-chev" />
+    </MenuButton>
+  )
+}
+
 type LogStatus = { remote?: string; sentAt?: number; error?: string; pending: number; size: number }
 
 /** El registro de la app (ios/OpenAnimator/AppLog.swift): verlo, compartirlo y mandarlo en vivo a la computadora. */
@@ -257,6 +278,7 @@ function DebugSection() {
             </span>
           </span>
         </div>
+        {st.remote && !/ntfy\.sh/.test(st.remote) && <SendProject />}
       </Group>
       {tail != null && <Group title="Lo último"><div className="prow2"><pre className="viewer-text" style={{ maxHeight: '60vh', overflow: 'auto', fontSize: 11 }}>{tail}</pre></div></Group>}
     </>

@@ -72,13 +72,14 @@ await build({
 await build({ ...common, entryPoints: [path.join(ROOT, 'src', 'iphone', 'claude', 'installer.worker.ts')], outfile: path.join(OUT, 'claude', 'installer.js'), format: 'esm', minify: true })
 
 fs.writeFileSync(path.join(OUT, 'version.json'), JSON.stringify({ version: VERSION }))
+// El ícono también va en la app: es la imagen de la isla dinámica y la pantalla bloqueada mientras suena la vista previa.
+fs.copyFileSync(path.join(ROOT, 'build', 'icon.png'), path.join(OUT, 'icon.png'))
 if (NATIVE) {
   const size = list(OUT).reduce((n, f) => n + fs.statSync(path.join(OUT, f)).size, 0)
   log(`Listo: ios/www (${(size / 1e6).toFixed(1)} MB, versión ${VERSION})`)
   process.exit(0)
 }
-log('Ícono, manifiesto y lista para usar sin conexión…')
-fs.copyFileSync(path.join(ROOT, 'build', 'icon.png'), path.join(OUT, 'icon.png'))
+log('Manifiesto y lista para usar sin conexión…')
 fs.writeFileSync(path.join(OUT, 'manifest.webmanifest'), JSON.stringify({
   name: 'OpenAnimator', short_name: 'OpenAnimator', description: 'Videos animados con Claude, en el teléfono',
   start_url: './', scope: './', display: 'standalone', orientation: 'any', background_color: '#0b0c0f', theme_color: '#0b0c0f', lang: 'es',

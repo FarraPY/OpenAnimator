@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import UIKit
 
@@ -49,7 +50,10 @@ enum AppLog {
         let p = ProcessInfo.processInfo
         let app = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        write("app", "INFO", "Arranca OpenAnimator \(app) (\(build)) · \(machine()) · iOS \(UIDevice.current.systemVersion) · memoria \(p.physicalMemory >> 20) MB · temperatura \(thermal(p.thermalState))\(p.isLowPowerModeEnabled ? " · ahorro de batería" : "")")
+        // La versión de la interfaz (ios/www/version.json: fecha y hora del armado) dice qué compilación está instalada.
+        let www = (try? Data(contentsOf: Bundle.main.bundleURL.appendingPathComponent("www/version.json")))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["version"] as? String ?? "?"
+        write("app", "INFO", "Arranca OpenAnimator \(app) (\(build), interfaz \(www)) · \(machine()) · iOS \(UIDevice.current.systemVersion) · memoria \(p.physicalMemory >> 20) MB · temperatura \(thermal(p.thermalState))\(p.isLowPowerModeEnabled ? " · ahorro de batería" : "")")
         let nc = NotificationCenter.default
         nc.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: nil) { _ in
             write("sistema", "WARN", "Temperatura: \(thermal(ProcessInfo.processInfo.thermalState))")
@@ -58,6 +62,19 @@ enum AppLog {
             write("sistema", "INFO", ProcessInfo.processInfo.isLowPowerModeEnabled ? "Ahorro de batería activado" : "Ahorro de batería desactivado")
         }
         nc.addObserver(forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: nil) { _ in write("sistema", "WARN", "iOS avisa que falta memoria") }
+        // El audio de la vista previa (lo que iOS le hace a la sesión de audio de la app).
+        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: nil) { n in
+            let began = (n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue
+            write("sistema", "WARN", began ? "Audio: iOS interrumpe la sesión de audio" : "Audio: termina la interrupción")
+        }
+        nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: nil) { n in
+            let r = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap { AVAudioSession.RouteChangeReason(rawValue: $0) }
+            let why: [AVAudioSession.RouteChangeReason: String] = [.newDeviceAvailable: "se conectó una salida", .oldDeviceUnavailable: "se desconectó una salida",
+                .categoryChange: "cambió la categoría", .override: "cambio forzado", .wakeFromSleep: "al despertar",
+                .noSuitableRouteForCategory: "sin salida para la categoría", .routeConfigurationChange: "cambió la configuración (p. ej. al girar)"]
+            write("sistema", "INFO", "Audio: cambió la salida (\(r.flatMap { why[$0] } ?? "motivo \(r?.rawValue ?? 0)")) → \(AVAudioSession.sharedInstance().currentRoute.outputs.map(\.portName).joined(separator: ", "))")
+        }
+        nc.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: nil) { _ in write("sistema", "WARN", "Audio: iOS reinició los servicios de audio") }
         nc.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: nil) { _ in write("app", "INFO", "En segundo plano") }
         nc.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: nil) { _ in write("app", "INFO", "De vuelta en primer plano") }
         nc.addObserver(forName: UIApplication.willTerminateNotification, object: nil, queue: nil) { _ in write("app", "INFO", "La app se cierra") }
@@ -140,6 +157,23 @@ enum AppLog {
         }
         if url != nil { write("app", "INFO", "Registro en vivo encendido") }
         return status()
+    }
+
+    /// Un archivo (el .zip de un proyecto que falla) a la computadora del registro en vivo, en la misma red:
+    /// <dirección>/archivo?nombre=… (scripts/registro-remoto.mjs lo guarda en .tools/del-iphone/).
+    static func upload(_ file: URL, name: String, _ done: @escaping (String?) -> Void) {
+        guard let base = queue.sync(execute: { remote }), base.host?.lowercased() != "ntfy.sh",
+              var c = URLComponents(url: base.appendingPathComponent("archivo"), resolvingAgainstBaseURL: false) else {
+            done("Encendé el registro en vivo con la dirección de la computadora en la misma wifi (Ajustes › Depuración)"); return
+        }
+        c.queryItems = [URLQueryItem(name: "nombre", value: name)]
+        var req = URLRequest(url: c.url!, timeoutInterval: 600)
+        req.httpMethod = "POST"
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        URLSession.shared.uploadTask(with: req, fromFile: file) { _, response, error in
+            let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+            done(error == nil && (200..<300).contains(code) ? nil : error?.localizedDescription ?? "La computadora respondió \(code) (¿está corriendo una versión vieja de registro-remoto.mjs?)")
+        }.resume()
     }
 
     static func status() -> [String: Any] {

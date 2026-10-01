@@ -34,6 +34,7 @@ if (!/^[\w-]{12,}$/.test(key)) {
 }
 
 http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url.startsWith(`/k/${key}/archivo?`)) { receiveFile(req, res); return }
   if (req.method !== 'POST' || req.url !== `/k/${key}`) { res.writeHead(404).end(); return }
   const parts = []
   let size = 0
@@ -50,6 +51,23 @@ http.createServer((req, res) => {
   if (tunnel) startTunnel()
   if (ntfy) void listenNtfy()
 })
+
+/** Un archivo que manda la app (Ajustes › Depuración › Enviar un proyecto): queda en .tools/del-iphone/. */
+const receiveFile = (req, res) => {
+  const name = (new URL(req.url, 'http://x').searchParams.get('nombre') || 'archivo').replace(/[^\p{L}\p{N}._ -]+/gu, '_').slice(0, 100)
+  const dir = path.join(path.dirname(keyFile), 'del-iphone')
+  fs.mkdirSync(dir, { recursive: true })
+  const out = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${name}`)
+  const ws = fs.createWriteStream(out)
+  let size = 0
+  req.on('data', (c) => { size += c.length; if (size > 2e9) req.destroy() })
+  req.pipe(ws)
+  ws.on('finish', () => {
+    append(`${new Date().toISOString()} INFO  [computadora] Llegó «${name}» (${(size / 1e6).toFixed(1)} MB) → ${out}`)
+    res.writeHead(204).end()
+  })
+  req.on('error', () => { ws.destroy(); fs.rmSync(out, { force: true }) })
+}
 
 const append = (text) => {
   const t = text.endsWith('\n') ? text : text + '\n'

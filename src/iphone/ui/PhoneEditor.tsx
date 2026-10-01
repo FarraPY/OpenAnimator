@@ -243,6 +243,19 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     setPlaying(true)
     audio.current!.play(projectId, tl, from, rate)
   }
+  // La isla dinámica y la pantalla bloqueada: el nombre del proyecto con el ícono de la app (sin esto iOS mostraba un
+  // cuadrado gris) y sus botones de reproducir y pausar.
+  const playRef = useRef({ playing, togglePlay }); playRef.current = { playing, togglePlay }
+  useEffect(() => {
+    const ms = navigator.mediaSession
+    if (!ms || !project) return
+    try {
+      ms.metadata = new MediaMetadata({ title: project.name, artist: 'OpenAnimator', artwork: [{ src: new URL('icon.png', location.href).href, sizes: '512x512', type: 'image/png' }] })
+      for (const [action, want] of [['play', true], ['pause', false]] as const) ms.setActionHandler(action, () => { const p = playRef.current; if (p.playing !== want) p.togglePlay() })
+    } catch { /* sin Media Session */ }
+    return () => { try { ms.metadata = null; ms.setActionHandler('play', null); ms.setActionHandler('pause', null) } catch { /* sin Media Session */ } }
+  }, [project?.name])
+  useEffect(() => { if (navigator.mediaSession) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused' }, [playing])
   const seek = (x: number) => {
     const nt = Math.max(0, Math.min(tl?.duration || 0, x))
     setT(nt)
