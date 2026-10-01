@@ -26,7 +26,7 @@ final class NativeEncoder {
         if op == "venc.audio" {
             sound.async {
                 do {
-                    guard let job = current else { throw fail("No hay una exportación en curso") }
+                    guard let job = NativeEncoder.current else { throw NativeEncoder.fail("No hay una exportación en curso") }
                     try job.appendAudio(a)
                     respond(.success(true))
                 } catch { respond(.failure(error)) }
@@ -37,24 +37,24 @@ final class NativeEncoder {
             do {
                 switch op {
                 case "venc.start":
-                    current?.discard()
-                    current = nil
-                    current = try NativeEncoder(a)
+                    NativeEncoder.current?.discard()
+                    NativeEncoder.current = nil
+                    NativeEncoder.current = try NativeEncoder(a)
                     respond(.success(["codec": (a["codec"] as? String) == "hevc" ? "HEVC" : "H.264", "native": true] as [String: Any]))
                 case "venc.frame":
-                    guard let job = current else { throw fail("No hay una exportación en curso") }
+                    guard let job = NativeEncoder.current else { throw NativeEncoder.fail("No hay una exportación en curso") }
                     try job.appendFrame(a)
                     respond(.success(Double(job.frames)))
                 case "venc.finish":
-                    guard let job = current else { throw fail("No hay una exportación en curso") }
-                    current = nil
+                    guard let job = NativeEncoder.current else { throw NativeEncoder.fail("No hay una exportación en curso") }
+                    NativeEncoder.current = nil
                     job.finish(respond)
                 case "venc.cancel":
-                    current?.discard()
-                    current = nil
+                    NativeEncoder.current?.discard()
+                    NativeEncoder.current = nil
                     respond(.success(true))
                 default:
-                    throw fail("Operación desconocida: \(op)")
+                    throw NativeEncoder.fail("Operación desconocida: \(op)")
                 }
             } catch { respond(.failure(error)) }
         }

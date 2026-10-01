@@ -76,7 +76,8 @@ jobs:
           for i in $(seq 1 200); do grep -q "OA-DIAG-" diag.log && break; sleep 1; done
           sleep 1; kill $PID $LOGPID 2>/dev/null || true
           esc() { python3 -c "import sys; print(sys.stdin.read()[-12000:].replace('%','%25').replace('\r','').replace('\n','%0A'))"; }
-          echo "::warning title=WebKit y medios (simulador)::$(grep -iE 'media|avf|player|video|audio|decod|fail|error' wk.log | tail -n 120 | cut -c1-300 | esc)"
+          # Sólo lo del <video> (el audio del sistema llena el registro): lo primero que dice al fallar.
+          echo "::warning title=WebKit y medios (simulador)::$(grep -iE 'MediaPlayer|AVPlayer|AVAsset|HTMLMediaElement|video|playback|SourceBuffer' wk.log | grep -viE 'coreaudio|AggregateDevice' | head -n 80 | cut -c1-300 | esc)"
           cat diag.log
           RESULT=$(grep -o 'OA-DIAG-RESULT .*' diag.log | head -1 | cut -c16-)
           echo "::notice title=Diagnóstico del simulador::${RESULT:-sin resultado (ver el log)}"
