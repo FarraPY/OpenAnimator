@@ -108,8 +108,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   con `cc.find`, con inferencia sola y un año); iOS muestra la página (ASWebAuthenticationSession), la vuelta a
   `http://localhost:<puerto>/callback` la recibe un NWListener sólo de loopback que redirige a `openanimator://login/…`
   (Bridge.swift `login.open`) y el Worker la recibe por `http-request` (servidor emulado en sys.js, sólo en ese modo);
-  el canje y el perfil van por `http.fetch` (URLSession: platform.claude.com no admite CORS desde la app; sin
-  XMLHttpRequest, axios usa fetch). También se puede pegar un token. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la
+  el canje y el perfil van por la red de iOS. Trampa: con una cuenta del plan la API rechaza todo pedido de navegador
+  («401 CORS requests are not allowed for this Organization»), así que en la app TODO lo de Anthropic sale por
+  `http.stream` (NetStream.swift, URLSession; las partes vuelven como evento `net` y el Worker arma un ReadableStream:
+  `appFetch` en worker.js); sin XMLHttpRequest, axios también usa fetch. También se puede pegar un token. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la
   página (`backend/webclaude.ts`). El puente nativo sólo atiende al marco principal de `oa://` (las escenas, en
   iframes `oaproj://`, no).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,

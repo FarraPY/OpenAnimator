@@ -24,6 +24,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private var background: UIBackgroundTaskIdentifier = .invalid
     private var authSession: ASWebAuthenticationSession?
     private var callbackListener: NWListener?
+    /// Lo que Claude Code manda a Anthropic, por la red de iOS (NetStream.swift); las partes vuelven como evento "net".
+    private lazy var net = NetStream { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
 
     private func endBackground() {
         guard background != .invalid else { return }
@@ -73,7 +75,11 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "probe": probe(a, replyHandler)
         case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)
-        case "http.fetch": httpFetch(a, replyHandler)
+        case "http.stream":
+            do { try net.start(a); replyHandler(true, nil) } catch { replyHandler(nil, (error as? LocalizedError)?.errorDescription ?? error.localizedDescription) }
+        case "http.cancel":
+            net.cancel(a["id"] as? String ?? "")
+            replyHandler(true, nil)
         case "keychain.load": replyHandler(Keychain.load(), nil)
         case "keychain.save":
             Keychain.save(a["json"] as? String ?? "{}") ? replyHandler(true, nil) : replyHandler(nil, "No se pudieron guardar las claves en el Llavero")
@@ -244,29 +250,6 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             }
         }.resume()
         session.finishTasksAndInvalidate()
-    }
-
-    /// Pedidos a Anthropic que no admiten CORS desde la app (el canje del código por el token, el perfil): con la red de iOS.
-    private static let netHosts: Set<String> = ["platform.claude.com", "claude.ai", "console.anthropic.com", "api.anthropic.com"]
-    private func httpFetch(_ a: [String: Any], _ reply: @escaping Reply) {
-        guard let s = a["url"] as? String, let url = URL(string: s), url.scheme == "https", let host = url.host, Bridge.netHosts.contains(host) else { reply(nil, "Dirección no permitida"); return }
-        var req = URLRequest(url: url, timeoutInterval: 60)
-        req.httpMethod = a["method"] as? String ?? "GET"
-        for (k, v) in a["headers"] as? [String: Any] ?? [:] { if let v = v as? String { req.setValue(v, forHTTPHeaderField: k) } }
-        if let b = a["body"] as? String, !b.isEmpty { req.httpBody = Data(base64Encoded: b) }
-        URLSession.shared.dataTask(with: req) { data, response, error in
-            let r = response as? HTTPURLResponse
-            var headers: [String: String] = [:]
-            // El cuerpo ya viene descomprimido: sin content-encoding ni content-length viejos.
-            for (k, v) in r?.allHeaderFields ?? [:] {
-                let key = String(describing: k).lowercased()
-                if key != "content-encoding" && key != "content-length" { headers[key] = String(describing: v) }
-            }
-            let out: [String: Any] = ["status": r?.statusCode ?? 0, "headers": headers, "body": (data ?? Data()).base64EncodedString()]
-            DispatchQueue.main.async {
-                if let error { reply(nil, error.localizedDescription) } else { reply(out, nil) }
-            }
-        }.resume()
     }
 
     // MARK: elegir archivos (Fotos o Archivos) → .incoming/<id>/

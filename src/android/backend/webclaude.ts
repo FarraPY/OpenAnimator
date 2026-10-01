@@ -141,6 +141,7 @@ async function loginOnce(): Promise<string> {
     const finish = (error: Error | null, token = '') => {
       if (over) return
       over = true
+      netDrop(w)
       w.terminate()
       release()
       if (error) reject(error); else resolve(token)
@@ -152,12 +153,9 @@ async function loginOnce(): Promise<string> {
           const back = new URL(await nativeCall<string>('login.open', { url: x.automatic, port }))
           w.postMessage({ type: 'http-request', port, url: back.pathname + back.search })
         } catch (e: any) { finish(new Error(e?.message || String(e))) }
-      } else if (x.type === 'net') {
-        nativeCall('http.fetch', { url: x.url, method: x.method, headers: x.headers, body: x.body }).then(
-          (r) => w.postMessage({ type: 'net-reply', id: x.id, ...r }),
-          (e) => w.postMessage({ type: 'net-reply', id: x.id, error: String(e?.message || e) }),
-        )
-      } else if (x.type === 'login-token') finish(null, x.token)
+      } else if (x.type === 'net') netStart(w, x)
+      else if (x.type === 'net-cancel') netCancel(x.id)
+      else if (x.type === 'login-token') finish(null, x.token)
       else if (x.type === 'login-error' || x.type === 'crash') finish(new Error(x.error))
       else if (x.type === 'stderr' && (window as any).__oaTest) console.warn('[claude login]', x.data)
     }
@@ -166,9 +164,35 @@ async function loginOnce(): Promise<string> {
       HOME, USER: 'user', LOGNAME: 'user', SHELL: '/bin/sh', PATH: '/usr/bin:/bin', TERM: 'dumb', LANG: 'es_AR.UTF-8', TMPDIR: '/tmp',
       DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
     }
-    w.postMessage({ type: 'start', opts: { argv: ['node', '/$bunfs/root/cli'], env, cwd: HOME, home: HOME, files, dirs: [`${HOME}/.claude`], assets: m.loaders, preload: m.preload, base: m.base, login: { chunk } } })
+    w.postMessage({ type: 'start', opts: { argv: ['node', '/$bunfs/root/cli'], env, cwd: HOME, home: HOME, files, dirs: [`${HOME}/.claude`], assets: m.loaders, preload: m.preload, base: m.base, native: true, login: { chunk } } })
   })
 }
+
+// ── la red de iOS para Claude Code ─────────────────────────────────────────────
+/**
+ * Lo que un Worker manda a Anthropic va por la red de iOS (appFetch en claude/node/worker.js → Bridge.swift
+ * http.stream): con una cuenta del plan, la API rechaza los pedidos que salen de un navegador. Las partes de la
+ * respuesta vuelven como eventos "net" de la app y se le pasan al Worker que las pidió.
+ */
+const nets = new Map<string, Worker>()
+let netEvents = false
+function netStart(w: Worker, m: { id: string; url: string; method: string; headers: Record<string, string>; body: string }) {
+  if (!netEvents) {
+    netEvents = true
+    web().onEvent('net', (ev: any) => {
+      const to = nets.get(ev?.id)
+      if (!to) return
+      if (ev.type === 'end' || ev.type === 'error') nets.delete(ev.id)
+      to.postMessage({ type: 'net-event', ev })
+    })
+  }
+  nets.set(m.id, w)
+  nativeCall('http.stream', { id: m.id, url: m.url, method: m.method, headers: m.headers, body: m.body })
+    .catch((e) => { nets.delete(m.id); w.postMessage({ type: 'net-event', ev: { id: m.id, type: 'error', message: String(e?.message || e) } }) })
+}
+function netCancel(id: string) { if (nets.delete(id)) void nativeCall('http.cancel', { id }).catch(() => {}) }
+/** Un Worker que se cierra: lo suyo que sigue en camino se corta. */
+function netDrop(w: Worker) { for (const [id, x] of [...nets]) if (x === w) netCancel(id) }
 
 // ── un "proceso" de Claude Code: un Worker ─────────────────────────────────────
 /** Recursos que Claude Code lee con fs (textos, skills…): se leen una vez y se le pasan a cada Worker. */
@@ -251,6 +275,8 @@ function launch(args: string[], o: { projectId: string; resume?: string; onMessa
   w.onmessage = ({ data: m }) => {
     if (m.type === 'fs') save(m.files)
     else if (m.type === 'mcp') void mcp(m, o.projectId).then((r) => w.postMessage({ type: 'mcp-reply', id: m.id, ...r }))
+    else if (m.type === 'net') netStart(w, m)
+    else if (m.type === 'net-cancel') netCancel(m.id)
     else o.onMessage(w, m)
   }
   w.onerror = (e) => o.onMessage(w, { type: 'crash', error: e.message || 'El Worker de Claude Code se cerró' })
@@ -265,7 +291,7 @@ function launch(args: string[], o: { projectId: string; resume?: string; onMessa
       DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
       ...(token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {}), ...d.env,
     }
-    w.postMessage({ type: 'start', opts: { argv: ['node', '/$bunfs/root/cli', ...args], env, cwd: cwd(o.projectId), home: HOME, files, dirs: [`${HOME}/.claude`], assets: m.loaders, preload: m.preload, base: m.base } })
+    w.postMessage({ type: 'start', opts: { argv: ['node', '/$bunfs/root/cli', ...args], env, cwd: cwd(o.projectId), home: HOME, files, dirs: [`${HOME}/.claude`], assets: m.loaders, preload: m.preload, base: m.base, native: web().native } })
     return m
   })()
   return { w, started }
@@ -338,7 +364,7 @@ class WebChat extends ClaudeStreamSession {
     this.w = null
     this.ready = false
     this.queue = []
-    if (w !== PENDING) w.terminate()
+    if (w !== PENDING) { netDrop(w); w.terminate() }
     this.closed(code, this.errTail)
   }
 
@@ -448,7 +474,7 @@ export function testClaude(): Promise<string> {
         else if (m.type === 'stderr') err = (err + m.data).slice(-2000)
         else if (m.type === 'exit' || m.type === 'crash') {
           clearTimeout(timer)
-          w.terminate()
+          netDrop(w); w.terminate()
           let r: any = null
           try { r = JSON.parse(out.trim().split('\n').pop() || '') } catch { /* no respondió JSON */ }
           if (r && !r.is_error) resolve(`Conectado · Claude Code ${version} · respondió en ${((Date.now() - t0) / 1000).toFixed(1)} s`)
@@ -456,7 +482,7 @@ export function testClaude(): Promise<string> {
         }
       },
     })
-    timer = setTimeout(() => { w.terminate(); reject(new Error('Claude Code no respondió en 90 s.')) }, 90000)
-    started.then((m) => { version = m.version; w.postMessage({ type: 'stdin-end' }) }, (e) => { clearTimeout(timer); w.terminate(); reject(e) })
+    timer = setTimeout(() => { netDrop(w); w.terminate(); reject(new Error('Claude Code no respondió en 90 s.')) }, 90000)
+    started.then((m) => { version = m.version; w.postMessage({ type: 'stdin-end' }) }, (e) => { clearTimeout(timer); netDrop(w); w.terminate(); reject(e) })
   })
 }

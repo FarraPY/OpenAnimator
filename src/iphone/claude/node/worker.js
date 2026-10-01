@@ -4,9 +4,9 @@
  * que viene adentro no se cree en un navegador.
  *
  * Mensajes de la página: start {opts}, stdin {data}, stdin-end, mcp-reply {id, status, headers, body},
- *   net-reply {id, status, headers, body | error}, http-request {port, url}.
+ *   net-event {ev: {id, type: head|chunk|end|error, …}}, http-request {port, url}.
  * Mensajes a la página: stdout/stderr {data}, exit {code}, crash {error}, fs {files: [ruta, bytes|null][]},
- *   mcp {id, url, method, headers, body}, ready {ms}, net {id, url, method, headers, body};
+ *   mcp {id, url, method, headers, body}, ready {ms}, net {id, url, method, headers, body}, net-cancel {id};
  *   al iniciar sesión: login-url {manual, automatic}, login-token {token, expiresAt}, login-error {error}.
  */
 import { install, mod, ProcessExit, servers } from './index.js'
@@ -17,10 +17,53 @@ const mcpWaiting = new Map()
 let mcpSeq = 0
 const nativeFetch = globalThis.fetch.bind(globalThis)
 const ANTHROPIC = /^https:\/\/api\.anthropic\.com\//
-/** Lo de Anthropic que no admite CORS desde la app (la cuenta: el canje del código, el perfil): va por la red de iOS. */
-const NATIVE = /^https:\/\/(platform\.claude\.com|claude\.ai|console\.anthropic\.com)\/|^https:\/\/api\.anthropic\.com\/api\/oauth\//
-const netWaiting = new Map()
+/** Lo de Anthropic, en la app: por la red de iOS (con una cuenta del plan, la API rechaza los pedidos de un navegador). */
+const APP = /^https:\/\/(api\.anthropic\.com|platform\.claude\.com|claude\.ai|console\.anthropic\.com)\//
+const nets = new Map()
 let netSeq = 0
+
+/**
+ * fetch por la app (Bridge.swift http.stream → NetStream.swift): los encabezados tal cual (un Request del navegador
+ * quitaría algunos), sin Origin ni CORS; la respuesta llega por partes (net-event: head, chunk, end, error) a un
+ * ReadableStream, así el streaming de Claude sigue andando. Cancelar (signal) corta el pedido en iOS.
+ */
+async function appFetch(input, init = {}) {
+  const req = new Request(input, init)
+  const headers = {}
+  new Headers(input instanceof Request ? input.headers : undefined).forEach((v, k) => { headers[k] = v })
+  new Headers(init.headers || undefined).forEach((v, k) => { headers[k] = v })
+  const body = req.method === 'GET' || req.method === 'HEAD' ? '' : Buffer.from(await req.arrayBuffer()).toString('base64')
+  const signal = init.signal || (input instanceof Request ? input.signal : undefined)
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
+  const id = `${Date.now().toString(36)}-${++netSeq}-${Math.random().toString(36).slice(2, 8)}`
+  return new Promise((resolve, reject) => {
+    let ctrl = null
+    let done = false
+    const finish = () => { done = true; nets.delete(id); signal?.removeEventListener('abort', onAbort) }
+    const onAbort = () => {
+      if (done) return
+      const e = signal.reason ?? new DOMException('Aborted', 'AbortError')
+      finish()
+      postMessage({ type: 'net-cancel', id })
+      reject(e)
+      try { ctrl?.error(e) } catch { /* ignore */ }
+    }
+    const stream = new ReadableStream({ start(c) { ctrl = c }, cancel() { if (!done) { finish(); postMessage({ type: 'net-cancel', id }) } } })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    nets.set(id, (ev) => {
+      if (ev.type === 'head') resolve(new Response([101, 204, 205, 304].includes(ev.status) ? null : stream, { status: ev.status, headers: ev.headers }))
+      else if (ev.type === 'chunk') { try { ctrl.enqueue(Buffer.from(ev.data, 'base64')) } catch { /* ya se cerró */ } }
+      else if (ev.type === 'end') { finish(); try { ctrl.close() } catch { /* ignore */ } }
+      else if (ev.type === 'error') {
+        finish()
+        const e = new TypeError(ev.message || 'Error de red')
+        reject(e)
+        try { ctrl.error(e) } catch { /* ignore */ }
+      }
+    })
+    postMessage({ type: 'net', id, url: req.url, method: req.method, headers, body })
+  })
+}
 
 /**
  * fetch de Claude Code: el MCP de OpenAnimator (http://oa.mcp/…) lo atiende la página (ahí están el proyecto y las
@@ -30,15 +73,7 @@ let netSeq = 0
 function makeFetch(extraAnthropicBase, viaApp) {
   return async function fetch(input, init = {}) {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
-    if (viaApp && NATIVE.test(url)) {
-      const req = new Request(input, init)
-      const id = ++netSeq
-      const body = req.method === 'GET' || req.method === 'HEAD' ? '' : Buffer.from(await req.arrayBuffer()).toString('base64')
-      postMessage({ type: 'net', id, url, method: req.method, headers: Object.fromEntries(req.headers), body })
-      const r = await new Promise((res) => netWaiting.set(id, res))
-      if (r.error) throw new TypeError(r.error)
-      return new Response([101, 204, 205, 304].includes(r.status) ? null : Buffer.from(r.body || '', 'base64'), { status: r.status, headers: r.headers })
-    }
+    if (viaApp && (APP.test(url) || (extraAnthropicBase && url.startsWith(extraAnthropicBase)))) return appFetch(input, init)
     if (url.startsWith('http://oa.mcp/')) {
       const req = new Request(input, init)
       const id = ++mcpSeq
@@ -85,9 +120,10 @@ async function login(o) {
 }
 
 function start(o) {
-  if (o.login) {
-    globalThis.__oaAllowListen = true
-    // Sin XMLHttpRequest, axios (lo que usa Claude Code para la cuenta) va por fetch y de ahí a la red de iOS.
+  if (o.login) globalThis.__oaAllowListen = true
+  if (o.native) {
+    // Sin XMLHttpRequest, axios (lo que usa Claude Code para la cuenta y otros pedidos) va por fetch y de ahí a la red
+    // de iOS, como el chat.
     try { delete globalThis.XMLHttpRequest } catch { /* ignore */ }
     if (globalThis.XMLHttpRequest) globalThis.XMLHttpRequest = undefined
   }
@@ -109,7 +145,7 @@ function start(o) {
     exit: (code) => { if (timer) flush(); postMessage({ type: 'exit', code }) },
     // Se guarda lo de la carpeta personal (configuración, sesiones y conversaciones de Claude Code).
     onFsChange: (p) => { if (typeof p === 'string' && p.startsWith(o.home + '/')) { dirty.add(p); if (!timer) timer = setTimeout(flush, 300) } },
-    fetch: makeFetch(o.env?.ANTHROPIC_BASE_URL, !!o.login),
+    fetch: makeFetch(o.env?.ANTHROPIC_BASE_URL, !!o.native),
   })
   const t0 = performance.now()
   globalThis.__oaPreload = async () => {
@@ -125,7 +161,7 @@ self.addEventListener('message', ({ data: m }) => {
   else if (m.type === 'stdin') rt?.stdin(m.data)
   else if (m.type === 'stdin-end') rt?.stdinEnd()
   else if (m.type === 'mcp-reply') { mcpWaiting.get(m.id)?.(m); mcpWaiting.delete(m.id) }
-  else if (m.type === 'net-reply') { netWaiting.get(m.id)?.(m); netWaiting.delete(m.id) }
+  else if (m.type === 'net-event') nets.get(m.ev?.id)?.(m.ev)
   else if (m.type === 'http-request') {
     // La vuelta del navegador, que recibió la app: al servidor local que la espera (sólo lee url y host).
     const res = { statusCode: 200, writeHead(code) { this.statusCode = code; return this }, setHeader() {}, getHeader() {}, removeHeader() {}, write() { return true }, end() { return this } }
