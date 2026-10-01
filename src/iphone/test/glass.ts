@@ -34,6 +34,11 @@ export async function runGlass() {
       const p = await oa.call('projects:create', { name: 'Mi video', template: tpl[0]?.id || '', width: 1080, height: 1920, fps: 30 })
       const put = (name: string, sec: number, f: (t: number) => number) => host().call('fs.writeBase64', { path: `projects/${p.id}/assets/${name}`, data: wav(sec, f) })
       put('narracion-1.wav', 6.5, voice(2.3)); put('narracion-2.wav', 9, voice(1.9)); put('musica.wav', 20, music); put('whoosh.wav', 1, whoosh); put('click.wav', 0.8, click)
+      for (const [name, title, hue] of [['intro', 'Intro', 255], ['desarrollo', 'Desarrollo', 170], ['cierre', 'Cierre', 30]] as const) {
+        host().call('fs.writeText', { path: `projects/${p.id}/scenes/${name}.html`, text: `<!doctype html><html><head><style>
+body{margin:0;height:100vh;display:grid;place-items:center;background:linear-gradient(160deg,hsl(${hue} 55% 30%),hsl(${hue} 60% 9%));font:800 130px system-ui;color:#fff}
+</style></head><body>${title}</body></html>` })
+      }
       const tlId = p.activeTimeline || 'main'
       const tl = await oa.call('timeline:get', p.id, tlId)
       const clip = (id: string, src: string, start: number, duration: number, name: string) => ({ id, src, start, duration, in: 0, name })
@@ -56,20 +61,14 @@ export async function runGlass() {
     for (let i = 0; i < 60 && !tab(); i++) await wait(250)
     tab()?.click()
     await wait(5000)
-    // Los dos estilos del vidrio (ver GlassOverlay.swift): al principio y con los clips pasando por detrás.
+    // Al principio y con los clips pasando por detrás del vidrio.
+    await say('OA-SHOT vidrio-1')
+    await wait(7000)
     const sc = document.querySelector<HTMLElement>('.tlp-scroll')
-    for (const [style, k] of [['panel', 'a'], ['chips', 'b']]) {
-      ;(window as any).__oaGlassStyle = style
-      if (sc) sc.scrollLeft = 0
-      window.dispatchEvent(new Event('resize'))
-      await wait(2500)
-      await say(`OA-SHOT vidrio-${k}1`)
-      await wait(7000)
-      if (sc) sc.scrollLeft = 260
-      await wait(2500)
-      await say(`OA-SHOT vidrio-${k}2`)
-      await wait(7000)
-    }
+    if (sc) sc.scrollLeft = 260
+    await wait(2500)
+    await say('OA-SHOT vidrio-2')
+    await wait(7000)
   } catch (e: any) { await say('ERROR ' + (e?.stack || e)) }
   await nativeCall('diag.result', { json: '{}' })
 }
