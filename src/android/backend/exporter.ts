@@ -214,7 +214,9 @@ class Export {
     const d = this.diag, m = d.marks, lines: string[] = []
     try {
       const a = host().call<Record<string, any>>('app.info')
-      lines.push(`OpenAnimator ${a.versionName} (${a.versionCode}) · ${a.manufacturer || ''} ${a.model || ''} · Android ${a.release || '?'} · ${a.webview || 'WebView ?'}`.replace(/\s+/g, ' '))
+      // En el iPhone `webview` ya dice la versión de iOS.
+      const system = host().kind === 'web' ? '' : `Android ${a.release || '?'} · `
+      lines.push(`OpenAnimator ${a.versionName} (${a.versionCode}) · ${a.manufacturer || ''} ${a.model || ''} · ${system}${a.webview || 'WebView ?'}`.replace(/\s+/g, ' '))
     } catch { /* ignore */ }
     if (d.video) lines.push(`Video: ${d.video}`)
     if (d.used.length) lines.push(`Captura: ${d.used.map((x) => LABEL[x]).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
