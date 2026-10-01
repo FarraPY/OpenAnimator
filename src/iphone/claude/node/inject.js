@@ -1,5 +1,9 @@
 // Antes que cualquier otro módulo del paquete: lo que las librerías (memfs, readable-stream, util…) esperan encontrar.
 import { Buffer } from 'buffer'
+// Symbol.dispose / asyncDispose (los `using` de Claude Code se reescriben al instalar, ver lowerUsing): los mismos
+// símbolos que usa Node cuando el motor no los trae.
+if (typeof Symbol.dispose !== 'symbol') Object.defineProperty(Symbol, 'dispose', { value: Symbol.for('nodejs.dispose') })
+if (typeof Symbol.asyncDispose !== 'symbol') Object.defineProperty(Symbol, 'asyncDispose', { value: Symbol.for('nodejs.asyncDispose') })
 if (!globalThis.global) globalThis.global = globalThis
 if (!globalThis.Buffer) globalThis.Buffer = Buffer
 if (!globalThis.process) {

@@ -56,7 +56,54 @@ export type TransformCtx = {
   lazy: Set<string>
 }
 
+/**
+ * `using` / `await using` (gestión explícita de recursos): Bun los entiende y el WebKit de iOS todavía no (SyntaxError).
+ * Se reescriben como la especificación: `const` + try/finally que libera cada recurso al salir del bloque, en orden
+ * inverso (`x[Symbol.dispose]()`, o `Symbol.asyncDispose` con await). En la cabecera de un for-of, el cuerpo queda
+ * dentro del try. En el nivel del módulo sólo se cambia por `const` (un try no puede envolver import/export).
+ */
+export function lowerUsing(src: string): string {
+  if (!/\busing\s/.test(src)) return src
+  let ast: any
+  try { ast = parseJs(src, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true }) } catch { return src }
+  const edits: Array<[number, number, string]> = []
+  const dispose = (d: any) => d.declarations.map((x: any) => x.id.name).reverse().map((n: string) => (d.kind === 'await using'
+    ? `if (${n} != null) await (${n}[Symbol.asyncDispose] || ${n}[Symbol.dispose]).call(${n});`
+    : `if (${n} != null) ${n}[Symbol.dispose]();`)).join(' ')
+  const keyword = (d: any) => edits.push([d.start, d.start + /^(await\s+)?using/.exec(src.slice(d.start))![0].length, 'const'])
+  const isUsing = (s: any) => s?.type === 'VariableDeclaration' && (s.kind === 'using' || s.kind === 'await using')
+  const stack: any[] = [ast]
+  while (stack.length) {
+    const node = stack.pop()
+    const list: any[] | null = node.type === 'BlockStatement' || node.type === 'StaticBlock' ? node.body : node.type === 'SwitchCase' ? node.consequent : null
+    if (list) {
+      let closing = ''
+      for (const s of list) if (isUsing(s)) {
+        keyword(s)
+        edits.push([s.end, s.end, ' try {'])
+        closing = `} finally { ${dispose(s)} }` + closing // el último en declararse se libera primero
+      }
+      if (closing) edits.push([list[list.length - 1].end, list[list.length - 1].end, closing])
+    } else if (node.type === 'Program') {
+      for (const s of node.body) if (isUsing(s)) keyword(s)
+    } else if ((node.type === 'ForOfStatement' || node.type === 'ForInStatement') && isUsing(node.left)) {
+      keyword(node.left)
+      edits.push([node.body.start, node.body.start, '{ try { '], [node.body.end, node.body.end, ` } finally { ${dispose(node.left)} } }`])
+    }
+    for (const k in node) {
+      const v = node[k]
+      if (Array.isArray(v)) { for (const c of v) if (c && typeof c.type === 'string') stack.push(c) } else if (v && typeof v === 'object' && typeof v.type === 'string') stack.push(v)
+    }
+  }
+  // De atrás para adelante; en una misma posición, en el orden en que se agregaron (inserciones estables).
+  edits.forEach((e, i) => ((e as any).i = i))
+  edits.sort((a, b) => b[0] - a[0] || (b as any).i - (a as any).i)
+  for (const [s, e, t] of edits) src = src.slice(0, s) + t + src.slice(e)
+  return src
+}
+
 export function transformModule(name: string, src: string, ctx: TransformCtx) {
+  src = lowerUsing(src)
   const [imports] = parse(src, name)
   const eager = eagerRequires(src)
   const statics = new Map<string, string>()

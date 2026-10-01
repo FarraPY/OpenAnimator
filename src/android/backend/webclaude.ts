@@ -189,11 +189,6 @@ async function mcp(m: { method: string; body: string }, projectId: string) {
  * Arranca Claude Code con `args` en un Worker nuevo. `onMessage` recibe lo que manda (stdout, stderr, exit, crash);
  * lo que escribe en su carpeta se guarda siempre, aunque la conversación ya se haya cerrado.
  */
-/** Claude Code usa `using` (JavaScript nuevo): el WebKit de iOS lo entiende desde iOS 26. */
-function engineReady() {
-  try { new Function('{ using x = null }'); return true } catch { return false }
-}
-
 function launch(args: string[], o: { projectId: string; resume?: string; onMessage: (w: Worker, m: any) => void }) {
   const w = new Worker(`${web().base}claude/worker.js`, { type: 'module' })
   w.onmessage = ({ data: m }) => {
@@ -203,7 +198,6 @@ function launch(args: string[], o: { projectId: string; resume?: string; onMessa
   }
   w.onerror = (e) => o.onMessage(w, { type: 'crash', error: e.message || 'El Worker de Claude Code se cerró' })
   const started = (async () => {
-    if (!engineReady()) throw new Error('Claude Code necesita iOS 26 o más nuevo: usa JavaScript que las versiones anteriores de iOS no entienden.')
     const m = await manifest()
     if (!m) throw new Error('Claude Code todavía no está instalado en el teléfono: instalalo en Ajustes › Claude.')
     const token = web().secrets.get(TOKEN), d = dev()
