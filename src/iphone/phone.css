@@ -31,6 +31,15 @@ html.phone code { font: 13px var(--mono); background: rgba(255, 255, 255, .07); 
 .ph-center { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 200px; }
 .ph-label { display: block; margin: 18px 2px 8px; font-size: 13px; font-weight: 600; color: var(--t3); text-transform: uppercase; letter-spacing: .4px; }
 .ph-desk { padding-top: 6px; }
+/* Ajustes de la PC dentro del teléfono (Plugins): sin la sangría de escritorio y cada ajuste en dos renglones, el texto
+   arriba y el control abajo a todo el ancho (al lado, el texto quedaba en una columna de una palabra por línea). Un
+   interruptor solo sigue a la derecha del texto. */
+.ph-desk .plug-body { padding: 0 12px 12px; }
+.ph-desk .set-row { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 14px; }
+.ph-desk .set-ctrl { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
+.ph-desk .set-ctrl > .input, .ph-desk .set-ctrl > .select, .ph-desk .set-ctrl > .slider { flex: 1; width: auto !important; min-width: 0; }
+.ph-desk .set-row:has(> .set-ctrl > .switch:only-child) { flex-direction: row; align-items: center; }
+.ph-desk .set-row:has(> .set-ctrl > .switch:only-child) > .set-ctrl { width: auto; }
 
 .tap { width: 44px; height: 44px; flex: none; display: grid; place-items: center; border: 0; border-radius: 50%; background: none; color: var(--t1); padding: 0; }
 .tap:disabled { opacity: .3; }

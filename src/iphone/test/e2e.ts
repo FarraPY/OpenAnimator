@@ -50,6 +50,15 @@ export async function runE2E() {
   await step(R, 'claude:install', async () => (await call('claude:install')).version, 600000)
   R.status = await call('claude:webStatus').catch((e) => String(e))
   await step(R, 'claude:test', () => call<string>('claude:test'), 180000)
+  // Los modelos que ofrece Claude Code (pedido de control initialize): los pide la app sola después de instalar.
+  await step(R, 'claude:models', async () => {
+    for (let i = 0; i < 60; i++) {
+      const list = await call<Array<{ value: string; resolvedModel?: string }> | null>('claude:models')
+      if (list?.length) return list.map((m) => `${m.value} → ${m.resolvedModel || '?'}`)
+      await new Promise((r) => setTimeout(r, 1000))
+    }
+    throw new Error('Claude Code no dijo sus modelos en 60 s')
+  }, 90000)
   // Iniciar sesión: el de Claude Code, con la vuelta por el servidor de la app (acá Swift hace de navegador con un código
   // de mentira) y el canje por la red de iOS. Si todo está conectado, Anthropic rechaza ese código.
   await step(R, 'claude:login', async () => {

@@ -377,9 +377,11 @@ h('claude:test', async () => (await engine()).testClaude())
 // Claude Code dentro del iPhone (webclaude.ts): instalarlo, la cuenta (token de `claude setup-token`) y la última versión
 const webclaude = () => import('./webclaude')
 h('claude:webStatus', async () => { const st = await (await webclaude()).status(); webReady = st.ready; return st })
-h('claude:install', async (version?: string) => { const W = await webclaude(); const m = await W.install(version || undefined); webReady = (await W.status()).ready; return m })
-h('claude:setToken', async (token: string) => { const st = await (await webclaude()).setToken(token); webReady = st.ready; return st })
-h('claude:login', async () => { const W = await webclaude(); const st = await W.setToken(await W.login()); webReady = st.ready; return st })
+h('claude:install', async (version?: string) => { const W = await webclaude(); const m = await W.update(version || undefined); webReady = (await W.status()).ready; return m })
+h('claude:setToken', async (token: string) => { const W = await webclaude(); const st = await W.setToken(token); webReady = st.ready; if (token) void W.refreshModels().catch(() => {}); return st })
+h('claude:login', async () => { const W = await webclaude(); const st = await W.setToken(await W.login()); webReady = st.ready; void W.refreshModels().catch(() => {}); return st })
+/** Los modelos que ofrece el Claude Code instalado para la cuenta (null: todavía no se preguntó). */
+h('claude:models', async () => (await webclaude()).cachedModels()?.models || null)
 h('claude:latest', async () => (await webclaude()).latest())
 // Claude Code en Termux (el plan del usuario)
 const termux = () => import('./termux')
@@ -529,7 +531,7 @@ export function installBackend(platform: 'android' | 'iphone' = 'android') {
   // Pusieron o sacaron la tarjeta SD: cambia la lista de proyectos.
   hst.onEvent('storage', () => { send('storage:changed', null); send('projects:changed', null) })
   adoptAfterRestart()
-  if (isWeb()) webChecked = import('./webclaude').then((W) => W.status()).then((st) => { webReady = st.ready }).catch(() => {})
+  if (isWeb()) webChecked = import('./webclaude').then(async (W) => { webReady = (await W.status()).ready; void W.startup().catch(() => {}) }).catch(() => {})
   return oa
 }
 

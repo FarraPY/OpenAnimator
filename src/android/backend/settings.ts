@@ -2,6 +2,7 @@
 import type { Settings } from '../../api'
 import { DEFAULTS as PC_DEFAULTS, mergeSettings } from '../../../electron/settings-defaults'
 import { fs } from './fsx'
+import { host } from '../host'
 
 const FILE = 'settings.json'
 
@@ -30,8 +31,9 @@ export function getSettings(): Settings {
   const w = raw?.plugins?.whisper
   if (w && !/^(base|small|large-v3-turbo-q5_0)$/.test(w.model || '')) Object.assign(w, DEFAULTS.plugins.whisper)
   cache = merge(structuredClone(DEFAULTS), raw)
-  // Claude Code y sus modelos no existen en Android: "Predeterminado" pasa a Opus 5.5.
-  if (!cache.claude.model || !/^claude-/.test(cache.claude.model)) cache.claude.model = DEFAULTS.claude.model
+  // Por la API (Android) sólo valen los nombres completos: "Predeterminado" pasa a Opus 5.5. En el iPhone corre Claude
+  // Code, que entiende los alias (opus, sonnet…): así sigue al modelo más nuevo.
+  if (host().kind !== 'web' && (!cache.claude.model || !/^claude-/.test(cache.claude.model))) cache.claude.model = DEFAULTS.claude.model
   return structuredClone(cache)
 }
 

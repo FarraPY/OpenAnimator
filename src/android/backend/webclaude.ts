@@ -17,7 +17,7 @@ import { host } from '../host'
 import { projectChanged, send } from './events'
 import { projectDir } from './projects'
 import { buildSystem } from './prompt'
-import { getSettings } from './settings'
+import { getSettings, setSettings } from './settings'
 import { TOOL_DEFS, runTool, toolKind, validateInput, type ToolContent } from './tools'
 import { holdAwake } from './wake'
 
@@ -33,23 +33,29 @@ const cwd = (projectId: string) => `${HOME}/proyectos/${projectId}`
 // ── Claude Code instalado ──────────────────────────────────────────────────────
 export type Manifest = { version: string; base: string; loaders: Record<string, string>; assets: string[]; preload: string[]; installedAt: number; size: number }
 
+/** 2.1.286 < 2.1.300 (por partes numéricas). */
+export const cmpVersion = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
+/** La versión en uso: la última que se instaló y arrancó bien en el iPhone (una nueva se prueba antes de usarla). */
+const ACTIVE = 'oa.claudeVersion', FAILED = 'oa.claudeFailed'
+const stored = (k: string) => { try { return localStorage.getItem(k) || '' } catch { return '' } }
+const store = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* ignore */ } }
+
 /**
- * El Claude Code instalado, o null: en la app nativa, en el disco del iPhone (Application Support/claude-code/<versión>);
- * en Safari, en Cache Storage ("oa-claude-<versión>"). Ver installer.worker.ts.
+ * El Claude Code instalado (la versión en uso, o la que se pide), o null: en la app nativa, en el disco del iPhone
+ * (Application Support/claude-code/<versión>); en Safari, en Cache Storage ("oa-claude-<versión>"). Ver installer.worker.ts.
  */
-export async function manifest(): Promise<Manifest | null> {
-  if (web().native) {
-    const versions = await nativeCall<string[]>('cc.list').catch(() => [] as string[])
-    for (const v of versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))) {
-      const r = await fetch(`${web().base}cc/${v}/manifest.json`, { cache: 'no-store' }).catch(() => null)
-      if (r?.ok) return r.json()
-    }
-    return null
+export async function manifest(version?: string): Promise<Manifest | null> {
+  const read = async (v: string) => {
+    if (web().native) { const r = await fetch(`${web().base}cc/${v}/manifest.json`, { cache: 'no-store' }).catch(() => null); return r?.ok ? r.json() : null }
+    const r = await caches.match(`${web().base}cc/${v}/manifest.json`)
+    return r ? r.json() : null
   }
-  for (const k of await caches.keys()) {
-    if (!k.startsWith('oa-claude-')) continue
-    const r = await caches.match(`${web().base}cc/${k.slice(10)}/manifest.json`)
-    if (r) return r.json()
+  const all = web().native ? await nativeCall<string[]>('cc.list').catch(() => [] as string[]) : (await caches.keys()).filter((k) => k.startsWith('oa-claude-')).map((k) => k.slice(10))
+  if (version) return all.includes(version) ? read(version) : null
+  const active = stored(ACTIVE)
+  for (const v of [...all.filter((x) => x === active), ...all.filter((x) => x !== active).sort((a, b) => cmpVersion(b, a))]) {
+    const m = await read(v)
+    if (m) return m
   }
   return null
 }
@@ -77,10 +83,9 @@ export function install(version?: string): Promise<Manifest> {
           return
         }
         w.terminate()
-        if (m.type === 'done') {
-          if (web().native) await nativeCall('cc.delete', { keep: m.manifest.version }).catch(() => {})
-          resolve(m.manifest)
-        } else reject(new Error(m.message))
+        // Las versiones viejas se borran al próximo arranque (startup): una conversación abierta puede seguir usándolas.
+        if (m.type === 'done') resolve(m.manifest)
+        else reject(new Error(m.message))
       }
       w.onerror = (e) => { w.terminate(); reject(new Error(e.message || 'El instalador de Claude Code se cerró')) }
       w.postMessage({ type: 'install', appBase: web().base, version, tarball: dev().tarball, native: web().native })
@@ -96,6 +101,123 @@ export async function status() {
     /** Se puede chatear: instalado y con cuenta (o, en pruebas, con la API de mentira). */
     ready: !!m && (!!web().secrets.get(TOKEN) || !!dev().env),
   }
+}
+
+/**
+ * Instalar o actualizar: una versión nueva se prueba antes de usarla (arranca y dice sus modelos); si no anda en el
+ * iPhone (una versión de Claude Code puede traer algo que el "Node" de la app todavía no tiene), se borra y se sigue
+ * con la anterior, y esa versión no se vuelve a intentar sola.
+ */
+export async function update(version?: string): Promise<Manifest> {
+  const before = (await manifest())?.version
+  const m = await install(version)
+  if (before && m.version !== before && web().native && (web().secrets.get(TOKEN) || dev().env)) {
+    try { await refreshModels(m.version) } catch (e: any) {
+      await nativeCall('cc.delete', { version: m.version }).catch(() => {})
+      store(FAILED, m.version)
+      throw new Error(`Claude Code ${m.version} no arrancó en el iPhone (${e?.message || e}): seguís con ${before}.`)
+    }
+    store(ACTIVE, m.version)
+  } else {
+    store(ACTIVE, m.version)
+    if (web().secrets.get(TOKEN) || dev().env) void refreshModels().catch(() => {})
+  }
+  return m
+}
+
+/**
+ * Sola: al arrancar y cada 6 horas se fija si hay una versión nueva en npm y, si ninguna conversación está trabajando,
+ * la instala en segundo plano (con wifi o datos) y la prueba antes de usarla. Se puede apagar en Ajustes › Claude.
+ */
+let checking = false
+export async function autoUpdate() {
+  if (checking || installing || !web().native || getSettings().claude.autoUpdate === false) return
+  checking = true
+  try {
+    const m = await manifest()
+    if (!m) return
+    const v = await latest()
+    if (cmpVersion(v, m.version) <= 0 || v === stored(FAILED) || [...chats.values()].some((c) => c.busy)) return
+    console.info(`[claude] actualizando solo: ${m.version} → ${v}`)
+    await update(v)
+    try { host().call('app.toast', { text: `Claude Code se actualizó a ${v}` }) } catch { /* sin puente */ }
+  } catch (e: any) { console.warn('[claude] no se pudo actualizar solo:', e?.message || e) }
+  finally { checking = false }
+}
+
+/** Al abrir la app: borra versiones que ya no se usan, pide los modelos si faltan y programa la actualización. */
+export async function startup() {
+  if (!web().native) return
+  const m = await manifest()
+  if (m) { store(ACTIVE, m.version); void nativeCall('cc.delete', { keep: m.version }).catch(() => {}) }
+  const known = cachedModels()
+  if (m && known?.version !== m.version && (web().secrets.get(TOKEN) || dev().env)) setTimeout(() => void refreshModels().catch(() => {}), 15000)
+  setTimeout(() => void autoUpdate(), 30000)
+  setInterval(() => void autoUpdate(), 6 * 3600e3)
+}
+
+// ── los modelos que ofrece Claude Code ─────────────────────────────────────────
+/** Lo que dice Claude Code de cada modelo (lo mismo que su /model, según la cuenta). */
+export type ClaudeModel = { value: string; resolvedModel?: string; displayName?: string; description?: string; supportsEffort?: boolean; supportedEffortLevels?: string[] }
+const MODELS_FILE = 'claude/models.json'
+export function cachedModels(): { version: string; at: number; models: ClaudeModel[] } | null {
+  try { return wfs().exists(MODELS_FILE) ? JSON.parse(wfs().readText(MODELS_FILE)) : null } catch { return null }
+}
+
+/**
+ * Le pregunta al Claude Code instalado qué modelos hay para la cuenta (el pedido de control `initialize`, como el SDK
+ * oficial) y lo guarda. También sirve de prueba de que una versión nueva arranca en el iPhone. Si el modelo elegido
+ * tiene nombre completo (claude-opus-5-5) pasa a su alias (opus): así sigue al más nuevo cuando sale otro.
+ */
+let probing: Promise<ClaudeModel[]> | null = null
+export function refreshModels(version?: string): Promise<ClaudeModel[]> {
+  if (!probing) probing = askModels(version).then((r) => {
+    wfs().writeText(MODELS_FILE, JSON.stringify({ version: r.version, at: Date.now(), models: r.models }))
+    const cur = getSettings().claude.model
+    if (cur && !r.models.some((m) => m.value === cur)) {
+      const fam = cur.replace(/^claude-/, '').split('-')[0]
+      const alias = r.models.find((m) => !/^claude-|^default$/.test(m.value) && (m.resolvedModel === cur || m.resolvedModel?.startsWith(cur + '-') || m.value === fam))
+      if (alias) setSettings({ claude: { model: alias.value } })
+    }
+    send('claude:models', r.models)
+    return r.models
+  }).finally(() => { probing = null })
+  return probing
+}
+function askModels(version?: string): Promise<{ version: string; models: ClaudeModel[] }> {
+  return new Promise((resolve, reject) => {
+    let out = '', ver = '', over = false
+    const l = launch(['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--setting-sources', '', '--tools', ''], {
+      projectId: '.prueba', version,
+      onMessage: (_w, m) => {
+        if (m.type === 'stdout') {
+          out += m.data
+          for (let i; (i = out.indexOf('\n')) >= 0;) {
+            const line = out.slice(0, i)
+            out = out.slice(i + 1)
+            let x: any
+            try { x = JSON.parse(line) } catch { continue }
+            if (x?.type !== 'control_response' || x.response?.request_id !== 'oa-modelos') continue
+            if (x.response.subtype === 'success') finish(null, { version: ver, models: x.response.response?.models || [] })
+            else finish(new Error(x.response.error || 'Claude Code no contestó'))
+          }
+        } else if (m.type === 'exit' || m.type === 'crash') finish(new Error(m.error || `Claude Code terminó con el código ${m.code}`))
+      },
+    })
+    const timer = setTimeout(() => finish(new Error('Claude Code no respondió en 90 s')), 90000)
+    function finish(e: Error | null, r?: { version: string; models: ClaudeModel[] }) {
+      if (over) return
+      over = true
+      clearTimeout(timer)
+      netDrop(l.w)
+      l.w.terminate()
+      if (e) reject(e); else resolve(r!)
+    }
+    l.started.then((m) => {
+      ver = m.version
+      l.w.postMessage({ type: 'stdin', data: JSON.stringify({ type: 'control_request', request_id: 'oa-modelos', request: { subtype: 'initialize' } }) + '\n' })
+    }, (e) => finish(e))
+  })
 }
 
 /** La última versión publicada en npm (para ofrecer actualizar). */
@@ -196,18 +318,21 @@ function netDrop(w: Worker) { for (const [id, x] of [...nets]) if (x === w) netC
 
 // ── un "proceso" de Claude Code: un Worker ─────────────────────────────────────
 /** Recursos que Claude Code lee con fs (textos, skills…): se leen una vez y se le pasan a cada Worker. */
-let assets: Promise<Array<[string, Uint8Array]>> | null = null
+let assets: { version: string; files: Promise<Array<[string, Uint8Array]>> } | null = null
 function bunAssets(m: Manifest) {
-  if (!assets) {
-    assets = Promise.all(m.assets.filter((n) => m.loaders[n] !== 'napi').map(async (n): Promise<[string, Uint8Array]> => {
+  // Por versión: mientras se prueba una nueva, las conversaciones siguen con la anterior.
+  if (assets?.version !== m.version) {
+    const files = Promise.all(m.assets.filter((n) => m.loaders[n] !== 'napi').map(async (n): Promise<[string, Uint8Array]> => {
       // Por URL: en la app la sirve SchemeHandler (del disco); en Safari, el Service Worker (de Cache Storage).
       const r = await fetch(`${m.base}$bunfs/root/${n}`).catch(() => null)
       if (!r?.ok) throw new Error('Claude Code quedó incompleto: volvé a instalarlo en Ajustes › Claude.')
       return [`/$bunfs/root/${n}`, new Uint8Array(await r.arrayBuffer())]
     }))
-    assets.catch(() => { assets = null })
+    const entry = { version: m.version, files }
+    files.catch(() => { if (assets === entry) assets = null })
+    assets = entry
   }
-  return assets
+  return assets.files
 }
 
 function sessionsDir(projectId: string) {
@@ -270,7 +395,7 @@ async function mcp(m: { method: string; body: string }, projectId: string) {
  * Arranca Claude Code con `args` en un Worker nuevo. `onMessage` recibe lo que manda (stdout, stderr, exit, crash);
  * lo que escribe en su carpeta se guarda siempre, aunque la conversación ya se haya cerrado.
  */
-function launch(args: string[], o: { projectId: string; resume?: string; onMessage: (w: Worker, m: any) => void }) {
+function launch(args: string[], o: { projectId: string; resume?: string; version?: string; onMessage: (w: Worker, m: any) => void }) {
   const w = new Worker(`${web().base}claude/worker.js`, { type: 'module' })
   w.onmessage = ({ data: m }) => {
     if (m.type === 'fs') save(m.files)
@@ -281,7 +406,7 @@ function launch(args: string[], o: { projectId: string; resume?: string; onMessa
   }
   w.onerror = (e) => o.onMessage(w, { type: 'crash', error: e.message || 'El Worker de Claude Code se cerró' })
   const started = (async () => {
-    const m = await manifest()
+    const m = await manifest(o.version)
     if (!m) throw new Error('Claude Code todavía no está instalado en el teléfono: instalalo en Ajustes › Claude.')
     const token = web().secrets.get(TOKEN), d = dev()
     if (!token && !d.env) throw new Error('Falta conectar tu cuenta de Claude: pegá el token de «claude setup-token» en Ajustes › Claude.')

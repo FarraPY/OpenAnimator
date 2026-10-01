@@ -43,6 +43,8 @@ export type Settings = {
     /** Al abrir un proyecto, seguir con su última conversación (si no, una nueva). */
     continueChat: boolean
     claudePath: string
+    /** iPhone: actualizar Claude Code solo (se prueba antes de usarlo). Sin el campo, sí. */
+    autoUpdate?: boolean
   }
   export: Partial<ExportSettings>
   exportPrefs: { defaultDir: string; openFolderWhenDone: boolean; notify: boolean }

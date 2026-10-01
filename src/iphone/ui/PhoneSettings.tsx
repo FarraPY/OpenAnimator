@@ -72,6 +72,29 @@ function Main({ open }: { open: (s: string) => void }) {
 }
 
 // ── Claude ─────────────────────────────────────────────────────────────────────
+/** Un modelo según el Claude Code instalado (en inglés): `value` es lo que él entiende (opus, sonnet…, que siguen al más nuevo). */
+type CodeModel = { value: string; resolvedModel?: string; displayName?: string; description?: string }
+const TAGLINE: Record<string, string> = {
+  opus: 'El más capaz: dirección artística y escenas complejas',
+  sonnet: 'Rápido y muy capaz para el trabajo diario',
+  haiku: 'El más rápido, para cambios chicos',
+  fable: 'Lo más capaz, para lo más difícil y largo',
+}
+/** Los de Claude Code con nombres de acá («Opus 5.5»); un modelo nuevo aparece con lo que diga Claude Code. */
+function modelOptions(list: CodeModel[]) {
+  return list.map((m) => {
+    const parts = String(m.description || '').split(' · ')
+    const price = parts.find((x) => x.includes('$'))
+    if (m.value === 'default') {
+      const now = /\(currently ([^)]+)\)/.exec(m.description || '')?.[1]
+      return { value: '', label: 'Recomendado', desc: now ? `El que elige Claude Code (hoy, ${now})` : 'El que elige Claude Code', hint: price }
+    }
+    const family = (m.resolvedModel || m.value).replace(/^claude-/, '').split('-')[0]
+    const name = parts[0] && !parts[0].includes('$') ? parts[0] : m.displayName || m.value
+    return { value: m.value, label: name, desc: TAGLINE[family] || parts.slice(1).filter((x) => !x.includes('$')).join(' · '), hint: price }
+  })
+}
+
 function ClaudeSection() {
   const { settings: s, updateSettings: up, toast, refreshInfo } = useApp()
   const dlg = useDialogs()
@@ -82,6 +105,8 @@ function ClaudeSection() {
   const [editing, setEditing] = useState(false)
   const [test, setTest] = useState<{ busy?: boolean; ok?: boolean; msg?: string } | null>(null)
   const [logging, setLogging] = useState(false)
+  const [models, setModels] = useState<CodeModel[] | null>(null)
+  useEffect(() => { call<CodeModel[] | null>('claude:models').then(setModels).catch(() => {}); return on('claude:models', setModels) }, [])
   const refresh = () => call<WebStatus>('claude:webStatus').then((x) => { setSt(x); refreshInfo() }).catch((e) => toast(e.message, true))
   useEffect(() => {
     refresh()
@@ -127,6 +152,7 @@ function ClaudeSection() {
         ) : st.installed ? <>
           <Row icon="check-circle" label={`Instalado · ${st.installed.version}`} detail={`${new Date(st.installed.installedAt).toLocaleDateString()}`} />
           {update && <Row icon="download" label={`Actualizar a ${latest}`} chevron onClick={install} />}
+          {isNative() && <Row label="Actualizar solo" detail="Con wifi o datos, cuando no estás usando a Claude; se prueba antes de usarla"><Switch checked={c.autoUpdate !== false} onChange={(v) => up({ claude: { autoUpdate: v } })} /></Row>}
         </> : <Row icon="download" label="Instalar Claude Code" detail={latest ? `Versión ${latest}` : undefined} chevron onClick={install} />}
       </Group>
 
@@ -166,7 +192,9 @@ function ClaudeSection() {
       </Group>
 
       <Group title="Cómo trabaja Claude">
-        <Row label="Modelo" stack><Select value={c.model} onChange={(v) => up({ claude: { model: String(v) } })} options={MODELS.map((m) => ({ value: m.id, label: m.name, desc: m.desc, hint: m.note }))} /></Row>
+        <Row label="Modelo" stack><Select value={models ? (models.some((m) => m.value === c.model) ? c.model : models.find((m) => m.resolvedModel === c.model)?.value ?? c.model) : c.model}
+          onChange={(v) => up({ claude: { model: String(v) } })}
+          options={models ? modelOptions(models) : MODELS.map((m) => ({ value: m.id, label: m.name, desc: m.desc, hint: m.note }))} /></Row>
         <Row label="Esfuerzo" stack><Select value={c.effort} onChange={(v) => up({ claude: { effort: v as any } })} options={EFFORTS.map((e) => ({ value: e.id, label: e.name, desc: e.desc }))} /></Row>
         <Row label="Permisos" stack><Select value={c.permissionMode} onChange={(v) => up({ claude: { permissionMode: v as any } })} options={PERMS} /></Row>
         <Row label="Modo ahorro" detail="Imágenes más chicas, menos relecturas, respuestas cortas: rinde más tu límite de uso"><Switch checked={c.saver !== false} onChange={(v) => up({ claude: { saver: v } })} /></Row>

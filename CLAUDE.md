@@ -117,6 +117,12 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
   WebCrypto), los Workers de módulos cargan desde el esquema, `fetch` con `Range` y `PUT` con Uint8Array (un Blob llega
   sin cuerpo).
+- Modelos y versiones (webclaude.ts): la lista del selector la da el Claude Code instalado (pedido de control
+  `initialize`, como el SDK: `models` con alias opus/sonnet/haiku que siguen al más nuevo; `claude/models.json`,
+  evento `claude:models`); un modelo guardado con nombre completo pasa a su alias. Se actualiza solo (al abrir y cada
+  6 h, con wifi o datos, sin conversaciones trabajando): `update()` instala, prueba que arranque (la misma consulta) y
+  recién ahí la marca en uso (`oa.claudeVersion`); si falla, la borra y no la reintenta (`oa.claudeFailed`). Las
+  versiones viejas se borran al próximo arranque (una conversación abierta puede estar usándolas).
 - Registro (Ajustes › Depuración): `AppLog.swift` escribe `Documentos/logs/app.log` (rota a los 4 MB; sin claves ni
   códigos de OAuth) con lo que manda la página (`src/iphone/host/applog.ts`: warn/error de la consola —todo con
   «Registro detallado»—, errores sin atrapar, Claude: pedidos, fin de turno, herramientas que fallan, stderr del
