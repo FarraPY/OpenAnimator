@@ -41,7 +41,10 @@
   var layers = new Map();      // clipId -> { el, kind, clip, track, ready: Promise }
   var audios = new Map();      // clipId -> { el, clip, track }
   var playing = false, playRate = 1, lastT = 0;
-  var MAX_SCENE_IFRAMES = mode === 'export' ? 3 : 6;
+  var SAFARI = /AppleWebKit/i.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Android|Edg/i.test(navigator.userAgent); // Safari o la app (WKWebView: sin "Safari" en el UA)
+  // En el iPhone la memoria del motor web es lo que se acaba: la vista previa deja cargadas sólo la escena actual, la
+  // próxima y la que acaba de salir (con 6, en un proyecto de escenas pesadas iOS cerraba la app al llegar a una más).
+  var MAX_SCENE_IFRAMES = mode === 'export' || SAFARI ? 3 : 6;
   var lastUse = new Map();
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -403,7 +406,6 @@
    * cada escena espera más (hasta 4 × 60 ms: las imágenes se decodifican ahí y quedan en la caché) y los siguientes
    * redibujan una sola vez (~30 ms). Sin imágenes no se redibuja.
    */
-  var SAFARI = /AppleWebKit/i.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Android|Edg/i.test(navigator.userAgent); // Safari o la app (WKWebView: sin "Safari" en el UA)
   function capRedraws(ctx) {
     var n = 0;
     ctx.__redraws = 4; ctx.drawImageInterval = 60;
