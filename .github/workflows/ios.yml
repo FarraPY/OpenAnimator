@@ -2,7 +2,7 @@ name: App nativa del iPhone
 
 # Compila OpenAnimator para iPhone en una Mac de GitHub y deja el .ipa SIN FIRMAR (lo firma el usuario con su cuenta de
 # Apple: Sideloadly, AltStore, etc.): como artefacto del run y en el pre-release "ios-latest".
-# Antes corre la app en el simulador de iPhone con -OADiag: prueba el WebKit de iOS (Workers, WebCodecs, video, red)
+# Después corre la app en el simulador de iPhone con -OADiag: prueba el WebKit de iOS (Workers, WebCodecs, video, red)
 # y deja el resultado como anotación del run.
 on:
   push:
@@ -46,6 +46,22 @@ jobs:
           xcodebuild -version
           brew install xcodegen
           cd ios && xcodegen generate
+
+      # El IPA primero: queda para bajar a los ~10 minutos, sin esperar las pruebas del simulador.
+      - name: IPA sin firmar
+        run: |
+          xcodebuild -project ios/OpenAnimator.xcodeproj -scheme OpenAnimator -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' -derivedDataPath build/dev CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -quiet build
+          mkdir -p build/ipa/Payload
+          cp -R build/dev/Build/Products/Release-iphoneos/OpenAnimator.app build/ipa/Payload/
+          (cd build/ipa && zip -qry ../OpenAnimator.ipa Payload)
+          ls -la build/OpenAnimator.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenAnimator-iphone
+          path: build/OpenAnimator.ipa
+          if-no-files-found: error
 
       - name: Simulador (diagnóstico del WebKit de iOS)
         continue-on-error: true
@@ -137,21 +153,6 @@ jobs:
           name: capturas-iphone
           path: capturas/
           if-no-files-found: ignore
-
-      - name: IPA sin firmar
-        run: |
-          xcodebuild -project ios/OpenAnimator.xcodeproj -scheme OpenAnimator -configuration Release -sdk iphoneos \
-            -destination 'generic/platform=iOS' -derivedDataPath build/dev CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -quiet build
-          mkdir -p build/ipa/Payload
-          cp -R build/dev/Build/Products/Release-iphoneos/OpenAnimator.app build/ipa/Payload/
-          (cd build/ipa && zip -qry ../OpenAnimator.ipa Payload)
-          ls -la build/OpenAnimator.ipa
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OpenAnimator-iphone
-          path: build/OpenAnimator.ipa
-          if-no-files-found: error
 
       - name: Pre-release "ios-latest"
         if: github.ref_name == 'master' || github.ref_name == 'main'
