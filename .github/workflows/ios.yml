@@ -105,6 +105,32 @@ jobs:
           echo "::warning title=Registro de la prueba::$(grep -v '^\[scheme\]' e2e.log | tail -n 80 | esc)"
           echo "::warning title=API de mentira::$(tail -n 30 mock.log | esc)"
 
+      # Capturas del timeline en el simulador (el Liquid Glass es el de iOS): la app avisa «OA-SHOT <nombre>» y acá se saca.
+      - name: Simulador (capturas)
+        continue-on-error: true
+        run: |
+          UDID=$(cat udid.txt)
+          mkdir -p capturas
+          xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OATest glass > glass.log 2>&1 &
+          PID=$!
+          taken=" "
+          for i in $(seq 1 300); do
+            for s in $(grep -o 'OA-SHOT [a-z0-9-]*' glass.log | cut -c9- | sort -u); do
+              case "$taken" in *" $s "*) ;; *) sleep 1; xcrun simctl io "$UDID" screenshot "capturas/$s.png"; taken="$taken$s ";; esac
+            done
+            grep -q "OA-DIAG-" glass.log && break
+            sleep 0.5
+          done
+          kill $PID 2>/dev/null || true
+          ls -la capturas
+          tail -n 40 glass.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: capturas-iphone
+          path: capturas/
+          if-no-files-found: ignore
+
       - name: IPA sin firmar
         run: |
           xcodebuild -project ios/OpenAnimator.xcodeproj -scheme OpenAnimator -configuration Release -sdk iphoneos \

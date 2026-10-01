@@ -6,12 +6,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Clip, fmtTime, Timeline as TL, Track } from '../../api'
 import { useApp } from '../../App'
-import { TYPE_COLOR, TYPE_ICON, trackRole } from '../../components/Timeline'
+import { TYPE_COLOR, TYPE_ICON, WAVE, Wave, trackRole } from '../../components/Timeline'
 import { Icon, IconName } from '../../ui/icons'
 import { Slider, Switch } from '../../ui/kit'
 import { Actions, Group, Row, Sheet } from './PhoneApp'
+import { isNative, nativeCall } from '../host/native'
 
-const RULER = 26, ROW = 54
+const RULER = 26
 const STEPS = [1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 const isImage = (src: string) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(src)
 const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')
@@ -30,9 +31,11 @@ type Props = {
 
 export default function PhoneTimeline(p: Props) {
   const { tl, t } = p
-  const { toast } = useApp()
+  const { toast, settings } = useApp()
+  const waves = settings?.editor.waveforms !== false
   const sc = useRef<HTMLDivElement>(null)
   const [vw, setVw] = useState(() => window.innerWidth)
+  const [vh, setVh] = useState(320)
   const [left, setLeft] = useState(0)
   const [pps, setPps] = useState(() => clamp((window.innerWidth * 0.85) / Math.max(4, tl.duration), 6, 120))
   const [clipSheet, setClipSheet] = useState(false)
@@ -43,10 +46,12 @@ export default function PhoneTimeline(p: Props) {
   const ours = useRef(-1) // el scrollLeft que puso el programa (no es el dedo)
   const half = vw / 2
   const width = half * 2 + tl.duration * pps + 80
+  // Las pistas llenan el alto que hay (antes quedaba espacio vacío abajo): entre 54 y 112 px cada una.
+  const row = clamp(Math.floor((vh - RULER - 10) / Math.max(1, tl.tracks.length)), 54, 112)
 
   useEffect(() => {
     const el = sc.current!
-    const ro = new ResizeObserver(() => setVw(el.clientWidth))
+    const ro = new ResizeObserver(() => { setVw(el.clientWidth); setVh(el.clientHeight) })
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
@@ -172,25 +177,74 @@ export default function PhoneTimeline(p: Props) {
   const color = (tr: Track, c: Clip) => TYPE_COLOR[tr.type === 'video' && isImage(c.src) ? 'image' : tr.type === 'audio' ? trackRole(tr) : tr.type] || 'var(--accent)'
   const icon = (tr: Track): IconName => TYPE_ICON[tr.type === 'audio' ? trackRole(tr) : tr.type] || 'film'
 
+  // Liquid Glass de iOS 26 (nativo: GlassOverlay.swift) sobre la columna de nombres: la página le dice dónde va cada
+  // panel y con qué color; los toques siguen siendo de la página. Con un menú, una hoja o una ventana encima se saca
+  // (lo nativo quedaría por arriba). Sin iOS 26 (o en Safari) queda el vidrio dibujado con CSS.
+  const [glass, setGlass] = useState(false)
+  useEffect(() => {
+    if (!isNative()) return
+    let raf = 0, last = ''
+    const sync = () => {
+      raf = 0
+      const el = sc.current
+      const covered = !!document.querySelector('.sheet-back, .modal-backdrop, .menu')
+      const box = el?.getBoundingClientRect()
+      const items = !el || !box || covered ? [] : [...el.querySelectorAll<HTMLElement>('.tlp-trk')].map((b) => {
+        const r = b.getBoundingClientRect()
+        return { id: b.dataset.id, name: b.dataset.name, kind: b.dataset.kind, color: getComputedStyle(b).color, x: r.left, y: r.top, w: r.width, h: r.height }
+      })
+      const clip = box ? { x: box.left, y: box.top + RULER, w: box.width, h: box.height - RULER } : null
+      const msg = JSON.stringify([clip, items])
+      if (msg === last) return
+      last = msg
+      nativeCall<boolean>('glass.set', { clip, items }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
+    }
+    const later = () => { if (!raf) raf = requestAnimationFrame(sync) }
+    later()
+    const el = sc.current!
+    el.addEventListener('scroll', later, { passive: true })
+    window.addEventListener('resize', later)
+    const ro = new ResizeObserver(later)
+    ro.observe(el)
+    const mo = new MutationObserver(later)
+    mo.observe(document.body, { childList: true })
+    mo.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-name', 'data-kind', 'style'] })
+    return () => {
+      cancelAnimationFrame(raf)
+      el.removeEventListener('scroll', later)
+      window.removeEventListener('resize', later)
+      ro.disconnect(); mo.disconnect()
+      void nativeCall('glass.set', { clip: null, items: [] }).catch(() => {})
+    }
+  }, [])
+
   return (
-    <div className="tlp">
+    <div className={`tlp ${glass ? 'native-glass' : ''}`}>
       <div className="tlp-scroll" ref={sc} onScroll={onScroll} onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('tlp-track')) p.onSelect([]) }}>
-        <div className="tlp-content" style={{ width, height: RULER + Math.max(1, tl.tracks.length) * ROW + 12 }}>
+        <div className="tlp-content" style={{ width, height: RULER + Math.max(1, tl.tracks.length) * row + 12, ['--row' as any]: `${row}px` }}>
           <div className="tlp-ruler">
+            <div className="tlp-corner" />
             {ticks.map((k) => <span key={k.x} className="tlp-tick" style={{ left: k.x }}>{k.label}</span>)}
             {(tl.notes || []).map((n) => <button key={n.id} className="tlp-note" style={{ left: half + n.t * pps }} aria-label={n.text} onClick={() => { p.onScrub(n.t, 'move'); toast(`Nota: ${n.text}`, 'info') }} />)}
           </div>
           {tl.tracks.map((tr, i) => (
-            <div key={tr.id} className={`tlp-track ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * ROW, ['--lane' as any]: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }}>
-              <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}>
+            <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
+              <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}
+                data-id={tr.id} data-name={tr.name} data-kind={tr.muted ? 'muted' : tr.hidden ? 'hidden' : tr.type === 'audio' ? trackRole(tr) : tr.type}>
                 <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={15} />
                 <span className="tlp-trk-name">{tr.name}</span>
               </button>
               {tr.clips.map((c) => {
                 const on = p.sel.includes(c.id)
                 return (
-                  <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''}`} style={{ left: half + c.start * pps, width: Math.max(4, c.duration * pps), ['--c' as any]: color(tr, c) }}
+                  <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''} ${waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) ? 'wave' : ''}`} style={{ left: half + c.start * pps, width: Math.max(4, c.duration * pps), ['--c' as any]: color(tr, c) }}
                     onPointerDown={(e) => down(e, c, tr, 'move')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { tap.current = null; up() }}>
+                    {waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) && (() => {
+                      // La onda real, dibujada sólo en lo que se ve del clip.
+                      const x = half + c.start * pps, w = Math.max(4, c.duration * pps)
+                      const x0 = Math.max(0, left - x), x1 = Math.min(w, left + vw - x)
+                      return x1 > x0 && <div className="tlp-wave"><Wave projectId={p.projectId} src={c.src} inSec={c.in || 0} pps={pps} x0={x0} x1={x1} height={Math.max(14, row - 31)} color={WAVE[tr.type === 'audio' ? trackRole(tr) : 'video'] || WAVE.audio} /></div>
+                    })()}
                     {c.fadeIn ? <span className="tlp-fade l" style={{ width: c.fadeIn * pps }} /> : null}
                     {c.fadeOut ? <span className="tlp-fade r" style={{ width: c.fadeOut * pps }} /> : null}
                     <span className="tlp-clip-name">{clipName(c)}</span>
@@ -203,7 +257,7 @@ export default function PhoneTimeline(p: Props) {
               })}
             </div>
           ))}
-          <button className="tlp-add" style={{ left: half + tl.duration * pps + 14, top: RULER + 6 }} aria-label="Agregar medios" onClick={p.onAdd}><Icon name="plus" size={22} /></button>
+          <button className="tlp-add" style={{ left: half + tl.duration * pps + 14, top: RULER + 6, height: row - 12 }} aria-label="Agregar medios" onClick={p.onAdd}><Icon name="plus" size={22} /></button>
         </div>
       </div>
       <div className="tlp-cursor" />

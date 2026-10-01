@@ -28,7 +28,7 @@ const TOUCH = isTouch()
 const ROW = TOUCH ? 64 : 58, RULER = TOUCH ? 36 : 30
 export const TYPE_COLOR: Record<string, string> = { scene: 'var(--scene)', video: 'var(--video)', image: 'var(--image)', audio: 'var(--audio)', voice: 'var(--voice)', music: 'var(--music)', sfx: 'var(--sfx)' }
 export const TYPE_ICON: Record<string, IconName> = { scene: 'code', video: 'video', image: 'image', audio: 'music', voice: 'mic', music: 'music', sfx: 'wave' }
-const WAVE: Record<string, string> = { voice: 'rgba(170, 245, 200, .8)', music: 'rgba(150, 232, 244, .78)', sfx: 'rgba(255, 224, 150, .8)', audio: 'rgba(150, 232, 244, .78)', video: 'rgba(255, 214, 170, .55)' }
+export const WAVE: Record<string, string> = { voice: 'rgba(170, 245, 200, .8)', music: 'rgba(150, 232, 244, .78)', sfx: 'rgba(255, 224, 150, .8)', audio: 'rgba(150, 232, 244, .78)', video: 'rgba(255, 214, 170, .55)' }
 /** Rol de una pista de audio según su id o nombre: cada tipo tiene su color propio. */
 export function trackRole(tr: Track): string {
   if (tr.type !== 'audio') return tr.type
@@ -54,7 +54,8 @@ function loadPeaks(projectId: string, src: string) {
   }).catch(() => null))
   return peaksCache.get(k)!
 }
-const Wave = memo(function Wave({ projectId, src, inSec, pps, x0, x1, height, color }: { projectId: string; src: string; inSec: number; pps: number; x0: number; x1: number; height: number; color: string }) {
+/** La forma de onda real de un archivo (sus picos, cacheados), sólo en la parte visible del clip: de x0 a x1. */
+export const Wave = memo(function Wave({ projectId, src, inSec, pps, x0, x1, height, color }: { projectId: string; src: string; inSec: number; pps: number; x0: number; x1: number; height: number; color: string }) {
   const ref = useRef<HTMLCanvasElement>(null)
   const [peaks, setPeaks] = useState<{ rate: number; data: Uint8Array } | null>(null)
   useEffect(() => { let on = true; loadPeaks(projectId, src).then((p) => on && setPeaks(p)); return () => { on = false } }, [projectId, src])

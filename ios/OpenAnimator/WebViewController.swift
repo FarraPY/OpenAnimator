@@ -5,6 +5,8 @@ import WebKit
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private(set) var webView: WKWebView!
     private let backHint = UIImageView(image: UIImage(systemName: "chevron.backward.circle.fill"))
+    /// Liquid Glass de iOS sobre la columna de pistas del timeline (lo ubica la página: glass.set).
+    private(set) lazy var glass = GlassOverlay(in: view)
     private let schemes = SchemeHandler()
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
@@ -74,6 +76,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     private func load(recovered: Bool = false) {
+        glass.hide()
         let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }
@@ -85,7 +88,10 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         let x = g.translation(in: view).x
         let ready = x > 80 || (x > 30 && g.velocity(in: view).x > 700)
         switch g.state {
-        case .began, .changed:
+        case .began:
+            view.bringSubviewToFront(backHint)
+            fallthrough
+        case .changed:
             backHint.center = CGPoint(x: 8 + min(x, 96) / 2, y: g.location(in: view).y)
             backHint.alpha = min(1, x / 70)
             backHint.transform = ready ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity

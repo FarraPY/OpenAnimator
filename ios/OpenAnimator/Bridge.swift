@@ -91,6 +91,7 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "probe": probe(a, replyHandler)
         case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)
+        case "glass.set": replyHandler(controller?.glass.set(a) ?? false, nil)
         case "http.stream":
             do { try net.start(a); replyHandler(true, nil) } catch { replyHandler(nil, (error as? LocalizedError)?.errorDescription ?? error.localizedDescription) }
         case "http.cancel":

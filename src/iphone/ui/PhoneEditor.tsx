@@ -243,6 +243,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
         <div className="ed-transport">
           <span className="tabnum ed-time"><b>{fmtTime(t, true, fps)}</b><span className="t3"> / {fmtTime(tl.duration)}</span></span>
           <div className="grow" />
+          <Tap icon="skip-back" label="Ir al inicio" disabled={t <= 0} onClick={() => seek(0)} />
           <Tap icon="step-back" label="Fotograma anterior" onClick={() => seek(t - 1 / fps)} />
           <button className="ed-play" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay}><Icon name={playing ? 'pause' : 'play'} size={24} /></button>
           <Tap icon="step-fwd" label="Fotograma siguiente" onClick={() => seek(t + 1 / fps)} />
