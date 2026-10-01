@@ -49,8 +49,10 @@ final class NativeCapture: NSObject {
         let fit = min(1, cellW / points.width, cellH / points.height)
         startReply = reply
         n = 0; totalMs = 0; snapMs = 0; maxMs = 0; t0 = Date()
+        let prefs = a["prefs"] as? [String: Any] ?? [:]
+        if !prefs.isEmpty { AppLog.write("exportar", "INFO", "Ajustes de WebKit de la captura: \(prefs)") }
         for k in 0..<count {
-            let w = CaptureWorker(schemes: schemes, size: size, points: points)
+            let w = CaptureWorker(schemes: schemes, size: size, points: points, prefs: prefs)
             w.web.transform = CGAffineTransform(scaleX: fit, y: fit)
             w.web.center = CGPoint(x: 10 + cellW * (CGFloat(k % cols) + 0.5), y: b.height * 0.55 + cellH * (CGFloat(k / cols) + 0.5))
             w.onReady = { [weak self] error in self?.workerReady(error) }
@@ -172,10 +174,11 @@ final class CaptureWorker: NSObject, WKNavigationDelegate, WKScriptMessageHandle
     private var want = 0
     private var timer: Timer?
 
-    init(schemes: SchemeHandler, size: CGSize, points: CGSize) {
+    init(schemes: SchemeHandler, size: CGSize, points: CGSize, prefs: [String: Any] = [:]) {
         self.size = size
         self.points = points
         let config = WKWebViewConfiguration()
+        WebKitFeatures.apply(prefs, to: config.preferences)
         config.setURLSchemeHandler(schemes, forURLScheme: "oa")
         config.setURLSchemeHandler(schemes, forURLScheme: "oaproj")
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -292,5 +295,23 @@ private final class WorkerHandler: NSObject, WKScriptMessageHandler {
     init(_ target: WKScriptMessageHandler) { self.target = target }
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         target?.userContentController(ucc, didReceive: message)
+    }
+}
+
+/// Ajustes internos de WebKit (los que Safari muestra en «Funciones de WebKit»), para medir con cuáles exporta más rápido:
+/// {clave de UnifiedWebPreferences.yaml: true/false}, p. ej. AcceleratedFiltersEnabled (filtros con Core Image) o
+/// UseGPUProcessForDOMRenderingEnabled. API privada (_features / _setEnabled:forFeature:): si no está, no hace nada.
+enum WebKitFeatures {
+    static func apply(_ prefs: [String: Any], to p: WKPreferences) {
+        guard !prefs.isEmpty else { return }
+        let list = NSSelectorFromString("_features"), set = NSSelectorFromString("_setEnabled:forFeature:")
+        guard (WKPreferences.self as AnyObject).responds(to: list), p.responds(to: set),
+              let all = (WKPreferences.self as AnyObject).perform(list)?.takeUnretainedValue() as? [NSObject] else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Bool, AnyObject) -> Void
+        let fn = unsafeBitCast(p.method(for: set), to: Setter.self)
+        for f in all {
+            guard let key = f.value(forKey: "key") as? String, let on = prefs[key] as? Bool else { continue }
+            fn(p, set, on, f)
+        }
     }
 }

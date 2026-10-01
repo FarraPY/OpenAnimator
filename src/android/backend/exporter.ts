@@ -337,11 +337,13 @@ class Export {
     let method: Method = 'compat'
     const why = d.why // por qué no anduvo cada método (se muestra al terminar)
     // iPhone: cuántas vistas de captura a la vez (NativeCapture.swift; oa.capWorkers para probar otras cantidades).
+    // y ajustes internos de WebKit para medir (oa.capPrefs: {"AcceleratedFiltersEnabled": true, …}).
+    const iosPrefs = host().kind === 'web' ? (() => { try { return JSON.parse(localStorage.getItem('oa.capPrefs') || '{}') } catch { return {} } })() : undefined
     const iosWorkers = host().kind === 'web' ? Math.max(1, Math.min(6, Number((() => { try { return localStorage.getItem('oa.capWorkers') } catch { return null } })()) || 3)) : 1
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break
-        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m, workers: iosWorkers }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${label(m)} en este equipo:`, e) }
+        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m, workers: iosWorkers, prefs: iosPrefs }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${label(m)} en este equipo:`, e) }
       }
       return 'compat' as const
     }
