@@ -174,7 +174,7 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   GPU compartido; en la tablet, Chrome los hace con la GPU). Probado con `oa.capPrefs` (ajustes internos de WebKit,
   `WebKitFeatures.apply`): AcceleratedFiltersEnabled no cambia nada; UseGPUProcessForDOMRenderingEnabled=false da
   imágenes negras (el proceso web de iOS no puede dibujar solo); LayerBasedSVGEngineEnabled (con Core Image, 6× más
-  rápido) no dibuja lo que tiene máscara. Medir con `.tools/bench.py` (exporta un tramo desde la PC y lee los fps del
+  rápido) no dibuja lo que tiene máscara. Medir con `scripts/iphone-bench.py` (exporta un tramo desde la PC y lee los fps del
   registro) y comparar siempre la imagen con PSNR contra una exportación buena antes de creer un número. Pendiente: los fotogramas para Claude siguen
   con el compositor de la página.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
