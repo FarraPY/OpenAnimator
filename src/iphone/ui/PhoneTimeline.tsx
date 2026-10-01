@@ -27,6 +27,7 @@ type Props = {
   onSplit: () => void; onDelete: () => void; onDuplicate: () => void
   onPatchTrack: (id: string, p: Partial<Track>) => void
   onAdd: () => void; onNote: () => void; onAsk: (text: string) => void
+  onEditNote: (id: string) => void; onDeleteNote: (id: string) => void
   /** Abrir los ajustes del clip elegido (la pestaña Timeline de la hoja). */
   onInspect: () => void
 }
@@ -229,7 +230,14 @@ export default function PhoneTimeline(p: Props) {
             <div className="tlp-ruler">
               <div className="tlp-corner" />
               {ticks.map((k) => k.label ? <span key={k.x} className="tlp-tick" style={{ left: k.x }}>{k.label}</span> : <i key={k.x} className="tlp-minor" style={{ left: k.x }} />)}
-              {(tl.notes || []).map((n) => <button key={n.id} className="tlp-note" style={{ left: half + n.t * pps }} aria-label={n.text} onClick={() => { p.onScrub(n.t, 'move'); toast(`Nota: ${n.text}`, 'info') }} />)}
+              {/* Cada nota: tocarla muestra su texto y qué hacer con ella (ir, editar, eliminar). */}
+              {(tl.notes || []).map((n) => <MenuButton key={n.id} native={false} align="start" className="tlp-note" style={{ left: half + n.t * pps }} label={`Nota: ${n.text}`} items={[
+                { label: n.text, icon: 'note', disabled: true, onSelect: () => {} },
+                { sep: true },
+                { label: 'Ir a la nota', icon: 'chevron-right', onSelect: () => p.onScrub(n.t, 'move') },
+                { label: 'Editar…', icon: 'edit', onSelect: () => p.onEditNote(n.id) },
+                { label: 'Eliminar', icon: 'trash', danger: true, onSelect: () => p.onDeleteNote(n.id) },
+              ]}>{null}</MenuButton>)}
             </div>
             {tl.tracks.map((tr, i) => (
               <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
