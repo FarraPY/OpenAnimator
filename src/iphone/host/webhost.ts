@@ -145,6 +145,15 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'enc.start': (a) => Enc.start(fs, a), 'enc.cancel': () => { Enc.cancel(); return true }, 'enc.fallback': () => Enc.fallback(),
     // La captura de la exportación en la app (ios/OpenAnimator/NativeCapture.swift): los fotogramas van solos al codificador.
     'cap.available': () => native, 'cap.close': () => { if (native) void nativeCall('cap.close').catch(() => {}); return true },
+    // Whisper en el iPhone (ios/OpenAnimator/LocalWhisper.swift, WhisperKit): sólo en la app.
+    'whisper.available': () => native,
+  }
+  /** Una operación de Whisper en Swift; su avance (evento nativo "whisper") va al que la pidió. */
+  const whisper = (op: string) => async (a: any, emitEvent: (e: any) => void) => {
+    if (!native) throw unavailable('Whisper local')
+    if (op === 'whisper.transcribe') await fs.flush() // el archivo tiene que estar en el disco
+    const off = host.onEvent('whisper', emitEvent)
+    try { return await nativeCall(op, a) } finally { off() }
   }
   const async: Record<string, (a: any, emitEvent: (e: any) => void, o: AsyncOpts) => Promise<any>> = {
     'fs.delete': async (a) => fs.delete(a.path), 'fs.copy': async (a) => { fs.copy(a.from, a.to); await fs.flush(); return true }, 'fs.du': async (a) => fs.du(a.path),
@@ -168,6 +177,7 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height, workers: a.workers, prefs: a.prefs }),
     'cap.frame': async (a) => nativeCall('cap.frame', { t: a.t, i: a.i, preview: !!a.preview }), 'cap.stop': async () => nativeCall('cap.stop'),
     'enc.frame': async (a) => Enc.frame(a), 'enc.frames': async () => Enc.frames(), 'enc.mix': async (a, ev) => Enc.mix(fs, a, ev), 'enc.finish': async () => Enc.finish(fs),
+    ...Object.fromEntries(['status', 'install', 'remove', 'transcribe', 'test'].map((k) => [`whisper.${k}`, whisper(`whisper.${k}`)])),
   }
   const unavailable = (m: string) => new Error(`${m} no está disponible en el iPhone`)
   const host: WebHost = {

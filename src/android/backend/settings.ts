@@ -29,7 +29,10 @@ export function getSettings(): Settings {
   if (f && !f.v) { if (/^(s1|speech-1\.\d)$/.test(f.model || '')) f.model = 's2.1-pro-free'; f.v = 2 }
   // Antes Whisper no existía en la tablet (quedaba apagado y sin modelo): ahora arranca con los valores nuevos.
   const w = raw?.plugins?.whisper
-  if (w && !/^(base|small|large-v3-turbo-q5_0)$/.test(w.model || '')) Object.assign(w, DEFAULTS.plugins.whisper)
+  if (w && !/^(base|small|large-v3-turbo-q5_0|large-v3-turbo)$/.test(w.model || '')) Object.assign(w, DEFAULTS.plugins.whisper)
+  // En el iPhone (WhisperKit en el Neural Engine) el más preciso es rápido de sobra: arranca con ése, una vez; después
+  // vale lo que elija el usuario.
+  if (host().kind === 'web' && raw) { const pw = ((raw.plugins ??= {}).whisper ??= {}); if (!pw.ios) { pw.model = 'large-v3-turbo'; pw.ios = 1 } }
   cache = merge(structuredClone(DEFAULTS), raw)
   // Por la API (Android) sólo valen los nombres completos: "Predeterminado" pasa a Opus 5.5. En el iPhone corre Claude
   // Code, que entiende los alias (opus, sonnet…): así sigue al modelo más nuevo.

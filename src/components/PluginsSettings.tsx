@@ -21,6 +21,7 @@ const META: Record<PluginId, { color: string; mark: string; desc: string; keyUrl
   ytdlp: { color: '#ff4e45', mark: 'YT', desc: 'Descarga videos de YouTube (y otros sitios) para analizarlos con la herramienta de plantillas. Programa libre y oficial.', site: 'https://github.com/yt-dlp/yt-dlp' },
 }
 const WHISPER_TABLET = 'Whisper de OpenAI corriendo en la propia tablet con whisper.cpp (en Termux): transcripción con tiempos por palabra, gratis, sin clave y sin enviar el audio a internet. Es más lento que en la PC, pero sirve para sincronizar las animaciones con la narración. Es la opción preferida para transcribir.'
+const WHISPER_IPHONE = 'Whisper de OpenAI corriendo en el propio iPhone, en el Neural Engine (WhisperKit): transcripción con tiempos por palabra, gratis, sin clave y sin enviar el audio a internet. Se descarga el modelo una vez desde Hugging Face. Es la opción preferida para transcribir.'
 
 function Row({ label, desc, children, stack }: { label: ReactNode; desc?: ReactNode; children?: ReactNode; stack?: boolean }) {
   return (
@@ -88,8 +89,8 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
   const P = s!.plugins as any
   const cfg = P[p.id] || {}
   const enabledSw = p.id !== 'ytdlp'
-  // En la tablet Whisper se instala en Termux y trae su propia prueba (velocidad con una muestra de voz).
-  const tabletWhisper = p.id === 'whisper' && isAndroid()
+  // En la tablet (Termux) y en el iPhone (WhisperKit) Whisper se instala desde acá y trae su propia prueba de velocidad.
+  const tabletWhisper = p.id === 'whisper' && (isAndroid() || isIphone())
 
   useEffect(() => on('plugins:progress', (e: { id: string; p: number }) => { if (e.id === p.id) setInstall(e.p) }), [p.id])
 
@@ -122,7 +123,7 @@ function PluginCard({ p, open, onToggle, onChanged }: { p: PluginStatus; open: b
       </div>
       {open && (
         <div className="plug-body">
-          <p className="plug-desc">{tabletWhisper ? WHISPER_TABLET : m.desc}</p>
+          <p className="plug-desc">{tabletWhisper ? (isIphone() ? WHISPER_IPHONE : WHISPER_TABLET) : m.desc}</p>
 
           {p.needsKey && (
             <div className="plug-key">

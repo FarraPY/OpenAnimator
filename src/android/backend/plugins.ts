@@ -1,12 +1,14 @@
 /**
  * Plugins de IA en Android: los mismos servicios que en la PC (electron/plugins.ts) salvo los que
- * necesitan programas de escritorio (Codex CLI, yt-dlp). Whisper corre en Termux (whisper.cpp).
+ * necesitan programas de escritorio (Codex CLI, yt-dlp). Whisper corre en Termux (whisper.cpp) y en el iPhone en la
+ * app (WhisperKit en el Neural Engine, ios/OpenAnimator/LocalWhisper.swift).
  *
  * Las peticiones salen por Java (sin límites de CORS) y las claves nunca pasan por JavaScript:
  * se escribe {{secret:plugin.<id>}} y Java pone la clave guardada en el Keystore.
  */
 import type { PluginId, PluginStatus, Voice } from '../../api'
 import { host } from '../host'
+import { send } from './events'
 import { blobToBase64, fs, join, slugify } from './fsx'
 import { decodeRange, probeDuration } from './media'
 import { projectDir } from './projects'
@@ -78,10 +80,10 @@ function outFile(projectId: string, sub: string, name: string, ext: string) {
 export function pluginStatus(): PluginStatus[] {
   const s = getSettings().plugins as any
   const masked = host().call<Record<string, string>>('secrets.list', { names: PLUGINS.filter((p) => p.needsKey).map((p) => `plugin.${p.id}`) })
-  // En el iPhone no hay Termux: sin Whisper local (se transcribe con los servicios por internet).
-  return PLUGINS.filter((p) => p.id !== 'whisper' || host().kind !== 'web').map((p) => {
+  // En el iPhone, Whisper sólo dentro de la app (en Safari se transcribe con los servicios por internet).
+  return PLUGINS.filter((p) => p.id !== 'whisper' || host().kind !== 'web' || iosWhisper()).map((p) => {
     const enabled = s[p.id]?.enabled !== false
-    if (p.id === 'whisper') { const w = whisperQuick(); return { ...p, enabled, ready: enabled && w.ready, detail: w.detail } }
+    if (p.id === 'whisper') { const w = whisperQuick(); return { ...p, name: iosWhisper() ? 'Whisper (en el iPhone)' : p.name, enabled, ready: enabled && w.ready, detail: w.detail } }
     const m = masked[`plugin.${p.id}`] || ''
     return { ...p, enabled, ready: enabled && !!m, masked: m, detail: m ? `Clave cargada (${m})` : 'Sin clave' }
   })
@@ -93,7 +95,7 @@ export function setKey(id: string, key: string) {
 }
 
 async function pick(cap: Cap, want?: string): Promise<PluginId> {
-  if (cap === 'transcribe' && (!want || want === 'whisper') && getSettings().plugins.whisper?.enabled !== false && host().kind !== 'web') await whisperState()
+  if (cap === 'transcribe' && (!want || want === 'whisper') && getSettings().plugins.whisper?.enabled !== false && (host().kind !== 'web' || iosWhisper())) await whisperState()
   const st = pluginStatus()
   const ready = (id: string) => st.find((x) => x.id === id)?.ready
   const pref = want || ((getSettings().plugins as any)[cap] as string | undefined)
@@ -339,13 +341,14 @@ export async function transcribe(rel: string, o: { provider?: string; maxSec?: n
 }
 
 // ── Whisper en la tablet (whisper.cpp en Termux) ──────────────────────────────
-type WState = { ready: boolean; detail: string; model?: WhisperModel; installed: string[]; status?: WhisperBridgeStatus }
+type WState = { ready: boolean; detail: string; model?: WhisperModel; installed: string[]; status?: WhisperBridgeStatus; ios?: IosModel }
 let wCache: { at: number; st: WState } | null = null
 const NEED_TERMUX = 'Necesita Termux preparado (Ajustes › Claude › Con tu plan de Claude, pasos 1 a 3)'
 
 /** Lo último que se supo de Whisper, sin preguntarle al puente (para listar los plugins al instante). */
 function whisperQuick(): { ready: boolean; detail: string } {
   if (wCache) return wCache.st
+  if (iosWhisper()) return { ready: false, detail: 'Sin revisar' }
   try {
     const t = host().call<{ installed: boolean; permission: boolean }>('termux.status')
     if (!t.installed || !t.permission) return { ready: false, detail: NEED_TERMUX }
@@ -357,6 +360,15 @@ function whisperQuick(): { ready: boolean; detail: string } {
 export async function whisperState(force = false): Promise<WState> {
   if (!force && wCache && Date.now() - wCache.at < 5 * 60e3) return wCache.st
   const done = (st: WState) => { wCache = { at: Date.now(), st }; return st }
+  if (iosWhisper()) {
+    let st: IosStatus
+    try { st = await iosStatus() } catch (e: any) { return done({ ready: false, detail: `Whisper no respondió: ${e?.message || e}`, installed: [] }) }
+    const installed = st.models.filter((m) => m.installed).map((m) => m.id)
+    const want = getSettings().plugins.whisper?.model || ''
+    const m = st.models.find((x) => x.installed && x.id === want) || st.models.find((x) => x.installed)
+    if (!m) return done({ ready: false, detail: 'Sin modelos: descargá uno', installed })
+    return done({ ready: true, detail: `${m.label} · WhisperKit en el iPhone · ${installed.length} modelo${installed.length > 1 ? 's' : ''} descargado${installed.length > 1 ? 's' : ''}`, installed, ios: m })
+  }
   const T = await import('./termux')
   const t = T.termuxStatus()
   if (!t.installed || !t.permission) return done({ ready: false, detail: NEED_TERMUX, installed: [] })
@@ -374,6 +386,15 @@ export function resetWhisper() { wCache = null }
 
 /** Para los ajustes: los modelos con su estado, la versión instalada y si Termux está listo. */
 export async function whisperInfo() {
+  if (iosWhisper()) {
+    const st = await whisperState(true)
+    const s = await iosStatus()
+    return {
+      ios: true, ready: st.ready, detail: st.detail, termux: { installed: true, permission: true }, bin: true, version: 'WhisperKit 1.1.0',
+      cores: 0, busy: s.busy, active: st.ios?.id || null,
+      models: s.models.map((m) => ({ id: m.id, label: m.label, mb: m.mb, desc: IOS_DESC[m.id] || '', installed: m.installed, downloading: m.downloading })),
+    }
+  }
   const T = await import('./termux')
   const st = await whisperState(true)
   return {
@@ -384,6 +405,12 @@ export async function whisperInfo() {
 }
 
 export async function whisperInstall(model: string) {
+  if (iosWhisper()) {
+    resetWhisper()
+    const release = holdAwake()
+    try { await host().callAsync('whisper.install', { model }, { onEvent: (e) => send('whisper:progress', e) }) } finally { release(); resetWhisper() }
+    return
+  }
   const T = await import('./termux')
   const m = T.whisperModel(model)
   if (!m) throw new Error('Modelo de Whisper desconocido: ' + model)
@@ -392,6 +419,11 @@ export async function whisperInstall(model: string) {
 }
 
 export async function whisperRemove(model: string) {
+  if (iosWhisper()) {
+    await host().callAsync('whisper.remove', { model })
+    resetWhisper()
+    return whisperInfo()
+  }
   const T = await import('./termux')
   const m = T.whisperModel(model)
   if (!m) throw new Error('Modelo de Whisper desconocido: ' + model)
@@ -423,6 +455,7 @@ function whisperHint(msg: string) {
 }
 
 async function whisperFile(rel: string, o: { maxSec?: number; lang?: string }) {
+  if (iosWhisper()) return iosTranscribe(rel, o)
   const w = await whisperState()
   if (!w.ready || !w.model) throw new Error(`Whisper no está listo (${w.detail}): configuralo en Ajustes › Plugins › Whisper.`)
   const T = await import('./termux')
@@ -438,6 +471,7 @@ async function whisperFile(rel: string, o: { maxSec?: number; lang?: string }) {
 
 /** Prueba con la muestra de voz que dejó la instalación: si anda y a qué velocidad va en esta tablet. */
 export async function whisperTest(model?: string): Promise<string> {
+  if (iosWhisper()) return iosTest(model)
   const w = await whisperState(true)
   const T = await import('./termux')
   if (!w.status?.bin) throw new Error(w.detail || 'Whisper no está instalado')
@@ -480,4 +514,42 @@ export async function ask(req: { prompt: string; provider?: string; model?: stri
     body: jsonBody({ model, messages: [...(req.system ? [{ role: 'system', content: req.system }] : []), { role: 'user', content }] }),
   })
   return { provider: pname(provider), model: j.model || model, text: j.choices?.[0]?.message?.content || '' }
+}
+
+// ── Whisper en el iPhone (WhisperKit en el Neural Engine: ios/OpenAnimator/LocalWhisper.swift) ────────────────
+type IosModel = { id: string; label: string; mb: number; installed: boolean; downloading: boolean }
+type IosStatus = { models: IosModel[]; loaded: string | null; busy: boolean }
+type IosResult = { text: string; words: Word[]; lang: string | null; ms: number; loadMs: number; audioSec: number; expected?: string }
+const IOS_DESC: Record<string, string> = {
+  'large-v3-turbo': 'El más preciso (large-v3-turbo comprimido). Medido por Argmax en un iPhone 17 Pro: 10 minutos de audio en unos 40 segundos.',
+  small: 'Más liviano y un poco más rápido; se equivoca más con nombres y palabras poco comunes.',
+}
+/** En la app del iPhone (en Safari no hay Whisper local). */
+function iosWhisper() { return host().kind === 'web' && !!host().call<boolean>('whisper.available') }
+const iosStatus = () => host().callAsync<IosStatus>('whisper.status')
+/** La primera carga después de instalar o de actualizar iOS prepara el modelo para el chip (~1 minuto). */
+const prepText = (ms: number) => ms > 15000 ? `; antes preparó el modelo para este iPhone en ${dec1(ms / 1000)} s (sólo la primera vez y después de actualizar iOS)` : ''
+
+async function iosTranscribe(rel: string, o: { maxSec?: number; lang?: string }) {
+  const w = await whisperState()
+  if (!w.ready || !w.ios) throw new Error(`Whisper no está listo (${w.detail}): configuralo en Ajustes › Plugins › Whisper.`)
+  const release = holdAwake()
+  try {
+    const r = await host().callAsync<IosResult>('whisper.transcribe', { path: rel, model: w.ios.id, lang: o.lang || '', maxSec: o.maxSec || 0 }, { onEvent: (e) => send('whisper:progress', e) })
+    const speed = speedText(r.audioSec, r.ms)
+    return { text: r.text, words: r.words, provider: `Whisper en el iPhone (${w.ios.label}${speed ? `, ${speed}` : ''}${prepText(r.loadMs)})`, lang: r.lang || undefined }
+  } finally { release() }
+}
+
+/** La voz de iOS dice una frase en español y Whisper la transcribe: si anda y a qué velocidad. */
+async function iosTest(model?: string): Promise<string> {
+  const st = await iosStatus()
+  const m = st.models.find((x) => x.id === model) || st.models.find((x) => x.installed)
+  if (!m?.installed) throw new Error(`Falta descargar el modelo ${m?.label || model || ''}`.trim())
+  const release = holdAwake()
+  try {
+    const r = await host().callAsync<IosResult>('whisper.test', { model: m.id }, { onEvent: (e) => send('whisper:progress', e) })
+    const said = r.text.length > 110 ? r.text.slice(0, 108) + '…' : r.text
+    return `${m.label}: transcribió ${dec1(r.audioSec)} s de voz en ${dec1(r.ms / 1000)} s (${speedText(r.audioSec, r.ms)}${prepText(r.loadMs)}), ${r.words.length} palabras con su tiempo: «${said}»`
+  } finally { release() }
 }

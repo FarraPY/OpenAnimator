@@ -94,6 +94,9 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
         case "venc.start", "venc.frame", "venc.frames", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
+        case "whisper.status", "whisper.install", "whisper.remove", "whisper.transcribe", "whisper.test":
+            LocalWhisper.shared.emit = { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
+            LocalWhisper.shared.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)
         case "glass.layout": replyHandler(controller?.chrome.layout(a["items"] as? [[String: Any]] ?? []) ?? false, nil)
         case "screen.full":
