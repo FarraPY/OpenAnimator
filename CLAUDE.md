@@ -169,14 +169,25 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   defecto; `localStorage oa.capWorkers` para probar): el exportador pide el doble de fotogramas que vistas, cada vista
   hace los que le tocan y `NativeEncoder.appendCaptured(index:)` los pone en el video por su número (verificado: cada
   fotograma coincide con el mismo de una exportación de una sola vista, 63 dB de media). «Prueba de render» (2:00,
-  1080p): 1 vista 330 s, 3 → 169 s, 4 → 162 s, 6 → 166 s. Casi todo lo que queda es la escena SVG (~6 fps aun con
-  varias vistas, 246 ms por fotograma dibujando: WebKit hace las máscaras y filtros SVG con el procesador en el proceso
-  GPU compartido; en la tablet, Chrome los hace con la GPU). Probado con `oa.capPrefs` (ajustes internos de WebKit,
-  `WebKitFeatures.apply`): AcceleratedFiltersEnabled no cambia nada; UseGPUProcessForDOMRenderingEnabled=false da
-  imágenes negras (el proceso web de iOS no puede dibujar solo); LayerBasedSVGEngineEnabled (con Core Image, 6× más
-  rápido) no dibuja lo que tiene máscara. Medir con `scripts/iphone-bench.py` (exporta un tramo desde la PC y lee los fps del
-  registro) y comparar siempre la imagen con PSNR contra una exportación buena antes de creer un número. Pendiente: los fotogramas para Claude siguen
-  con el compositor de la página.
+  1080p): 1 vista 330 s, 3 → 169 s, 4 → 162 s, 6 → 166 s; con lo de abajo (120 Hz y máscaras aisladas), 103 s (la Tab S8+: 137 s). Las vistas de captura dibujan a 120 Hz
+  (`PreferPageRenderingUpdatesNear60FPSEnabled` = false en NativeCapture y `CADisableMinimumFrameDurationOnPhone` en
+  project.yml): WebKit marca su ritmo con un CADisplayLink a 60 y takeSnapshot espera ese dibujo; partículas 63 → 83 fps,
+  CSS 3D 58 → 63, mismos fotogramas. La escena SVG estaba limitada por la CPU: el proceso GPU de WebKit (uno por app, un
+  hilo por vista; CoreGraphics en la CPU) al 270–300 % con 4 vistas, y el A19 Pro tiene 2 núcleos grandes, así que más
+  vistas no sirven. Medido con variantes de la escena (proyecto oculto `.diag-svg` en el iPhone): sin la máscara del
+  `<g>` de 1500 figuras, 7 → 27 fps; los filtros y el clipPath casi no cuestan. El motor SVG de siempre enmascara cada
+  figura por separado (`LegacyRenderSVGResourceMasker`: buffer de CPU + clipToImageBuffer); aislado cada hijo-grupo del
+  `<g mask>` (`isolateMasked` en oa-runtime.js, sólo WebKit), cada uno se pinta en su capa y se enmascara una vez: 13 fps
+  (abriéndose la máscara, 4 → 7,8), misma imagen. Probado sin resultado con `oa.capPrefs` (`WebKitFeatures.apply`; una
+  clave que no existe se ignora sin avisar): AcceleratedFiltersEnabled (y con GraphicsContextFiltersEnabled=false, que si
+  no le gana) un poco más lento; UseGPUProcessForDOMRenderingEnabled=false da imágenes negras (el proceso web no tiene
+  IOSurface); LayerBasedSVGEngineEnabled (LBSE) corre la máscara y tapa el contenido (16 dB; WebKit lo arregló en agosto de
+  2026, después de iOS 27). Medir con `scripts/iphone-bench.py` (exporta un tramo desde la PC, de cualquier proyecto, y lee
+  los fps del registro) y comparar siempre la imagen con PSNR contra una exportación buena antes de creer un número. Ojo:
+  dos exportaciones iguales de la escena SVG dan ~39–43 dB entre sí (el codificador), y la de partículas (canvas 2D,
+  función pura de t) da tramos de fotogramas distintos entre exportaciones (22–30 dB, sin fotogramas corridos ni
+  repetidos; causa sin averiguar); comparar contra varias de referencia. En modo de ahorro de batería WebKit dibuja a 30 fps y la
+  CPU rinde la mitad. Pendiente: los fotogramas para Claude siguen con el compositor de la página.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
   go-ios (`go-ios/ios.exe`) y pymobiledevice3 (venv `pmd3/`). Pasos: `ios tunnel start --userspace` (sin administrador);
   montar la imagen de desarrollador con `pymobiledevice3 mounter mount-personalized <dmg> <trustcache> <BuildManifest>`
