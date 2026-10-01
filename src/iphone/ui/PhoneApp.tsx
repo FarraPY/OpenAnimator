@@ -3,6 +3,7 @@
  * mismo backend que la tablet (window.oa) y algunas piezas de la PC (el chat con Claude, la vista previa); la
  * navegación, el inicio, el editor, el timeline y los ajustes son propios del teléfono.
  */
+import { handleBack } from '../../android/ui/back'
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AppCtx, type Route } from '../../App'
@@ -19,6 +20,17 @@ type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
  * Con el teclado abierto, Safari achica sólo la parte visible (visualViewport), no la página: la app se acomoda a lo
  * visible (--vvh) para que el cuadro de mensaje quede arriba del teclado, y html.kb avisa que está abierto.
  */
+/**
+ * Volver deslizando desde el borde izquierdo (el gesto lo reconoce iOS: WebViewController llama a __oaBack). Primero
+ * se cierra lo que esté abierto (menú, ventana, hoja); si no hay nada, es el botón de volver de la pantalla.
+ */
+;(window as any).__oaBack = () => {
+  if (handleBack()) return
+  const sheet = document.querySelector<HTMLElement>('.sheet-back')
+  if (sheet) { sheet.dispatchEvent(new MouseEvent('click', { bubbles: true })); return }
+  ;[...document.querySelectorAll<HTMLElement>('.ph-top [data-back]')].filter((b) => b.offsetParent).pop()?.click()
+}
+
 function useKeyboardViewport() {
   useEffect(() => {
     const vv = window.visualViewport
@@ -109,9 +121,9 @@ export function TopBar({ left, title, right }: { left?: ReactNode; title?: React
 }
 
 /** Botón redondo con ícono (44 pt: el mínimo cómodo para un dedo). */
-export function Tap({ icon, label, onClick, active, disabled, accent, size = 22 }: { icon: IconName; label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; disabled?: boolean; accent?: boolean; size?: number }) {
+export function Tap({ icon, label, onClick, active, disabled, accent, size = 22, back }: { icon: IconName; label: string; onClick: (e: React.MouseEvent<HTMLButtonElement>) => void; active?: boolean; disabled?: boolean; accent?: boolean; size?: number; back?: boolean }) {
   return (
-    <button className={`tap ${active ? 'on' : ''} ${accent ? 'accent' : ''}`} aria-label={label} disabled={disabled} onClick={onClick}>
+    <button className={`tap ${active ? 'on' : ''} ${accent ? 'accent' : ''}`} aria-label={label} disabled={disabled} onClick={onClick} data-back={back || undefined}>
       <Icon name={icon} size={size} />
     </button>
   )

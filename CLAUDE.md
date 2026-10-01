@@ -123,6 +123,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   6 h, con wifi o datos, sin conversaciones trabajando): `update()` instala, prueba que arranque (la misma consulta) y
   recién ahí la marca en uso (`oa.claudeVersion`); si falla, la borra y no la reintenta (`oa.claudeFailed`). Las
   versiones viejas se borran al próximo arranque (una conversación abierta puede estar usándolas).
+- Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
+  Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
+  (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`
+  (con el teclado abierto quedaban detrás) y en pantallas táctiles nada abre el teclado solo. Importar un .zip
+  (`zip.import`, iphone/host/zip.ts) hace lo de Zip.java: saca la carpeta de arriba (`<id>/project.json`).
 - Registro (Ajustes › Depuración): `AppLog.swift` escribe `Documentos/logs/app.log` (rota a los 4 MB; sin claves ni
   códigos de OAuth) con lo que manda la página (`src/iphone/host/applog.ts`: warn/error de la consola —todo con
   «Registro detallado»—, errores sin atrapar, Claude: pedidos, fin de turno, herramientas que fallan, stderr del

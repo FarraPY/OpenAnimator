@@ -1,5 +1,6 @@
 import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { afterPaint, Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
+import { afterPaint, Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, on } from '../api'
+import { useModels } from '../claudeModels'
 import { isAndroid, isIphone } from '../platform'
 import { useApp } from '../App'
 import { Icon, IconName } from '../ui/icons'
@@ -223,6 +224,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   /** Texto para poner en el cuadro de mensaje desde afuera (acciones rápidas). */
   inject?: { text: string; n: number } | null
 }) {
+  const models = useModels()
   const android = isAndroid()
   // Teléfono o tablet: sin terminal ni ventana aparte, y Enter no envía con el teclado en pantalla.
   const phone = isIphone(), touchUi = android || phone
@@ -522,7 +524,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       {drag && <div className="chat-drop"><Icon name="paperclip" size={26} /><b>Soltá para adjuntar</b><span>Imágenes, PDF, guiones, audio, video…</span></div>}
       <div className={`pane-head ${windowMode ? 'drag-region' : ''}`} style={{ gap: 4, height: windowMode ? 38 : 38, paddingLeft: 12, paddingRight: windowMode ? 140 : undefined }}>
         {busy ? <span className="row t2" style={{ gap: 6, fontSize: 12 }}><Spinner size={12} />Trabajando…</span>
-          : <span className="row t3" style={{ gap: 6, fontSize: 12 }} data-tip="Modelo de la sesión"><span className="sys-dot ok" style={{ marginLeft: 0, width: 6, height: 6 }} />{liveModel ? modelName(liveModel) : 'Listo'}</span>}
+          : <span className="row t3" style={{ gap: 6, fontSize: 12 }} data-tip="Modelo de la sesión"><span className="sys-dot ok" style={{ marginLeft: 0, width: 6, height: 6 }} />{liveModel ? models.name(liveModel) : 'Listo'}</span>}
         <div className="grow" />
         <button className={`ctx-meter no-drag ${level === 2 ? 'err' : level === 1 ? 'warn' : ''}`} onClick={ctxMenu.open}
           data-tip={stats?.context ? `Contexto: ${kTok(stats.context)} de ${kTok(stats.window)} tokens (${pct}%). Cada mensaje vuelve a enviar todo esto: cuanto más grande, ${android ? 'más cuesta cada mensaje' : 'más consume de tu límite de uso'}.` : stats?.compactions ? 'Conversación compactada: se mide de nuevo en el próximo mensaje' : 'Contexto de la conversación (se mide al primer mensaje)'}>
@@ -607,10 +609,10 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               { label: android ? 'Archivos de la tablet…' : phone ? 'Archivos del iPhone…' : 'Archivos…', icon: 'file', onSelect: pickFiles },
               { label: 'Mencionar un archivo del proyecto', icon: 'at', hint: '@', onSelect: () => { const v = text + (text && !/\s$/.test(text) ? ' @' : '@'); setText(v); onTextChange(v, v.length); ta.current?.focus() } },
             ], { placement: 'top' })}
-            <Select size="sm" variant="ghost" value={opts.model} tip="Modelo" menuWidth={300} placement="top"
-              renderValue={() => modelName(opts.model)}
-              onChange={(v) => setOption({ model: v as string }, `Modelo: ${modelName(v as string)} (se aplica al próximo mensaje).`)}
-              options={[{ header: 'Modelo' }, ...MODELS.map((m) => ({ value: m.id, label: m.name, desc: m.desc, hint: m.note }))]} />
+            <Select size="sm" variant="ghost" value={models.value(opts.model)} tip="Modelo" menuWidth={300} placement="top"
+              renderValue={() => models.name(opts.model)}
+              onChange={(v) => setOption({ model: v as string }, `Modelo: ${models.name(v as string)} (se aplica al próximo mensaje).`)}
+              options={[{ header: 'Modelo' }, ...models.options]} />
             <Select size="sm" variant="ghost" value={opts.effort} tip="Nivel de esfuerzo (razonamiento)" menuWidth={280} placement="top"
               renderValue={() => <span className="row" style={{ gap: 6 }}><EffortBars n={effort.bars} />{effort.name}</span>}
               onChange={(v) => setOption({ effort: v as string }, `Esfuerzo: ${EFFORTS.find((e) => e.id === v)?.name} (se aplica al próximo mensaje).`)}
@@ -648,7 +650,7 @@ function HistoryModal({ projectId, current, onPick, onNew, onClose }: { projectI
   return (
     <Modal title="Conversaciones anteriores" subtitle="Retomá una conversación: Claude recuerda todo lo que se habló ahí." icon="history" onClose={onClose}
       footer={<><span className="t3" style={{ fontSize: 12 }}>{list ? `${list.length} conversación${list.length === 1 ? '' : 'es'}` : ''}</span><div className="grow" /><Button icon="plus" onClick={onNew}>Nueva conversación</Button></>}>
-      <TextInput icon="search" placeholder="Buscar por título o mensaje…" value={q} onChange={setQ} autoFocus clearable width="100%" />
+      <TextInput icon="search" placeholder="Buscar por título o mensaje…" value={q} onChange={setQ} autoFocus={!matchMedia('(pointer: coarse)').matches} clearable width="100%" />
       <div className="hist-list">
         {!list ? <div className="row t3" style={{ gap: 8, padding: 14 }}><Spinner size={12} />Buscando conversaciones…</div>
           : !shown.length ? <div className="t3" style={{ padding: 14, fontSize: 12.5 }}>{list.length ? 'Ninguna coincide.' : 'Todavía no hay conversaciones guardadas en este proyecto.'}</div>

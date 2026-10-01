@@ -4,6 +4,7 @@ import WebKit
 /// La pantalla de la app: un WKWebView con la interfaz, servida por SchemeHandler y conectada a lo nativo por Bridge.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private(set) var webView: WKWebView!
+    private let backHint = UIImageView(image: UIImage(systemName: "chevron.backward.circle.fill"))
     private let schemes = SchemeHandler()
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
@@ -57,6 +58,14 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     override func viewDidLoad() {
         super.viewDidLoad()
         load()
+        let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgePan(_:)))
+        edge.edges = .left
+        view.addGestureRecognizer(edge)
+        backHint.tintColor = UIColor(white: 1, alpha: 0.92)
+        backHint.frame = CGRect(x: 0, y: 0, width: 38, height: 38)
+        backHint.alpha = 0
+        backHint.isUserInteractionEnabled = false
+        view.addSubview(backHint)
         if Self.diagMode || Self.argument("-OATest") != nil {
             // Si la prueba se traba, igual termina (la integración continua espera el resultado).
             let limit: Double = Self.diagMode ? 170 : 900
@@ -70,6 +79,24 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
+
+    /// Volver deslizando desde el borde izquierdo, como en las apps de iOS: la página decide qué es volver (__oaBack).
+    @objc private func edgePan(_ g: UIScreenEdgePanGestureRecognizer) {
+        let x = g.translation(in: view).x
+        let ready = x > 80 || (x > 30 && g.velocity(in: view).x > 700)
+        switch g.state {
+        case .began, .changed:
+            backHint.center = CGPoint(x: 8 + min(x, 96) / 2, y: g.location(in: view).y)
+            backHint.alpha = min(1, x / 70)
+            backHint.transform = ready ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity
+        default:
+            if g.state == .ended && ready { webView.evaluateJavaScript("window.__oaBack && window.__oaBack()", completionHandler: nil) }
+            UIView.animate(withDuration: 0.2) {
+                self.backHint.alpha = 0
+                self.backHint.transform = .identity
+            }
+        }
+    }
 
     /// Evento de lo nativo para la página (pause, resume, memory…), como window.__oaNativeEvent en Android.
     func emit(_ name: String, _ data: Any? = nil) {

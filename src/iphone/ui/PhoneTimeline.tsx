@@ -184,6 +184,7 @@ export default function PhoneTimeline(p: Props) {
             <div key={tr.id} className={`tlp-track ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * ROW }}>
               <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}>
                 <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={15} />
+                <span className="tlp-trk-name">{tr.name}</span>
               </button>
               {tr.clips.map((c) => {
                 const on = p.sel.includes(c.id)

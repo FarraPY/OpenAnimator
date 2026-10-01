@@ -215,12 +215,12 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     if (text) mutate((d) => { d.notes = [...(d.notes || []), { id: uid('n'), t: +tRef.current.toFixed(3), text }] })
   }
 
-  if (!project || !tl) return <><TopBar left={<Tap icon="chevron-left" label="Volver" onClick={onClose} />} /><div className="ph-center"><Spinner size={22} /><span className="t3">Abriendo el proyecto…</span></div></>
+  if (!project || !tl) return <><TopBar left={<Tap icon="chevron-left" label="Volver" onClick={onClose} back />} /><div className="ph-center"><Spinner size={22} /><span className="t3">Abriendo el proyecto…</span></div></>
 
   const ar = project.height / project.width
   return (
     <div className={`ed ${full ? 'full' : ''}`}>
-      <TopBar left={<Tap icon="chevron-left" label="Proyectos" onClick={onClose} />}
+      <TopBar left={<Tap icon="chevron-left" label="Proyectos" onClick={onClose} back />}
         title={<button className="ed-name" onClick={() => setMenu(true)}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={14} /></button>}
         right={<>
           <Tap icon="undo" label="Deshacer" onClick={undo} disabled={!hist.current.past.length} />

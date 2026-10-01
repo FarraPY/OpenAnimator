@@ -61,7 +61,7 @@ html.phone code { font: 13px var(--mono); background: rgba(255, 255, 255, .07); 
 @keyframes toastDrop { from { transform: translateY(-16px); opacity: 0 } }
 
 /* ── hoja inferior y acciones ─────────────────────────────────────────── */
-.sheet-back { position: fixed; inset: 0; z-index: 600; background: rgba(0, 0, 0, .5); display: flex; align-items: flex-end; animation: fadeIn .2s; }
+.sheet-back { position: fixed; inset: 0 0 auto; height: var(--vvh); z-index: 600; background: rgba(0, 0, 0, .5); display: flex; align-items: flex-end; animation: fadeIn .2s; }
 .sheet { width: 100%; max-height: calc(var(--vvh) - var(--safe-t) - 24px); display: flex; flex-direction: column; background: #17181d; border-radius: 22px 22px 0 0;
   border-top: 1px solid var(--line-2); box-shadow: 0 -10px 40px rgba(0, 0, 0, .5); animation: sheetUp .28s var(--ease); transition: transform .2s var(--ease); }
 .sheet.tall { height: calc(var(--vvh) - var(--safe-t) - 24px); }
@@ -181,7 +181,8 @@ html.phone .perm-card .b { height: 38px; }
 .tlp-note { position: absolute; top: 4px; width: 18px; height: 18px; margin-left: -9px; border: 0; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px var(--bg-0); padding: 0; }
 .tlp-track { position: absolute; left: 0; right: 0; height: 54px; }
 .tlp-track.off .tlp-clip { opacity: .35; }
-.tlp-trk { position: sticky; left: 8px; top: 13px; z-index: 2; width: 28px; height: 28px; margin-top: 13px; border: 0; border-radius: 8px; background: rgba(20, 21, 26, .9); display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+.tlp-trk { position: sticky; left: 8px; top: 13px; z-index: 2; max-width: 116px; height: 28px; margin-top: 13px; padding: 0 9px 0 7px; border: 0; border-radius: 8px; background: rgba(20, 21, 26, .9); display: flex; align-items: center; gap: 5px; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+.tlp-trk-name { min-width: 0; font-size: 12px; font-weight: 600; color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tlp-clip { position: absolute; top: 6px; height: 42px; border-radius: 9px; background: color-mix(in srgb, var(--c) 32%, #121318); border: 1.5px solid color-mix(in srgb, var(--c) 70%, transparent);
   overflow: hidden; display: flex; align-items: center; padding: 0 8px; touch-action: pan-x pan-y; }
 .tlp-clip.on { border: 2px solid #fff; background: color-mix(in srgb, var(--c) 45%, #121318); overflow: visible; z-index: 1; touch-action: none; box-shadow: 0 4px 14px rgba(0, 0, 0, .5); }
@@ -254,7 +255,7 @@ html.phone .switch { width: 51px; height: 31px; } html.phone .switch span { widt
 html.phone .menu { padding: 8px; border-radius: 16px; min-width: 250px; max-height: 70vh; }
 html.phone .menu-item { min-height: 46px; font-size: 15.5px; gap: 12px; border-radius: 10px; }
 html.phone .menu-desc { font-size: 13px; }
-html.phone .modal-backdrop { align-items: end; }
+html.phone .modal-backdrop { align-items: end; bottom: auto; height: var(--vvh); }
 html.phone .modal { width: 100vw; max-width: 100vw; max-height: calc(var(--vvh) - var(--safe-t) - 20px); border-radius: 22px 22px 0 0; animation: sheetUp .28s var(--ease); }
 html.phone .modal-head { padding: 18px 14px 12px 18px; }
 html.phone .modal-title { font-size: 18px; }

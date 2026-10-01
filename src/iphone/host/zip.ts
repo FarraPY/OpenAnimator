@@ -4,13 +4,17 @@ import type { WebFS } from './webfs'
 
 const STORED = /\.(mp4|mov|m4v|webm|mkv|mp3|m4a|aac|ogg|opus|flac|jpg|jpeg|png|webp|gif|avif|zip|woff2?)$/i
 
+/**
+ * zip.import, como Zip.java en Android: el proyecto puede venir con project.json en la raíz o dentro de una sola carpeta
+ * (así exportan la PC, la tablet y el iPhone: <id>/…); esa carpeta se saca. false si no hay project.json.
+ */
 export async function unzipTo(fs: WebFS, zipPath: string, dest: string, ev: (e: any) => void) {
   const total = fs.stat(zipPath)?.size || 0
   const writes: Promise<void>[] = []
   let files = 0
   const unzip = new Unzip((file) => {
     const name = file.name.replace(/\\/g, '/')
-    if (name.endsWith('/') || name.split('/').includes('..') || name.startsWith('/')) { file.ondata = () => {}; file.start(); return }
+    if (name.endsWith('/') || name.split('/').includes('..') || name.startsWith('/') || name.startsWith('__MACOSX/') || /(^|\/)\.DS_Store$/.test(name)) { file.ondata = () => {}; file.start(); return }
     const parts: Uint8Array[] = []
     file.ondata = (err, chunk, final) => {
       if (err) throw err
@@ -30,7 +34,15 @@ export async function unzipTo(fs: WebFS, zipPath: string, dest: string, ev: (e: 
     ev({ event: 'progress', done, total })
   }
   await Promise.all(writes)
-  return { files }
+  if (fs.exists(`${dest}/project.json`)) return true
+  const top = fs.list(dest).filter((e) => e.dir && fs.exists(`${dest}/${e.name}/project.json`))
+  if (top.length !== 1) return false
+  // La carpeta de arriba pasa a ser el proyecto (lo demás que traía el zip afuera de ella no va).
+  fs.rename(`${dest}/${top[0].name}`, `${dest}-raiz`)
+  fs.delete(dest)
+  fs.rename(`${dest}-raiz`, dest)
+  await fs.flush()
+  return files > 0
 }
 
 export async function zipDir(fs: WebFS, dir: string, out: string, prefix: string, skip: string, ev: (e: any) => void) {
