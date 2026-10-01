@@ -1,34 +1,35 @@
 import UIKit
 
-/// Liquid Glass de iOS 26 para la columna de nombres de las pistas del timeline: cubre todo ese costado, con una pieza de
-/// vidrio por pista (apenas teñida de su color, con el ícono de ese color y el nombre) y otra, sin teñir, en la esquina
-/// de la regla. La página dice dónde va cada pista (glass.set); acá sólo se dibuja: los toques pasan a la página, que
-/// tiene ahí su propia columna, transparente. Antes de iOS 26 no hace nada y la página dibuja su vidrio con CSS.
+/// Liquid Glass de iOS 26 para la columna de nombres de las pistas del timeline: un solo vidrio que cubre todo ese
+/// costado (abajo de la regla), sin cortes entre pistas; cada pista lo tiñe apenas con su color y lleva su ícono de ese
+/// color, el nombre y una línea fina abajo. La página dice dónde va cada pista (glass.set) y cómo se ve (vidrio
+/// transparente o esmerilado, cuánto color); acá sólo se dibuja: los toques pasan a la página, que tiene ahí su propia
+/// columna, transparente. Antes de iOS 26 no hace nada y la página dibuja su vidrio con CSS.
 final class GlassOverlay {
-    private final class Cell {
-        let view = UIVisualEffectView(effect: nil)
+    private final class Row {
+        let wash = UIView()
         let icon = UIImageView()
         let label = UILabel()
-        var color = ""
+        let line = UIView()
+        var views: [UIView] { [wash, icon, label, line] }
     }
 
     private let container = UIView()
-    private let corner = UIVisualEffectView(effect: nil)
-    private let tracks = UIView() // abajo de la regla: una pista que sube queda detrás de ella
-    private var cells: [String: Cell] = [:]
+    private let sheet = UIVisualEffectView(effect: nil)
+    private var rows: [String: Row] = [:]
+    private var style = ""
 
     init(in host: UIView) {
         container.isUserInteractionEnabled = false
         container.isHidden = true
-        tracks.clipsToBounds = true
-        container.addSubview(corner)
-        container.addSubview(tracks)
+        container.clipsToBounds = true // abajo de la regla: una pista que sube queda detrás de ella
+        container.addSubview(sheet)
         host.addSubview(container)
     }
 
-    /// {clip: {x, y, w, h}, ruler, items: [{id, name, kind, color: "rgb(…)", x, y, w, h}]} en puntos de la pantalla (clip:
-    /// lo visible del timeline, con la regla arriba, de `ruler` de alto; cada item: el lugar del nombre de una pista).
-    /// Sin items, se esconde. Devuelve si hay Liquid Glass.
+    /// {clip: {x, y, w, h}, ruler, items: [{id, name, kind, color: "rgb(…)", x, y, w, h}], style: "clear" | "regular",
+    /// tint: 0…1} en puntos de la pantalla (clip: lo visible del timeline, con la regla arriba, de `ruler` de alto; cada
+    /// item: el lugar del nombre de una pista). Sin items, se esconde. Devuelve si hay Liquid Glass.
     func set(_ a: [String: Any]) -> Bool {
         guard #available(iOS 26.0, *) else { return false }
         let items = a["items"] as? [[String: Any]] ?? []
@@ -36,41 +37,43 @@ final class GlassOverlay {
             container.isHidden = true
             return true
         }
-        if corner.effect == nil { corner.effect = UIGlassEffect() }
+        let style = a["style"] as? String == "regular" ? "regular" : "clear"
+        if style != self.style {
+            sheet.effect = UIGlassEffect(style: style == "regular" ? .regular : .clear)
+            self.style = style
+        }
         let num = { (d: [String: Any], k: String) -> CGFloat in CGFloat((d[k] as? NSNumber)?.doubleValue ?? 0) }
-        let ruler = num(a, "ruler")
+        let tint = (a["tint"] as? NSNumber).map { CGFloat($0.doubleValue) } ?? 0.12
+        let hair = 1 / max(1, container.traitCollection.displayScale)
         UIView.performWithoutAnimation {
-            let o = CGPoint(x: num(clip, "x"), y: num(clip, "y"))
-            let colW = (items.map { num($0, "x") + num($0, "w") }.max() ?? 116) - o.x
-            container.frame = CGRect(x: o.x, y: o.y, width: colW, height: num(clip, "h"))
+            // Arriba a la izquierda del timeline y del ancho de la columna: si el timeline rebota en un borde, el
+            // vidrio no se mueve ni se estira.
+            let top = num(clip, "y") + num(a, "ruler")
+            let colW = items.map { num($0, "w") }.max() ?? 116
+            container.frame = CGRect(x: num(clip, "x"), y: top, width: colW, height: max(0, num(clip, "y") + num(clip, "h") - top))
             container.superview?.bringSubviewToFront(container)
-            corner.frame = CGRect(x: 0, y: 0, width: colW, height: ruler)
-            tracks.frame = CGRect(x: 0, y: ruler, width: colW, height: max(0, container.bounds.height - ruler))
+            let bottom = (items.map { num($0, "y") + num($0, "h") }.max() ?? top) - top
+            sheet.frame = CGRect(x: 0, y: 0, width: colW, height: max(0, min(container.bounds.height, bottom)))
             var seen = Set<String>()
-            for it in items {
+            for (n, it) in items.enumerated() {
                 let id = it["id"] as? String ?? ""
                 seen.insert(id)
-                let cell = cells[id] ?? add(id)
-                let rgb = it["color"] as? String ?? ""
-                if cell.color != rgb {
-                    let color = GlassOverlay.color(rgb)
-                    let glass = UIGlassEffect()
-                    glass.tintColor = color.withAlphaComponent(0.2)
-                    cell.view.effect = glass
-                    cell.icon.tintColor = color
-                    cell.color = rgb
-                }
-                // Todo el alto de la pista menos la línea que la separa de la siguiente.
-                cell.view.frame = CGRect(x: 0, y: num(it, "y") - o.y - ruler, width: colW, height: max(0, num(it, "h") - 1))
-                let h = cell.view.bounds.height
-                cell.icon.image = UIImage(systemName: GlassOverlay.symbol(it["kind"] as? String), withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
-                cell.icon.frame = CGRect(x: 13, y: (h - 22) / 2, width: 22, height: 22)
-                cell.label.text = it["name"] as? String
-                cell.label.frame = CGRect(x: 42, y: 0, width: max(0, colW - 48), height: h)
+                let row = rows[id] ?? add(id)
+                let color = GlassOverlay.color(it["color"] as? String ?? "")
+                let y = num(it, "y") - top, h = num(it, "h")
+                row.wash.backgroundColor = color.withAlphaComponent(tint)
+                row.wash.frame = CGRect(x: 0, y: y, width: colW, height: h)
+                row.icon.image = UIImage(systemName: GlassOverlay.symbol(it["kind"] as? String), withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold))
+                row.icon.tintColor = color
+                row.icon.frame = CGRect(x: 13, y: y + (h - 22) / 2, width: 22, height: 22)
+                row.label.text = it["name"] as? String
+                row.label.frame = CGRect(x: 42, y: y, width: max(0, colW - 48), height: h)
+                row.line.isHidden = n == items.count - 1
+                row.line.frame = CGRect(x: 0, y: y + h - hair, width: colW, height: hair)
             }
-            for (id, cell) in cells where !seen.contains(id) {
-                cell.view.removeFromSuperview()
-                cells[id] = nil
+            for (id, row) in rows where !seen.contains(id) {
+                row.views.forEach { $0.removeFromSuperview() }
+                rows[id] = nil
             }
             container.isHidden = false
         }
@@ -79,18 +82,17 @@ final class GlassOverlay {
 
     func hide() { container.isHidden = true }
 
-    private func add(_ id: String) -> Cell {
-        let cell = Cell()
-        cell.icon.contentMode = .scaleAspectFit
-        cell.label.font = .systemFont(ofSize: 15, weight: .semibold)
-        cell.label.textColor = .white
-        cell.label.adjustsFontSizeToFitWidth = true
-        cell.label.minimumScaleFactor = 0.75
-        cell.view.contentView.addSubview(cell.icon)
-        cell.view.contentView.addSubview(cell.label)
-        tracks.addSubview(cell.view)
-        cells[id] = cell
-        return cell
+    private func add(_ id: String) -> Row {
+        let row = Row()
+        row.icon.contentMode = .scaleAspectFit
+        row.label.font = .systemFont(ofSize: 15, weight: .semibold)
+        row.label.textColor = .white
+        row.label.adjustsFontSizeToFitWidth = true
+        row.label.minimumScaleFactor = 0.75
+        row.line.backgroundColor = UIColor.white.withAlphaComponent(0.1)
+        row.views.forEach { sheet.contentView.addSubview($0) }
+        rows[id] = row
+        return row
     }
 
     /// "rgb(123, 108, 255)" (lo que da getComputedStyle) → UIColor.

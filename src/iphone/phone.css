@@ -173,7 +173,8 @@ html.phone .perm-card .b { height: 38px; }
 
 /* ── timeline del teléfono ────────────────────────────────────────────── */
 .tlp { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tlp-scroll { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-x pan-y; scrollbar-width: none; }
+/* Sin rebote en los bordes: la columna de pistas (y su vidrio) se corría y se estiraba al llegar al principio o al final. */
+.tlp-scroll { flex: 1; min-height: 0; overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: none; touch-action: pan-x pan-y; scrollbar-width: none; }
 .tlp-scroll::-webkit-scrollbar { display: none; }
 .tlp-content { position: relative; }
 .tlp-ruler { position: sticky; top: 0; z-index: 3; height: 26px; background: var(--bg-0); border-bottom: 1px solid var(--line); }

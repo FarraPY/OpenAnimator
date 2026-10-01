@@ -13,6 +13,15 @@ import { Actions, Group, Row, Sheet } from './PhoneApp'
 import { isNative, nativeCall } from '../host/native'
 
 const RULER = 26
+
+/** Cómo se ve el vidrio de la columna de pistas (GlassOverlay.swift): transparente o esmerilado y cuánto color de cada
+ *  pista. Mientras se prueba se elige en Ajustes › Depuración. */
+export type GlassLook = { style: 'clear' | 'regular'; tint: number }
+export function glassLook(): GlassLook {
+  const d: GlassLook = { style: 'clear', tint: 0.12 }
+  try { return { ...d, ...JSON.parse(localStorage.getItem('oa.glass') || '{}') } } catch { return d }
+}
+export const setGlassLook = (l: GlassLook) => { try { localStorage.setItem('oa.glass', JSON.stringify(l)) } catch { /* sin almacenamiento */ } }
 const STEPS = [1 / 30, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 const isImage = (src: string) => /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(src)
 const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')
@@ -47,7 +56,7 @@ export default function PhoneTimeline(p: Props) {
   const half = vw / 2
   const width = half * 2 + tl.duration * pps + 80
   // Las pistas llenan el alto que hay (antes quedaba espacio vacío abajo): entre 54 y 112 px cada una.
-  const row = clamp(Math.floor((vh - RULER - 10) / Math.max(1, tl.tracks.length)), 54, 112)
+  const row = clamp(Math.floor((vh - RULER - 12) / Math.max(1, tl.tracks.length)), 54, 112)
 
   useEffect(() => {
     const el = sc.current!
@@ -183,6 +192,7 @@ export default function PhoneTimeline(p: Props) {
   const [glass, setGlass] = useState(false)
   useEffect(() => {
     if (!isNative()) return
+    const look = glassLook()
     let raf = 0, last = ''
     const sync = () => {
       raf = 0
@@ -197,7 +207,7 @@ export default function PhoneTimeline(p: Props) {
       const msg = JSON.stringify([clip, items])
       if (msg === last) return
       last = msg
-      nativeCall<boolean>('glass.set', { clip, ruler: RULER, items }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
+      nativeCall<boolean>('glass.set', { clip, ruler: RULER, items, ...look }).then((ok) => setGlass(!!ok && items.length > 0)).catch(() => {})
     }
     const later = () => { if (!raf) raf = requestAnimationFrame(sync) }
     later()

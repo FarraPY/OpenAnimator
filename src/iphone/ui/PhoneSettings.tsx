@@ -14,6 +14,7 @@ import { Button, Progress, Select, Spinner, Switch, TextArea, TextInput } from '
 import { Chips, Group, Row, Tap, TopBar } from './PhoneApp'
 import { isNative, nativeCall } from '../host/native'
 import { logVerbose, setLogVerbose } from '../host/applog'
+import { glassLook, setGlassLook } from './PhoneTimeline'
 
 const SECTIONS: Record<string, string> = { ia: 'Claude', plugins: 'Plugins de IA', storage: 'Almacenamiento', debug: 'Depuración', about: 'Acerca de' }
 const ACCENTS: Array<{ id: Settings['ui']['accent']; c: string }> = [
@@ -34,7 +35,7 @@ export default function PhoneSettings({ section, onBack }: { section?: string; o
   return (
     <>
       <TopBar left={<Tap icon="chevron-left" label="Volver" onClick={back} back />} title={sec ? SECTIONS[sec] : 'Ajustes'} />
-      <div className="ph-scroll">
+      <div className="ph-scroll" key={sec || ''}>
         {!sec ? <Main open={setSec} /> : sec === 'ia' ? <ClaudeSection /> : sec === 'plugins' ? <div className="ph-desk"><PluginsSettings /></div> : sec === 'storage' ? <StorageSection /> : sec === 'debug' ? <DebugSection /> : <AboutSection />}
       </div>
     </>
@@ -225,6 +226,8 @@ function DebugSection() {
   const [url, setUrl] = useState('')
   const [tail, setTail] = useState<string | null>(null)
   const [verbose, setVerbose] = useState(logVerbose())
+  const [look, setLook] = useState(glassLook())
+  const pickLook = (l: typeof look) => { setLook(l); setGlassLook(l) }
   const refresh = () => nativeCall<LogStatus>('log.status').then((x) => { setSt(x); setUrl((u) => u || x.remote || '') }).catch(() => {})
   useEffect(() => { refresh(); const t = setInterval(refresh, 2000); return () => clearInterval(t) }, [])
   const live = async (on: boolean) => {
@@ -257,6 +260,10 @@ function DebugSection() {
             </span>
           </span>
         </div>
+      </Group>
+      <Group title="Vidrio de las pistas (prueba)" foot="Cómo se ve el Liquid Glass de la columna de pistas del timeline. Probá las opciones (se ve al volver al editor) y contale a Claude cuál te gusta.">
+        <Row label="Vidrio" stack><Chips value={look.style} onChange={(v) => pickLook({ ...look, style: v })} options={[{ value: 'clear' as const, label: 'Transparente' }, { value: 'regular' as const, label: 'Esmerilado' }]} /></Row>
+        <Row label="Color de cada pista" stack><Chips value={look.tint} onChange={(v) => pickLook({ ...look, tint: v })} options={[{ value: 0, label: 'Sin color' }, { value: 0.12, label: 'Leve' }, { value: 0.2, label: 'Medio' }, { value: 0.3, label: 'Fuerte' }]} /></Row>
       </Group>
       {tail != null && <Group title="Lo último"><div className="prow2"><pre className="viewer-text" style={{ maxHeight: '60vh', overflow: 'auto', fontSize: 11 }}>{tail}</pre></div></Group>}
     </>
