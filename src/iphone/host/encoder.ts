@@ -2,8 +2,9 @@
  * Codificador de la exportación (enc.* del puente, como Encoder.java en Android): WebCodecs (codificador de hardware
  * del iPhone) + Mediabunny para armar el MP4. El archivo se escribe en OPFS a medida que se codifica (nunca entero en
  * memoria). El audio se mezcla en ventanas de 30 s (audio.ts) mientras se capturan los fotogramas.
- * En la app, si WebCodecs falla, la exportación se repite con AVFoundation (ios/OpenAnimator/NativeEncoder.swift:
- * fotogramas en JPEG, audio en PCM) y las siguientes van directo por ahí.
+ * En la app siempre va por AVFoundation (ios/OpenAnimator/NativeEncoder.swift): los fotogramas le llegan de la captura de
+ * iOS (NativeCapture.swift, sin pasar por la página) o, con el método compatible, en JPEG; el audio, en PCM. WebCodecs
+ * queda para Safari.
  */
 import { AudioSample, AudioSampleSource, CustomVideoEncoder, EncodedPacket, Mp4OutputFormat, Output, StreamTarget, VideoSample, VideoSampleSource, canEncodeAudio, canEncodeVideo, registerEncoder } from 'mediabunny'
 import type { WebFS } from './webfs'
@@ -69,7 +70,7 @@ export function start(fs: WebFS, a: { out: string; width: number; height: number
   if (job && !job.cancelled) throw new Error('Ya hay una exportación en curso')
   const j: Job = { out: a.out, width: a.width, height: a.height, fps: a.fps, frames: 0, written: 0, cancelled: false, ready: Promise.resolve(), fs }
   stalls = 0; packets = 0; webcodecsError = ''
-  if (avf) {
+  if (avf || isNative()) {
     Object.assign(j, { native: true, withAudio: !!a.audio })
     j.ready = nativeCall('venc.start', a)
     j.ready.catch((e) => { j.error = e })
@@ -122,7 +123,8 @@ export async function frame(a: { bitmap?: ImageBitmap; data?: string }) {
   j.frames++
   return true
 }
-export const frames = async () => job?.frames ?? 0
+/** Los que ya están en el video (con la captura de iOS los cuenta AVFoundation: no pasan por acá). */
+export const frames = async () => (job?.native ? nativeCall<number>('venc.frames') : job?.frames ?? 0)
 
 /**
  * enc.mix: mezcla el audio de [start, end] en ventanas de 30 s (volumen y fundidos de cada clip, remuestreado a
@@ -167,10 +169,10 @@ export async function finish(_fs: WebFS) {
   await j.ready
   if (j.error) throw j.error
   if (j.native) {
-    const r = await nativeCall<{ size: number }>('venc.finish')
+    const r = await nativeCall<{ size: number; frames: number; duration: number }>('venc.finish')
     j.fs.noteFile(j.out, r.size)
     job = null
-    return { path: j.out, size: r.size, frames: j.frames, duration: j.frames / j.fps, native: true }
+    return { path: j.out, size: r.size, frames: r.frames, duration: r.duration, native: true }
   }
   try {
     await j.output!.finalize()

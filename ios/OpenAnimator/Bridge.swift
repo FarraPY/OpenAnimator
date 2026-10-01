@@ -93,12 +93,18 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "pick": pick(a, replyHandler)
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
-        case "venc.start", "venc.frame", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
+        case "venc.start", "venc.frame", "venc.frames", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)
         case "glass.layout": replyHandler(controller?.chrome.layout(a["items"] as? [[String: Any]] ?? []) ?? false, nil)
         case "screen.full":
             controller?.setFullScreen(a["on"] as? Bool ?? false, landscape: a["landscape"] as? Bool ?? false)
             replyHandler(true, nil)
+        case "cap.start":
+            if let c = controller?.capture { c.start(a, replyHandler) } else { replyHandler(nil, "Sin captura") }
+        case "cap.frame":
+            if let c = controller?.capture { c.frame(a, replyHandler) } else { replyHandler(nil, "Sin captura") }
+        case "cap.stop": replyHandler(controller?.capture.stop() ?? [:], nil)
+        case "cap.close": controller?.capture.close(); replyHandler(true, nil)
         case "preview.open":
             controller?.preview.open(a["url"] as? String ?? "", width: (a["width"] as? NSNumber)?.intValue ?? 1920)
             replyHandler(true, nil)

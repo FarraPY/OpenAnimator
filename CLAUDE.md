@@ -157,7 +157,14 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   punta (memoria de cada proceso, interfaz + video): inicio 616 MB → 93 + 46, SVG ~1,3 GB → ~300 + 200, CSS 3D más de
   2 GB (se caía) → ~400 + 250, sin cierres. Es otro proceso: si iOS lo cierra se rehace sólo el video
   (tres veces en 30 s: se deja hasta que se mueva el cursor). Los controles de pantalla completa son vidrio de iOS sobre
-  el video. Pendiente: los fotogramas para Claude y la exportación del iPhone siguen con compositores en la página.
+  el video. La exportación hace lo mismo (`NativeCapture.swift`, `cap.*` del puente; en exporter.ts es el método 'gpu',
+  «captura de iOS»): el compositor con `capture=1` en otra vista web de video ÷ densidad puntos (1920×1080 → 640×360) con
+  escala de página 1/densidad, así WebKit dibuja justo a la resolución del video; `__oaCapReady/Done/Error` avisan por
+  `messageHandlers.oaCap` y cada fotograma va de `takeSnapshot` directo a AVFoundation (`NativeEncoder.appendCaptured`;
+  en la app el codificador siempre es AVFoundation). La vista va debajo de la página detrás de la ventana de exportar,
+  achicada con una transformación (fuera de la pantalla WebKit no la dibuja). Antes, «captura compatible» iba a 1,3 fps y
+  con «Prueba de render» la interfaz pasaba los 2 GB en el fotograma 78. Pendiente: los fotogramas para Claude siguen
+  con el compositor de la página.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
   go-ios (`go-ios/ios.exe`) y pymobiledevice3 (venv `pmd3/`). Pasos: `ios tunnel start --userspace` (sin administrador);
   montar la imagen de desarrollador con `pymobiledevice3 mounter mount-personalized <dmg> <trustcache> <BuildManifest>`

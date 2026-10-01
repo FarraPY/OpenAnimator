@@ -12,6 +12,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private let schemes = SchemeHandler()
     /// La vista previa del editor, en su propia vista web (la ubica la página: preview.*).
     private(set) lazy var preview = NativePreview(schemes: schemes)
+    /// La captura de la exportación, en su propia vista web (cap.*).
+    private(set) lazy var capture = NativeCapture(schemes: schemes)
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
     /// Pruebas en el simulador: -OATest e2e corre src/iphone/test/e2e.ts; -OADev '{"env":…}' usa una API de mentira.
@@ -59,6 +61,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         // Abajo el fondo y el vidrio; arriba la página, transparente.
         let root = UIView()
         chrome.embed(preview.view)
+        chrome.embed(capture.view)
         root.addSubview(chrome.view)
         web.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         root.addSubview(web)
@@ -69,6 +72,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         super.viewDidLayoutSubviews()
         chrome.resize(view.bounds)
         preview.view.frame = view.bounds
+        capture.view.frame = view.bounds
         webView.frame = view.bounds
     }
 
@@ -97,6 +101,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         chrome.clear()
         menus.layout([])
         preview.close()
+        capture.close()
         let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : crashed ? "?crashed=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }

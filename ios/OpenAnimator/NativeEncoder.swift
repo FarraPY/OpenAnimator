@@ -2,8 +2,8 @@ import AVFoundation
 import CoreGraphics
 import ImageIO
 
-/// Exportación con AVFoundation (el codificador de hardware de iOS) para cuando el de WebCodecs no anda en el equipo:
-/// los fotogramas llegan como JPEG y el audio como PCM. El video (AVAssetWriter) y el audio (AVAudioFile, AAC) van a dos
+/// Exportación con AVFoundation (el codificador de hardware de iOS), la de la app: los fotogramas llegan de la captura de
+/// iOS (NativeCapture, appendCaptured: sin pasar por la página) o, con el método compatible, como JPEG; el audio, como PCM. El video (AVAssetWriter) y el audio (AVAudioFile, AAC) van a dos
 /// archivos temporales y al final se juntan sin recodificar (AVAssetExportSession, passthrough): ninguno espera al otro.
 final class NativeEncoder {
     struct Failure: LocalizedError { let errorDescription: String? }
@@ -45,6 +45,8 @@ final class NativeEncoder {
                     guard let job = NativeEncoder.current else { throw NativeEncoder.fail("No hay una exportación en curso") }
                     try job.appendFrame(a)
                     respond(.success(Double(job.frames)))
+                case "venc.frames":
+                    respond(.success(Double(NativeEncoder.current?.frames ?? 0)))
                 case "venc.finish":
                     guard let job = NativeEncoder.current else { throw NativeEncoder.fail("No hay una exportación en curso") }
                     NativeEncoder.current = nil
@@ -114,11 +116,23 @@ final class NativeEncoder {
         }
     }
 
+    /// Una imagen de la captura de iOS al codificador, en orden (en la cola del video). done: nil o el error.
+    static func appendCaptured(_ image: CGImage, _ done: @escaping (String?) -> Void) {
+        video.async {
+            guard let job = current else { done("No hay una exportación en curso"); return }
+            do { try job.appendImage(image); done(nil) } catch { done((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) }
+        }
+    }
+
     /// Un fotograma (JPEG en base64) al codificador, en orden.
     private func appendFrame(_ a: [String: Any]) throws {
         guard let b64 = a["data"] as? String, let jpeg = Data(base64Encoded: b64),
               let src = CGImageSourceCreateWithData(jpeg as CFData, nil),
               let image = CGImageSourceCreateImageAtIndex(src, 0, nil) else { throw NativeEncoder.fail("Fotograma inválido") }
+        try appendImage(image)
+    }
+
+    private func appendImage(_ image: CGImage) throws {
         guard let pool = adaptor.pixelBufferPool else { throw NativeEncoder.fail(writer.error?.localizedDescription ?? "El codificador de iOS no arrancó") }
         var buffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let pb = buffer else { throw NativeEncoder.fail("Sin memoria para el fotograma") }

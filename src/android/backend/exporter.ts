@@ -61,6 +61,8 @@ type Diag = {
   video?: string; fps?: number
   cap?: {
     mode?: string; frames?: number; msPerFrame?: number; lost?: number; ahead?: number; page?: { n: number; ms: number; max: number }
+    // iPhone (NativeCapture.swift)
+    snapMs?: number; encMs?: number; maxMs?: number
     framesAt?: number[]; dropsAt?: number[]; screenHz?: number; displayHz?: number; view?: string
     encoder?: {
       images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
@@ -91,6 +93,8 @@ const msf = (ms?: number) => (ms == null || !isFinite(ms) ? '—' : `${Math.roun
 class Cancelled extends Error {}
 type Method = 'gpu' | 'draw' | 'compat'
 const LABEL: Record<Method, string> = { gpu: 'captura GPU', draw: 'captura directa', compat: 'captura compatible' }
+/** En el iPhone la de GPU es la de iOS (NativeCapture.swift). */
+const label = (m: Method) => (m === 'gpu' && host().kind === 'web' ? 'captura de iOS' : LABEL[m])
 const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 const IMG = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const SR = 48000
@@ -221,12 +225,14 @@ class Export {
       lines.push(`OpenAnimator ${a.versionName} (${a.versionCode}) · ${a.manufacturer || ''} ${a.model || ''} · ${system}${a.webview || 'WebView ?'}`.replace(/\s+/g, ' '))
     } catch { /* ignore */ }
     if (d.video) lines.push(`Video: ${d.video}`)
-    if (d.used.length) lines.push(`Captura: ${d.used.map((x) => LABEL[x]).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
+    if (d.used.length) lines.push(`Captura: ${d.used.map((x) => label(x)).join(' → ')}${d.fps ? ` · ${d.fps.toFixed(1).replace('.', ',')} fps` : ''}`)
     lines.push(`Tiempos: preparar ${secs(m.preparar)} · abrir la captura ${secs(m.abrir)} (se esperó ${secs(m.espera)}) · fotogramas ${secs(m.fotogramas)} · audio en paralelo ${secs(m.audio)}${m.esperaAudio != null && m.esperaAudio >= 50 ? ` (al final se esperó ${secs(m.esperaAudio)})` : ''} · terminar ${secs(m.terminar)}`)
     const c = d.cap, pg = c?.page
     // Reordenando, lo que se ajusta es cuántos pedidos van en camino a la vez; en orden, cuántos por adelantado.
     const inFlight = !!c?.encoder?.reorder
     if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · ${inFlight ? 'en camino a la vez' : 'por adelantado'} ${c.ahead ?? '—'}` : ''}`)
+    // iPhone (NativeCapture.swift): cuánto tarda la imagen de cada fotograma y pasarla al codificador.
+    if (c?.mode === 'ios') lines.push(`Captura de iOS: imagen ${msf(c.snapMs)} · al codificador ${msf(c.encMs)} · el fotograma más lento ${msf(c.maxMs)}`)
     if (c?.mode === 'gpu') {
       const hz = (x?: number) => (x ? `${Math.round(x)} Hz` : '—')
       lines.push(`Pantalla: ${hz(c.screenHz)} · pantalla virtual ${hz(c.displayHz)}`)
@@ -277,7 +283,7 @@ class Export {
       const aac = d.audio.encodeMs != null ? ` · codificar a AAC ${secs(d.audio.encodeMs)} (dentro de la mezcla) + ${msf(d.audio.closeMs)} al cerrar` : ''
       lines.push(`Audio: ${d.audio.parts} clip${d.audio.parts === 1 ? '' : 's'}${aac}${d.audio.failed.length ? ` · no se pudieron leer: ${d.audio.failed.join('; ')}` : ''}`)
     }
-    for (const [k, v] of Object.entries(d.why)) lines.push(`Sin ${LABEL[k as Method]}: ${v}`)
+    for (const [k, v] of Object.entries(d.why)) lines.push(`Sin ${label(k as Method)}: ${v}`)
     if (error) lines.push(`Error: ${error}`)
     return lines.join('\n')
   }
@@ -333,13 +339,15 @@ class Export {
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break
-        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${LABEL[m]} en este equipo:`, e) }
+        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${label(m)} en este equipo:`, e) }
       }
       return 'compat' as const
     }
     const tOpen = performance.now()
-    // El iPhone no tiene las capturas de Android (Capture.java): va directo al compositor (con ImageBitmap).
-    const opening = this.opening = openCapture(host().kind === 'web' ? [] : ['gpu', 'draw']).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
+    // En la app del iPhone, la captura de iOS (NativeCapture.swift: otra vista web dibujada justo a la resolución del
+    // video, sus imágenes directo a AVFoundation); en Safari, el compositor de la página (con ImageBitmap).
+    const capModes: Array<'gpu' | 'draw'> = host().kind === 'web' ? (host().call<boolean>('cap.available') ? ['gpu'] : []) : ['gpu', 'draw']
+    const opening = this.opening = openCapture(capModes).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
 
     // El audio se mezcla (en Java, en otro núcleo) mientras se capturan los fotogramas: el MP4 espera su formato
     // en el hilo que escribe, nunca la captura. Si falla, la exportación se corta enseguida.
@@ -368,7 +376,7 @@ class Export {
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
     let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0
-    this.emit({ phase: 'render', message: `Fotograma 1 de ${frames} · ${LABEL[method]}`, done: 0, total: frames })
+    this.emit({ phase: 'render', message: `Fotograma 1 de ${frames} · ${label(method)}`, done: 0, total: frames })
     for (let i = 0; i < frames; i++) {
       this.check()
       if (mixError) throw mixError
@@ -390,7 +398,7 @@ class Export {
           this.check()
           // No anduvo en este equipo (o dejó de andar): se sigue con el método siguiente, desde el primer
           // fotograma que todavía no está en el video.
-          console.warn(`La ${LABEL[method]} falló en el fotograma`, i, e)
+          console.warn(`La ${label(method)} falló en el fotograma`, i, e)
           why[method] = `falló en el fotograma ${i + 1}: ${String(e?.message || e)}`
           try { host().call('cap.close') } catch { /* ignore */ }
           this.emit({ phase: 'render', message: 'Cambiando de método de captura…', done: i, total: frames })
@@ -434,7 +442,7 @@ class Export {
         // Cada tanto, el fotograma que se está codificando (vista previa del diálogo).
         const preview = shot && now - lastPreview > 1200 ? `data:image/jpeg;base64,${shot}` : undefined
         if (preview) lastPreview = now
-        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames} · ${LABEL[method]}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
+        this.emit({ phase: 'render', message: `Fotograma ${i + 1} de ${frames} · ${label(method)}`, done: i + 1, total: frames, fps: rate, eta: (frames - i - 1) / Math.max(0.01, rate), preview })
       }
     }
     if (inflight) await inflight
@@ -453,7 +461,7 @@ class Export {
     // Los últimos fotogramas capturados terminan de codificarse y se cierra la vista de captura.
     if (method !== 'compat') d.cap = await host().callAsync('cap.stop')
     this.check()
-    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => LABEL[m]).join(' + ')}`
+    const encoder = `${info.codec}${info.profile ? ` · ${info.profile}` : ''} · ${[...used].map((m) => label(m)).join(' + ')}`
 
     this.emit({ phase: 'final', message: 'Escribiendo el archivo…', done: 1, total: 1 })
     const res = await host().callAsync<{ path: string; size: number; frames: number; duration: number; audioCloseMs?: number; stalls?: number }>('enc.finish')
