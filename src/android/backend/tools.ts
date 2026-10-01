@@ -146,11 +146,11 @@ export function listSkills() {
     const out: Array<{ name: string; description: string; path: string }> = []
     for (const f of m.ai.filter((x) => /^skills\/[^/]+\/SKILL\.md$/.test(x))) {
       try {
-        const t = await fetch(`/app/ai/${f}`).then((r) => r.text())
+        const t = await fetch(`app/ai/${f}`).then((r) => r.text())
         const fm = /^---\s*\n([\s\S]*?)\n---/.exec(t)?.[1] || ''
         const name = /^name:\s*(.+)$/m.exec(fm)?.[1].trim() || f.split('/')[1]
         const description = /^description:\s*(.+)$/m.exec(fm)?.[1].trim() || ''
-        out.push({ name, description, path: `/app/ai/${f}` })
+        out.push({ name, description, path: `app/ai/${f}` })
       } catch { /* ignore */ }
     }
     return out
@@ -158,7 +158,7 @@ export function listSkills() {
   return skillsCache
 }
 export async function aiGuide() {
-  try { return adaptGuide(await fetch('/app/ai/CLAUDE.md').then((r) => r.text())) } catch { return '' }
+  try { return adaptGuide(await fetch('app/ai/CLAUDE.md').then((r) => r.text())) } catch { return '' }
 }
 
 // ── ejecución ─────────────────────────────────────────────────────────────────

@@ -20,7 +20,7 @@ const TRASH = '.trash', SD_TRASH = '@sd/.trash', SD_ITEM = 'sd~'
 type Manifest = { templates: Record<string, string[]>; ai: string[]; version?: string }
 let manifest: Promise<Manifest> | null = null
 export function appManifest() {
-  if (!manifest) manifest = fetch('/app/manifest.json', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({ templates: {}, ai: [] }))
+  if (!manifest) manifest = fetch('app/manifest.json', { cache: 'no-store' }).then((r) => r.json()).catch(() => ({ templates: {}, ai: [] }))
   return manifest
 }
 const TEXT_EXT = /\.(html?|js|mjs|css|json|md|txt|svg|csv|srt|vtt)$/i
@@ -158,7 +158,7 @@ export function exportsDir(id: string) { return projectVolume(id) === 'sd' ? '@s
 // ── plantillas ────────────────────────────────────────────────────────────────
 const templateCache = new Map<string, any>()
 async function builtinTemplate(id: string) {
-  if (!templateCache.has(id)) templateCache.set(id, await fetch(`/app/templates/${encodeURIComponent(id)}/template.json`, { cache: 'no-store' }).then((r) => r.json()))
+  if (!templateCache.has(id)) templateCache.set(id, await fetch(`app/templates/${encodeURIComponent(id)}/template.json`, { cache: 'no-store' }).then((r) => r.json()))
   return templateCache.get(id)
 }
 function userTemplateDir(id: string) {
@@ -174,7 +174,7 @@ export async function listTemplates(): Promise<Template[]> {
     try {
       const j = await builtinTemplate(id)
       const { timeline: _t, analysis, ...rest } = j
-      app.push({ id, ...rest, defaults: j.defaults || { duration: j.timeline?.duration || 10 }, preview: m.templates[id].includes('preview.jpg') ? `/app/templates/${encodeURIComponent(id)}/preview.jpg` : undefined, user: false, hasAnalysis: !!analysis })
+      app.push({ id, ...rest, defaults: j.defaults || { duration: j.timeline?.duration || 10 }, preview: m.templates[id].includes('preview.jpg') ? `app/templates/${encodeURIComponent(id)}/preview.jpg` : undefined, user: false, hasAnalysis: !!analysis })
     } catch { /* ignore */ }
   }
   app.sort((a: any, b: any) => (a.order ?? 99) - (b.order ?? 99))
@@ -264,7 +264,7 @@ export async function createProject(opts: { name: string; template: string; widt
   } else {
     const m = await appManifest()
     for (const f of (m.templates[opts.template] || []).filter((x) => x.startsWith('files/'))) {
-      await copyAppFile(`/app/templates/${encodeURIComponent(opts.template)}/${f.split('/').map(encodeURIComponent).join('/')}`, join(dir, f.slice(6)))
+      await copyAppFile(`app/templates/${encodeURIComponent(opts.template)}/${f.split('/').map(encodeURIComponent).join('/')}`, join(dir, f.slice(6)))
     }
   }
   const tokens: Record<string, string> = { PROJECT_NAME: opts.name, PROJECT_ID: id, DATE: new Date().toISOString() }

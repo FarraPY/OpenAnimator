@@ -78,7 +78,8 @@ function outFile(projectId: string, sub: string, name: string, ext: string) {
 export function pluginStatus(): PluginStatus[] {
   const s = getSettings().plugins as any
   const masked = host().call<Record<string, string>>('secrets.list', { names: PLUGINS.filter((p) => p.needsKey).map((p) => `plugin.${p.id}`) })
-  return PLUGINS.map((p) => {
+  // En el iPhone no hay Termux: sin Whisper local (se transcribe con los servicios por internet).
+  return PLUGINS.filter((p) => p.id !== 'whisper' || host().kind !== 'web').map((p) => {
     const enabled = s[p.id]?.enabled !== false
     if (p.id === 'whisper') { const w = whisperQuick(); return { ...p, enabled, ready: enabled && w.ready, detail: w.detail } }
     const m = masked[`plugin.${p.id}`] || ''
@@ -92,7 +93,7 @@ export function setKey(id: string, key: string) {
 }
 
 async function pick(cap: Cap, want?: string): Promise<PluginId> {
-  if (cap === 'transcribe' && (!want || want === 'whisper') && getSettings().plugins.whisper?.enabled !== false) await whisperState()
+  if (cap === 'transcribe' && (!want || want === 'whisper') && getSettings().plugins.whisper?.enabled !== false && host().kind !== 'web') await whisperState()
   const st = pluginStatus()
   const ready = (id: string) => st.find((x) => x.id === id)?.ready
   const pref = want || ((getSettings().plugins as any)[cap] as string | undefined)

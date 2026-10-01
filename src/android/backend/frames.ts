@@ -106,6 +106,14 @@ export class Renderer {
     })
   }
 
+  /** Fotograma en t como ImageBitmap (iPhone: va directo al codificador, sin pasar por JPEG). */
+  bitmap(t: number, width: number, height: number) {
+    return this.exclusive(async () => {
+      await this.ready
+      return (await this.request<{ bitmap: ImageBitmap }>('frame', { t, width, height, format: 'bitmap' })).bitmap
+    })
+  }
+
   audit(t: number) {
     return this.exclusive(async () => {
       await this.ready
@@ -203,6 +211,7 @@ let snap: SnapRenderer | null = null
 
 /** El de la GPU para projectId|tlId, o null si no se puede (va el compositor oculto). */
 async function getSnap(projectId: string, tlId: string): Promise<SnapRenderer | null> {
+  if (host().kind === 'web') return null // el iPhone no tiene la captura de Android (Snap.java)
   // Con el tamaño: la pantalla virtual se abre a la medida del proyecto (si cambia, se abre otra).
   const p = readProject(projectId)
   const key = `${projectId}|${tlId}|${p.width}x${p.height}`

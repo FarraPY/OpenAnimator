@@ -34,10 +34,19 @@ export function codecCaps() {
   return caps!
 }
 function keyReady() { try { return !!host().call<string>('secrets.masked', { name: 'claude' }) } catch { return false } }
-/** Cómo llega el chat a Claude: con el plan del usuario (Claude Code en Termux) o con una clave de la API. */
-const claudeMode = () => (S.getSettings().claude.backend === 'api' ? 'api' : 'termux')
+/**
+ * Cómo llega el chat a Claude: con el plan del usuario (Claude Code en Termux, o en el iPhone dentro de la misma app)
+ * o con una clave de la API (sólo en Android).
+ */
+const isWeb = () => host().kind === 'web'
+const claudeMode = (): ChatMode => (isWeb() ? 'web' : S.getSettings().claude.backend === 'api' ? 'api' : 'termux')
+type ChatMode = 'api' | 'termux' | 'web'
+/** iPhone: ¿Claude Code instalado y con cuenta? Se averigua al arrancar y con cada cambio (appInfo es sincrónico). */
+let webReady = false
+let webChecked: Promise<unknown> = Promise.resolve()
 function claudeReady() {
   if (claudeMode() === 'api') return keyReady()
+  if (claudeMode() === 'web') return webReady
   try { const t = host().call<{ installed: boolean; permission: boolean }>('termux.status'); return t.installed && t.permission } catch { return false }
 }
 
@@ -49,12 +58,12 @@ function appInfo(): AppInfo & Record<string, any> {
     version: d.versionName, dataDir: 'Almacenamiento interno de la app', projectsDir: 'Proyectos', portable: true,
     claude: claudeReady() ? claudeMode() : null, ffmpeg: '', gpu: [d.manufacturer, d.model].filter(Boolean).join(' '),
     encoders: { h264_nvenc: false, hevc_nvenc: false, av1_nvenc: false, libx264: false, libx265: false },
-    platform: 'android', device: d, soc: d.soc, codecs: { avc: c.avc, hevc: c.hevc, aac: c.aac, avcHw: hw('video/avc'), hevcHw: hw('video/hevc') },
+    platform: isWeb() ? 'iphone' : 'android', device: d, soc: d.soc, codecs: { avc: c.avc, hevc: c.hevc, aac: c.aac, avcHw: hw('video/avc'), hevcHw: hw('video/hevc') },
   }
 }
 
 // ── app ───────────────────────────────────────────────────────────────────────
-h('app:info', () => appInfo())
+h('app:info', async () => { await webChecked; return appInfo() })
 h('app:versions', () => {
   const d = host().info
   const chrome = /Chrome\/([\d.]+)/.exec(navigator.userAgent)?.[1] || ''
@@ -364,7 +373,13 @@ h('plugins:ask', (req) => PL.ask(req))
 // ── Claude (clave de API) ─────────────────────────────────────────────────────
 h('claude:status', () => ({ ready: keyReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) }))
 h('claude:setKey', (key: string) => { host().call('secrets.set', { name: 'claude', value: key || '' }); return { ready: keyReady(), masked: host().call<string>('secrets.masked', { name: 'claude' }) } })
-h('claude:test', async () => (claudeMode() === 'api' ? (await import('./agent')).testClaude() : (await import('./code')).testClaude()))
+h('claude:test', async () => (await engine()).testClaude())
+// Claude Code dentro del iPhone (webclaude.ts): instalarlo, la cuenta (token de `claude setup-token`) y la última versión
+const webclaude = () => import('./webclaude')
+h('claude:webStatus', async () => { const st = await (await webclaude()).status(); webReady = st.ready; return st })
+h('claude:install', async (version?: string) => { const W = await webclaude(); const m = await W.install(version || undefined); webReady = (await W.status()).ready; return m })
+h('claude:setToken', async (token: string) => { const st = await (await webclaude()).setToken(token); webReady = st.ready; return st })
+h('claude:latest', async () => (await webclaude()).latest())
 // Claude Code en Termux (el plan del usuario)
 const termux = () => import('./termux')
 h('termux:status', async () => { const T = await termux(); return { ...T.termuxStatus(), command: T.SETUP_COMMAND } })
@@ -392,9 +407,12 @@ for (const ch of ['analyze:pickFile', 'analyze:start', 'analyze:cancel', 'analyz
 // ── chat con Claude: por la API (agent.ts) o con Claude Code en Termux (code.ts) ─
 const agent = () => import('./agent')
 const code = () => import('./code')
-const chatMode = new Map<string, 'api' | 'termux'>() // cada chat sigue con el camino con el que se abrió
+const chatMode = new Map<string, ChatMode>() // cada chat sigue con el camino con el que se abrió
 const chatProject = new Map<string, string>()
-const engine = async (id?: string) => (((id && chatMode.get(id)) || claudeMode()) === 'api' ? agent() : code())
+const engine = async (id?: string) => {
+  const mode = (id && chatMode.get(id)) || claudeMode()
+  return mode === 'api' ? agent() : mode === 'web' ? webclaude() : code()
+}
 /**
  * Conversaciones sin editor abierto (el usuario fue a Ajustes o al inicio): siguen trabajando y el
  * editor las retoma al volver al proyecto. Se cierran solas tras media hora sin actividad.
@@ -480,15 +498,15 @@ h('chat:setOptions', async (id, patch, label) => {
 })
 
 // ── instalación: window.oa ────────────────────────────────────────────────────
-export function installBackend() {
+export function installBackend(platform: 'android' | 'iphone' = 'android') {
   const hst = host()
   const oa = {
-    platform: 'android' as const,
+    platform,
     appOrigin: hst.appOrigin,
     projectOrigin: hst.projectOrigin,
     async call(ch: string, ...args: unknown[]) {
       const fn = handlers[ch]
-      if (!fn) throw new Error(`No disponible en Android: ${ch}`)
+      if (!fn) throw new Error(`No disponible en ${platform === 'iphone' ? 'el iPhone' : 'Android'}: ${ch}`)
       // Copias en los dos sentidos, como el IPC de la PC (ver events.ts).
       return copy(await fn(...args.map(copy)))
     },
@@ -510,6 +528,7 @@ export function installBackend() {
   // Pusieron o sacaron la tarjeta SD: cambia la lista de proyectos.
   hst.onEvent('storage', () => { send('storage:changed', null); send('projects:changed', null) })
   adoptAfterRestart()
+  if (isWeb()) webChecked = import('./webclaude').then((W) => W.status()).then((st) => { webReady = st.ready }).catch(() => {})
   return oa
 }
 

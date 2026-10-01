@@ -3,6 +3,7 @@
  * Genera los íconos de OpenAnimator a partir de android/icon/*.svg:
  *   - Android: capas del ícono adaptable (fondo, frente y silueta temática) y el ícono viejo, en cada densidad.
  *   - PC: build/icon.png (512 px) y build/icon.ico (16 a 256 px).
+ *   - iPhone: ios/OpenAnimator/Assets.xcassets/AppIcon.appiconset/icon-1024.png.
  * Dibuja con el Chromium de Playwright (no es dependencia del proyecto: el instalado en la máquina sirve).
  *
  *   node android/scripts/icons.mjs
@@ -56,6 +57,8 @@ for (const [d, k] of Object.entries(DENSITIES)) {
 
 // PC: PNG grande y ICO con PNG adentro (Windows Vista en adelante).
 fs.writeFileSync(path.join(ROOT, 'build', 'icon.png'), await png(svg('icon.svg'), 512))
+// iPhone: 1024 px, cuadrado entero (iOS redondea las esquinas).
+fs.writeFileSync(path.join(ROOT, 'ios', 'OpenAnimator', 'Assets.xcassets', 'AppIcon.appiconset', 'icon-1024.png'), await png(svg('icon.svg').replace('rx="16"', 'rx="0"'), 1024))
 const sizes = [16, 24, 32, 48, 64, 128, 256]
 const images = []
 for (const s of sizes) images.push(await png(svg('icon.svg'), s))

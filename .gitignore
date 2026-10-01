@@ -4,6 +4,7 @@ node_modules/
 
 # builds
 dist/
+dist-iphone/
 dist-electron/
 release/
 
@@ -34,3 +35,8 @@ api.json
 
 # app de Android: compilación local (APK, interfaz armada)
 android/build/
+
+# app del iPhone: interfaz armada y proyecto de Xcode (los genera la compilación)
+ios/www/
+ios/*.xcodeproj/
+ios/build/

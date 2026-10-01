@@ -90,13 +90,13 @@ const even = (n: number) => Math.max(2, Math.round(n / 2) * 2)
 const IMG = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 const SR = 48000
 
-type Part = { file: string; clip: Clip; vol: number }
+export type Part = { file: string; clip: Clip; vol: number }
 
 /**
  * Los audios que suenan en [t0, t1] (pistas de audio y el sonido de los videos). Si un archivo no se
  * puede leer (o un video no tiene audio), la mezcla lo saltea y sigue con los demás.
  */
-function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Part[] {
+export function audioParts(projectId: string, tl: Timeline, t0: number, t1: number): Part[] {
   const root = projectDir(projectId)!
   const solo = tl.tracks.some((t) => t.type === 'audio' && t.solo)
   const parts: Part[] = []
@@ -130,6 +130,16 @@ async function mixAudio(parts: Part[], t0: number, t1: number, onProgress: (p: n
   }, { onEvent: (e: any) => { if (e?.event === 'progress' && e.total) onProgress(Math.min(1, e.done / e.total)) } })
   for (const f of r?.failed || []) console.warn('No se pudo leer el audio', f)
   return r
+}
+
+/** Vista previa chica del fotograma que se está exportando (base64 JPEG), para el diálogo. */
+function previewJpeg(b: ImageBitmap) {
+  const c = document.createElement('canvas')
+  c.width = 320
+  c.height = Math.max(1, Math.round(320 * b.height / b.width))
+  c.getContext('2d')!.drawImage(b, 0, 0, c.width, c.height)
+  const u = c.toDataURL('image/jpeg', 0.7)
+  return u.slice(u.indexOf(',') + 1)
 }
 
 function safeName(s: string) {
@@ -274,7 +284,7 @@ class Export {
     const W = even(job.width || p.width), H = even(job.height || p.height)
     const codec = job.codec === 'hevc' ? 'hevc' : 'avc'
     const caps = host().call<{ avc: boolean; hevc: boolean; aac: boolean }>('codec.caps')
-    if (codec === 'hevc' && !caps.hevc) throw new Error('Esta tablet no tiene codificador HEVC: elegí H.264.')
+    if (codec === 'hevc' && !caps.hevc) throw new Error(`${host().kind === 'web' ? 'Este equipo' : 'Esta tablet'} no tiene codificador HEVC: elegí H.264.`)
     const bitrate = job.bitrate && job.bitrate > 0 ? Math.round(job.bitrate * 1000) : autoBitrate(W, H, fps, job.quality, codec)
 
     // Nombre del archivo final
@@ -309,7 +319,8 @@ class Export {
       return 'compat' as const
     }
     const tOpen = performance.now()
-    const opening = this.opening = openCapture(['gpu', 'draw']).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
+    // El iPhone no tiene las capturas de Android (Capture.java): va directo al compositor (con ImageBitmap).
+    const opening = this.opening = openCapture(host().kind === 'web' ? [] : ['gpu', 'draw']).then((m) => { method = m; d.marks.abrir = performance.now() - tOpen })
 
     // El audio se mezcla (en Java, en otro núcleo) mientras se capturan los fotogramas: el MP4 espera su formato
     // en el hilo que escribe, nunca la captura. Si falla, la exportación se corta enseguida.
@@ -332,6 +343,8 @@ class Export {
 
     // Video
     const quality = job.quality === 'max' ? 0.95 : job.quality === 'low' ? 0.86 : 0.92
+    // iPhone: el compositor entrega una ImageBitmap y va directo al codificador (sin JPEG en el medio).
+    const bitmaps = host().kind === 'web'
     const tr0 = performance.now()
     let inflight: Promise<unknown> | null = null
     let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0
@@ -368,6 +381,15 @@ class Export {
           i = (await host().callAsync<number>('enc.frames')) - 1
           continue
         }
+      } else if (bitmaps) {
+        const tf = performance.now()
+        const bmp = await this.renderer!.bitmap(t, W, H)
+        d.compat = { n: (d.compat?.n || 0) + 1, ms: (d.compat?.ms || 0) + performance.now() - tf }
+        this.check()
+        if (performance.now() - lastPreview > 1200) shot = previewJpeg(bmp)
+        if (inflight) await inflight
+        inflight = host().callAsync('enc.frame', { bitmap: bmp })
+        inflight.catch(() => {})
       } else {
         const tf = performance.now()
         const f = await this.renderer!.frame(t, W, H, 'jpeg', quality)
@@ -414,7 +436,8 @@ class Export {
     this.renderer = null
 
     let gallery: string | undefined
-    if (getSettings().android?.saveToGallery !== false) {
+    // En el iPhone guardar en Fotos es la hoja de Compartir, que sólo se abre con un toque: lo ofrece el diálogo.
+    if (host().kind !== 'web' && getSettings().android?.saveToGallery !== false) {
       try { gallery = (await host().callAsync<{ folder: string }>('gallery.save', { path: out, name: basename(out), mime: 'video/mp4' })).folder } catch (e) { console.warn('No se pudo copiar a la galería', e) }
     }
     d.marks.terminar = performance.now() - tEnd

@@ -1,6 +1,6 @@
 import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { afterPaint, Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, MODELS, modelName, on } from '../api'
-import { isAndroid } from '../platform'
+import { isAndroid, isIphone } from '../platform'
 import { useApp } from '../App'
 import { Icon, IconName } from '../ui/icons'
 import { Button, Empty, Select, Spinner, TextInput, useMenu } from '../ui/kit'
@@ -224,6 +224,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   inject?: { text: string; n: number } | null
 }) {
   const android = isAndroid()
+  // Teléfono o tablet: sin terminal ni ventana aparte, y Enter no envía con el teclado en pantalla.
+  const phone = isIphone(), touchUi = android || phone
   const { toast, info, settings, go, updateSettings } = useApp()
   const dlg = useDialogs()
   const [session, setSession] = useState<string | null>(null)
@@ -363,7 +365,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     return () => el.removeEventListener('load', f, true)
   }, [listShown])
   useEffect(() => { const el = ta.current; if (el) { el.style.height = 'auto'; el.style.height = Math.min(220, el.scrollHeight) + 'px' } }, [text])
-  useEffect(() => { if (visible && !popped && !android) setTimeout(() => ta.current?.focus(), 50) }, [visible, popped])
+  useEffect(() => { if (visible && !popped && !touchUi) setTimeout(() => ta.current?.focus(), 50) }, [visible, popped])
 
   // ── @ menciones de archivos del proyecto ─────────────────────────────────────
   const [projFiles, setProjFiles] = useState<ProjFile[] | null>(null)
@@ -463,11 +465,20 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     }
     // En la tablet, Enter del teclado en pantalla hace un salto de línea (se envía con el botón);
     // con teclado físico y mouse/trackpad (DeX, funda con teclado) Enter envía, como en la PC.
-    const enterSends = !android || e.ctrlKey || matchMedia('(any-pointer: fine)').matches
+    const enterSends = !touchUi || e.ctrlKey || matchMedia('(any-pointer: fine)').matches
     if (e.key === 'Enter' && !e.shiftKey && enterSends) { e.preventDefault(); if (!busy) send() }
     e.stopPropagation()
   }
 
+  if (info && !info.claude && phone) {
+    return (
+      <div className="pane-body" style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', justifyContent: 'center' }}>
+        <Empty icon="sparkles" title="Conectá Claude" desc="Claude Code corre dentro del iPhone con tu plan de Claude. Se instala y se conecta una vez, en Ajustes › Claude.">
+          <Button variant="primary" icon="settings" onClick={() => go({ page: 'settings', section: 'ia', from: { page: 'editor', id: projectId } })}>Configurar Claude</Button>
+        </Empty>
+      </div>
+    )
+  }
   if (info && !info.claude && android) {
     return (
       <div className="pane-body" style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', justifyContent: 'center' }}>
@@ -529,8 +540,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           renderValue={() => perm.label}
           onChange={(v) => setOption({ permissionMode: v as string }, `Permisos: ${PERMS.find((p) => p.value === v)?.label}`)}
           options={PERMS.map((p) => ({ value: p.value, label: p.label, desc: p.desc, icon: p.icon }))} />
-        {!android && <Button size="sm" variant="ghost" icon="terminal" tip={claudeSession ? 'Seguir esta conversación en una terminal (Claude Code)' : 'Abrir Claude Code en una terminal'} onClick={() => call('shell:terminal', projectId, claudeSession)} />}
-        {android ? null : windowMode
+        {!touchUi && <Button size="sm" variant="ghost" icon="terminal" tip={claudeSession ? 'Seguir esta conversación en una terminal (Claude Code)' : 'Abrir Claude Code en una terminal'} onClick={() => call('shell:terminal', projectId, claudeSession)} />}
+        {touchUi ? null : windowMode
           ? <Button size="sm" variant="ghost" icon="popin" tip="Volver a poner el chat en el editor" onClick={() => call('chat:popin', projectId)} />
           : <Button size="sm" variant="ghost" icon="popout" tip="Abrir el chat en otra ventana" onClick={() => session && call('chat:popout', projectId, session)} />}
         <Button size="sm" variant="ghost" icon="history" tip="Conversaciones anteriores" active={history} onClick={() => setHistory(true)} />
@@ -586,14 +597,14 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               <span className="ellipsis" style={{ maxWidth: 150 }}>{f.name}</span><span className="t4" style={{ fontSize: 11 }}>{fmtSize(f.size)}</span>
               <Button size="xs" variant="ghost" icon="x" tip="Quitar" onClick={() => setFiles((xs) => xs.filter((x) => x.rel !== f.rel))} /></div>)}
           </div>}
-          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? 'Claude está trabajando… podés escribir el próximo pedido' : android ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
+          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? 'Claude está trabajando… podés escribir el próximo pedido' : touchUi ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
             onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)} onBlur={() => setTimeout(() => setMention(null), 150)}
             onKeyDown={onKey} />
           <div className="composer-bar">
             <Button size="sm" variant="ghost" icon="paperclip" tip="Adjuntar" active={attMenu.isOpen} onClick={attMenu.open} />
             {attMenu.render([
               { label: 'Fotograma actual', icon: 'camera', onSelect: attachFrame },
-              { label: android ? 'Archivos de la tablet…' : 'Archivos…', icon: 'file', onSelect: pickFiles },
+              { label: android ? 'Archivos de la tablet…' : phone ? 'Archivos del iPhone…' : 'Archivos…', icon: 'file', onSelect: pickFiles },
               { label: 'Mencionar un archivo del proyecto', icon: 'at', hint: '@', onSelect: () => { const v = text + (text && !/\s$/.test(text) ? ' @' : '@'); setText(v); onTextChange(v, v.length); ta.current?.focus() } },
             ], { placement: 'top' })}
             <Select size="sm" variant="ghost" value={opts.model} tip="Modelo" menuWidth={300} placement="top"

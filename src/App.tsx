@@ -10,7 +10,7 @@ import { isAndroid, recoveredBoot } from './platform'
 import AndroidIntegration from './android/ui/Integration'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
-type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route }
+export type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route }
 type Ctx = {
   toast: (t: string, err?: boolean | 'ok' | 'info') => void
   info: AppInfo | null
@@ -20,7 +20,7 @@ type Ctx = {
   route: Route
   refreshInfo: () => void
 }
-const AppCtx = createContext<Ctx>(null as any)
+export const AppCtx = createContext<Ctx>(null as any)
 export const useApp = () => useContext(AppCtx)
 
 export default function App() {

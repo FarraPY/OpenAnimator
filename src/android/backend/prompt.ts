@@ -7,10 +7,10 @@ import { readProject } from './projects'
 import { ensureNotes, NOTES_FILE } from './settings'
 import { aiGuide, listSkills } from './tools'
 
-const COMMON = [
+const common = (device: string) => [
   'Antes de crear o cambiar escenas seguí la guía de abajo y cargá con Skill las skills que correspondan (dirección artística, escenas, voz y tiempos).',
   'VERIFICÁ SIEMPRE tu trabajo visualmente (oa_ver_fotogramas, oa_hoja_contactos, oa_auditar_layout) antes de decir que terminaste.',
-  'La tablet tiene mucha menos potencia y memoria que una PC, y la vista previa comparte el motor con la interfaz: una escena pesada traba la app y puede cerrarla. Hacé escenas livianas (skill escenas-html, «Rendimiento»); los fotogramas vienen con lo que cuesta cada escena, medido en el equipo: si dice que es pesada, simplificala.',
+  `${device} tiene mucha menos potencia y memoria que una PC, y la vista previa comparte el motor con la interfaz: una escena pesada traba la app y puede cerrarla. Hacé escenas livianas (skill escenas-html, «Rendimiento»); los fotogramas vienen con lo que cuesta cada escena, medido en el equipo: si dice que es pesada, simplificala.`,
   'Si hacen falta imágenes, voz, efectos de sonido o la opinión de otro modelo, usá los plugins del usuario (oa_plugins, oa_generar_imagen, oa_generar_voz, oa_generar_sfx, oa_transcribir, oa_consultar_ia): pueden tener costo, así que usalos con criterio.',
   'Los archivos que el usuario adjunta al chat quedan en la carpeta adjuntos/ del proyecto: leelos con Read cuando los mencione.',
   'El editor recarga solo cuando guardás archivos. Respondé en el idioma del usuario.',
@@ -20,13 +20,20 @@ const BASE = {
     'Estás trabajando dentro de OpenAnimator para Android (en una tablet), un estudio de video donde las escenas son HTML/SVG/JS en función del tiempo.',
     'Tu carpeta de trabajo es la del proyecto abierto: todas las rutas son relativas a ella (p. ej. scenes/intro.html, timelines/main.json).',
     'Tenés Read, Write, Edit, Glob y Grep para los archivos del proyecto, Skill para cargar las guías de OpenAnimator y las herramientas oa_* de la app. No hay terminal, ffmpeg ni ffprobe: todo se hace con estas herramientas.',
-    ...COMMON,
+    ...common('La tablet'),
   ].join(' '),
   code: [
     'Estás trabajando dentro de OpenAnimator para Android (en una tablet), un estudio de video donde las escenas son HTML/SVG/JS en función del tiempo. Corrés en Termux, en la misma tablet.',
     'Los archivos del proyecto viven en la app, NO en tu disco: usá SIEMPRE las herramientas mcp__openanimator__Read, Write, Edit, Glob y Grep, con rutas relativas a la carpeta del proyecto (p. ej. scenes/intro.html, timelines/main.json).',
     'mcp__openanimator__Skill carga las guías de OpenAnimator y mcp__openanimator__oa_* son las herramientas de la app. No hay terminal, ffmpeg ni ffprobe: todo se hace con estas herramientas.',
-    ...COMMON,
+    ...common('La tablet'),
+  ].join(' '),
+  web: [
+    'Estás trabajando dentro de OpenAnimator para iPhone, un estudio de video donde las escenas son HTML/SVG/JS en función del tiempo. Corrés dentro de la app, en el mismo teléfono.',
+    'Los archivos del proyecto viven en la app, NO en tu disco: usá SIEMPRE las herramientas mcp__openanimator__Read, Write, Edit, Glob y Grep, con rutas relativas a la carpeta del proyecto (p. ej. scenes/intro.html, timelines/main.json).',
+    'mcp__openanimator__Skill carga las guías de OpenAnimator y mcp__openanimator__oa_* son las herramientas de la app. No hay terminal, ffmpeg ni ffprobe: todo se hace con estas herramientas.',
+    'La pantalla es la de un teléfono vertical: el usuario lee tus respuestas en poco espacio.',
+    ...common('El teléfono'),
   ].join(' '),
 }
 const SAVER_RULES = [
@@ -45,7 +52,7 @@ function readNotes() {
 }
 
 /** Instrucciones para una conversación nueva (se congelan con ella). */
-export async function buildSystem(projectId: string, flavor: 'api' | 'code', saver: boolean, extra: string) {
+export async function buildSystem(projectId: string, flavor: 'api' | 'code' | 'web', saver: boolean, extra: string) {
   const p = readProject(projectId)
   const notes = readNotes()
   let guide = (await aiGuide())

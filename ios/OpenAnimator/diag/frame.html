@@ -1,0 +1,5 @@
+<!doctype html><meta charset="utf-8"><script>
+let parentDoc
+try { parentDoc = parent.document.title || 'legible' } catch (e) { parentDoc = 'bloqueado' }
+parent.postMessage({ origin: location.origin, secure: isSecureContext, parentDoc }, '*')
+</script>

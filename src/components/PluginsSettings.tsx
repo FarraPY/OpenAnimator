@@ -2,7 +2,7 @@ import { ReactNode, useEffect, useRef, useState } from 'react'
 import { WhisperSetup } from '../android/ui/WhisperSetup'
 import { call, on, PluginId, PluginStatus, Voice } from '../api'
 import { useApp } from '../App'
-import { isAndroid } from '../platform'
+import { isAndroid, isIphone } from '../platform'
 import { Icon, IconName } from '../ui/icons'
 import { Badge, Button, NumberInput, Progress, Select, Slider, Spinner, Switch, TextInput } from '../ui/kit'
 
@@ -52,7 +52,7 @@ export default function PluginsSettings() {
         <div className="plug-hero-icon"><Icon name="plug" size={22} /></div>
         <div className="grow">
           <div style={{ font: '600 15px var(--font-display)' }}>Otros modelos y servicios para Claude</div>
-          <div className="t3" style={{ marginTop: 3, lineHeight: 1.5 }}>Con un plugin listo, Claude puede generar imágenes, narraciones y efectos de sonido, transcribir voces o pedirle una segunda opinión a otro modelo mientras arma tu video. Las claves se guardan <b className="t2">cifradas en {isAndroid() ? 'la tablet' : 'esta PC'}</b> y nunca se muestran completas.</div>
+          <div className="t3" style={{ marginTop: 3, lineHeight: 1.5 }}>Con un plugin listo, Claude puede generar imágenes, narraciones y efectos de sonido, transcribir voces o pedirle una segunda opinión a otro modelo mientras arma tu video. Las claves se guardan <b className="t2">cifradas en {isAndroid() ? 'la tablet' : isIphone() ? 'el iPhone' : 'esta PC'}</b> y nunca se muestran completas.</div>
         </div>
         <Badge tone={readyCount ? 'ok' : 'neutral'} icon={readyCount ? 'check' : undefined}>{st ? `${readyCount} listo${readyCount === 1 ? '' : 's'}` : '…'}</Badge>
       </div>

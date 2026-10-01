@@ -16,7 +16,8 @@ import readline from 'node:readline'
 import { app } from 'electron'
 import { APP_DIR, CACHE_DIR, DATA_DIR, claudePath, ffmpegPaths } from './paths'
 import { projectDir } from './projects'
-import { ClaudeStreamSession, nid, type ChatItem } from './claude-session'
+import { ClaudeStreamSession, type ChatItem } from './claude-session'
+import { parseTranscript, sessionInfo, sessionsSlug } from './claude-transcript'
 
 export type { ChatEvent, ChatItem, ChatOptions, ChatStats } from './claude-session'
 
@@ -108,13 +109,12 @@ export class ChatSession extends ClaudeStreamSession {
 
 // ── historial: las conversaciones que Claude Code guarda para la carpeta del proyecto ──────────
 export type SessionInfo = { id: string; title: string; first: string; updated: number; size: number }
-const CTX_SUFFIX = /\n\n\(Contexto del editor:[\s\S]*$/
 
 function sessionsDir(projectId: string): string | null {
   const dir = projectDir(projectId)
   if (!dir) return null
   const base = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects')
-  const enc = dir.replace(/[^a-zA-Z0-9]/g, '-')
+  const enc = sessionsSlug(dir)
   if (fs.existsSync(path.join(base, enc))) return path.join(base, enc)
   // Rutas muy largas: Claude Code recorta el nombre y le agrega un hash.
   try { const d = fs.readdirSync(base).find((x) => x.startsWith(enc.slice(0, 180))); return d ? path.join(base, d) : null } catch { return null }
@@ -123,13 +123,6 @@ function readSlice(f: string, start: number, len: number) {
   const fd = fs.openSync(f, 'r')
   try { const b = Buffer.alloc(len); const n = fs.readSync(fd, b, 0, len, start); return b.subarray(0, n).toString('utf8') } finally { fs.closeSync(fd) }
 }
-const userText = (m: any): string => {
-  const c = m?.message?.content
-  if (typeof c === 'string') return c
-  if (Array.isArray(c)) return c.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-  return ''
-}
-const isRealPrompt = (m: any) => m.type === 'user' && !m.isMeta && !m.isSidechain && !!userText(m).trim() && !/^\s*<|^\[Request interrupted/.test(userText(m))
 
 export function listSessions(projectId: string): SessionInfo[] {
   const dir = sessionsDir(projectId)
@@ -139,16 +132,8 @@ export function listSessions(projectId: string): SessionInfo[] {
     const file = path.join(dir, f)
     const st = fs.statSync(file)
     if (st.size < 400) continue
-    let first = '', title = ''
-    for (const line of readSlice(file, 0, Math.min(st.size, 256 * 1024)).split('\n')) {
-      try { const m = JSON.parse(line); if (!first && isRealPrompt(m)) first = userText(m).replace(CTX_SUFFIX, '').trim() } catch { /* línea cortada */ }
-      if (first) break
-    }
-    if (!first) continue
-    const tail = readSlice(file, Math.max(0, st.size - 128 * 1024), Math.min(st.size, 128 * 1024))
-    const titles = [...tail.matchAll(/"aiTitle":"((?:[^"\\]|\\.)*)"/g)]
-    if (titles.length) try { title = JSON.parse(`"${titles[titles.length - 1][1]}"`) } catch { /* ignore */ }
-    out.push({ id: f.slice(0, -6), title: title || first.split('\n')[0].slice(0, 80), first: first.slice(0, 220), updated: st.mtimeMs, size: st.size })
+    const info = sessionInfo(readSlice(file, 0, Math.min(st.size, 256 * 1024)), readSlice(file, Math.max(0, st.size - 128 * 1024), Math.min(st.size, 128 * 1024)))
+    if (info) out.push({ id: f.slice(0, -6), ...info, updated: st.mtimeMs, size: st.size })
   }
   return out.sort((a, b) => b.updated - a.updated)
 }
@@ -158,32 +143,5 @@ export function loadTranscript(projectId: string, sessionId: string): ChatItem[]
   const dir = sessionsDir(projectId)
   const file = dir && path.join(dir, `${sessionId}.jsonl`)
   if (!file || !/^[\w-]+$/.test(sessionId) || !fs.existsSync(file)) return []
-  const items: ChatItem[] = []
-  const tools = new Map<string, ChatItem>()
-  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
-    let m: any
-    try { m = JSON.parse(line) } catch { continue }
-    if (m.isSidechain) continue
-    if (m.type === 'system' && m.subtype === 'compact_boundary') { items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
-    const c = m.message?.content
-    if (m.type === 'user') {
-      if (m.isMeta || m.isCompactSummary) continue
-      if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') {
-        const it = tools.get(b.tool_use_id)
-        if (!it) continue
-        const txt = typeof b.content === 'string' ? b.content : Array.isArray(b.content) ? b.content.map((x: any) => (x.type === 'text' ? x.text : x.type === 'image' ? '[imagen]' : '')).join('\n') : ''
-        it.status = b.is_error ? 'error' : 'ok'; it.isError = !!b.is_error; it.result = txt.slice(0, 4000)
-      }
-      if (isRealPrompt(m)) {
-        const imgs = Array.isArray(c) ? c.filter((b: any) => b.type === 'image').length : 0
-        items.push({ id: nid('u'), kind: 'user', text: userText(m), images: imgs || undefined })
-      } else if (/^\[Request interrupted/.test(userText(m))) items.push({ id: nid('n'), kind: 'notice', text: 'Interrumpido.', level: 'info' })
-    } else if (m.type === 'assistant' && Array.isArray(c)) {
-      for (const b of c) {
-        if (b.type === 'text' && b.text?.trim()) items.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
-        else if (b.type === 'tool_use') { const it: ChatItem = { id: nid('tool'), kind: 'tool', name: b.name, input: b.input, status: 'ok' }; tools.set(b.id, it); items.push(it) }
-      }
-    }
-  }
-  return items.slice(-400)
+  return parseTranscript(fs.readFileSync(file, 'utf8'))
 }

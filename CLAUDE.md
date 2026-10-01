@@ -90,6 +90,20 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   herramienta (`streamed` = entrada de la herramienta que va llegando). Todo mensaje entra por `received()` (la
   tablet los recibe ya leídos): llamar a `onMessage` directo no cuenta como señal y el aviso salta en falso.
 
+## iPhone — `src/iphone/` (detalles en `src/iphone/README.md`)
+- App web instalable desde Safari (iOS 26), publicada con GitHub Pages (`.github/workflows/iphone.yml`, `npm run build:iphone`
+  → `dist-iphone/`). Todo corre en el teléfono: backend de Android (`src/android/backend`) sobre un puente hecho con APIs
+  de Safari (`src/iphone/host`: OPFS, WebCodecs + Mediabunny, Web Audio, fflate, WebCrypto) e interfaz propia del
+  teléfono (`src/iphone/ui`). `isIphone()` en platform.ts; `host().kind === 'web'` en el backend.
+- Claude Code con el plan del usuario y sin PC: el instalador (Worker) baja `@anthropic-ai/claude-code-linux-arm64` de
+  npm, saca los módulos del ejecutable de Bun y los adapta (`claude/transform.ts`); corre en un Worker con un "Node" de
+  navegador (`claude/node/`). Cuenta: token de `claude setup-token` (el OAuth no admite navegadores) →
+  `CLAUDE_CODE_OAUTH_TOKEN`. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la página (`backend/webclaude.ts`).
+- Las escenas comparten origen con la app (no hay un segundo origen en GitHub Pages): importar proyectos confiables.
+- Probar: el navegador integrado no registra Service Workers → Playwright (Edge y WebKit; el WebKit de Windows no trae
+  WebCodecs ni Web Audio y su OPFS no escribe). En localhost, `localStorage['oa.claudeDev']` = `{env, tarball}` usa una
+  API de mentira y un paquete local.
+
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente
   nativo (`window.AndroidBridge`, `src/android/host.ts`). `src/platform.ts` (`isAndroid`, `projectUrl`,

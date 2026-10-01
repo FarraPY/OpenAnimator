@@ -11,7 +11,7 @@ export type DeviceInfo = {
 }
 
 export type Host = {
-  kind: 'android' | 'dev'
+  kind: 'android' | 'dev' | 'web'
   appOrigin: string
   /** Origen de los proyectos: distinto del de la interfaz, así una escena no puede tocar la app. */
   projectOrigin: string
@@ -141,3 +141,6 @@ export function host(): Host {
   if (!_host) _host = (window as any).AndroidBridge ? androidHost() : devHost()
   return _host
 }
+
+/** Otro puente con los mismos métodos: el del iPhone (src/iphone/host), hecho con APIs del navegador. */
+export function setHost(h: Host) { _host = h }

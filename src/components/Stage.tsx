@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
-import { compositorUrl } from '../platform'
+import { compositorUrl, isIphone } from '../platform'
 
 export type StageHandle = { reload: () => void; probe: (src: string) => Promise<{ duration: number; mode: string }>; audit: (t: number) => Promise<any[]> }
 
@@ -71,7 +71,8 @@ const Stage = forwardRef<StageHandle, Props>(function Stage({ projectId, tlId, t
     audit: (tt) => new Promise((res) => { const id = Math.random().toString(36).slice(2); reqs.current.set(id, res); post({ type: 'audit', id, t: tt }) }),
   }))
 
-  const src = compositorUrl(projectId, { p: projectId, tl: tlId, mode: 'preview', k: String(reloadKey) })
+  // En el iPhone el sonido no lo pone el compositor (Safari no lo deja sonar sin un toque): ver iphone/ui/previewAudio.ts.
+  const src = compositorUrl(projectId, { p: projectId, tl: tlId, mode: 'preview', k: String(reloadKey), ...(isIphone() ? { audio: '0' } : {}) })
   return (
     <div className={`stage-wrap bg-${bg}`} ref={wrap}>
       <iframe ref={frame} key={src} className="stage-frame" src={src} title="stage"

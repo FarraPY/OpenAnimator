@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnóstico</title>
+</head>
+<body style="background:#111;color:#eee;font:14px -apple-system,sans-serif">
+<pre id="out">probando…</pre>
+<script type="module">
+// Lo que la app nativa necesita del WebKit de iOS. Corre en el simulador (CI) con el argumento -OADiag y le pasa el
+// resultado a Swift, que lo imprime y cierra la app.
+const R = {}
+const out = document.getElementById('out')
+const t = async (name, fn, ms = 10000) => {
+  try { R[name] = await Promise.race([fn(), new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]) }
+  catch (e) { R[name] = 'ERROR ' + (e && e.name ? `${e.name}: ${e.message}` : String(e)) }
+  out.textContent = JSON.stringify(R, null, 1)
+}
+const workerTest = (url, opts) => new Promise((res, rej) => {
+  let w
+  try { w = new Worker(url, opts) } catch (e) { rej(e); return }
+  w.onmessage = (e) => { res(e.data); w.terminate() }
+  w.onerror = (e) => { rej(new Error(`onerror ${e.message || ''} ${e.filename || ''}:${e.lineno || ''}`)); w.terminate() }
+})
+const abs = (p) => new URL(p, location.href).href
+
+await t('env', async () => ({
+  origin: location.origin, secure: isSecureContext, subtle: !!(crypto && crypto.subtle), VideoEncoder: typeof VideoEncoder, AudioEncoder: typeof AudioEncoder,
+  VideoFrame: typeof VideoFrame, AudioData: typeof AudioData, OffscreenCanvas: typeof OffscreenCanvas, AudioContext: typeof AudioContext, opfs: typeof navigator.storage?.getDirectory,
+  idb: typeof indexedDB, caches: typeof caches, wakeLock: typeof navigator.wakeLock, share: typeof navigator.share, DecompressionStream: typeof DecompressionStream,
+  createImageBitmap: typeof createImageBitmap, ua: navigator.userAgent,
+}))
+await t('subtle', async () => (await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt'])).type)
+await t('worker_classic', () => workerTest('w-classic.js'))
+await t('worker_module', () => workerTest('w-module.js', { type: 'module' }))
+await t('worker_blob_import', () => workerTest(URL.createObjectURL(new Blob([
+  `import(${JSON.stringify(abs('dep.js'))}).then((m) => postMessage('blob ok ' + m.v)).catch((e) => postMessage('blob ERROR ' + e))`,
+], { type: 'text/javascript' })), { type: 'module' }))
+await t('worker_blob_fetch', () => workerTest(URL.createObjectURL(new Blob([
+  `fetch(${JSON.stringify(abs('data.txt'))}).then((r) => r.text()).then((x) => postMessage('fetch ok ' + x.trim())).catch((e) => postMessage('fetch ERROR ' + e))`,
+], { type: 'text/javascript' }))))
+await t('fetch_range', async () => {
+  const r = await fetch('data.bin', { headers: { Range: 'bytes=10-19' } })
+  const b = new Uint8Array(await r.arrayBuffer())
+  return { status: r.status, len: b.length, first: b[0], range: r.headers.get('content-range'), type: r.headers.get('content-type') }
+})
+await t('fetch_put_bytes', async () => (await fetch('put', { method: 'PUT', body: new Uint8Array(1 << 20) })).text())
+await t('fetch_post_blob', async () => (await fetch('put', { method: 'POST', body: new Blob([new Uint8Array(3 << 20)]) })).text())
+await t('video', () => new Promise((res, rej) => {
+  const v = document.createElement('video')
+  v.muted = true; v.playsInline = true; v.preload = 'auto'
+  v.onloadedmetadata = () => res({ duration: v.duration, w: v.videoWidth, h: v.videoHeight })
+  v.onerror = () => rej(new Error('video error ' + (v.error && v.error.code)))
+  v.src = 'clip.mp4'
+  document.body.appendChild(v)
+}), 15000)
+await t('iframe_other_origin', () => new Promise((res) => {
+  const f = document.createElement('iframe')
+  window.addEventListener('message', (e) => res({ data: e.data, from: e.origin }), { once: true })
+  f.src = 'oaproj://localhost/__diag/frame.html'
+  document.body.appendChild(f)
+}))
+await t('webcodecs_video', () => new Promise((res, rej) => {
+  let bytes = 0
+  const enc = new VideoEncoder({ output: (c) => { bytes += c.byteLength }, error: (e) => rej(e) })
+  enc.configure({ codec: 'avc1.640028', width: 1920, height: 1080, bitrate: 8e6, framerate: 30 })
+  const cv = new OffscreenCanvas(1920, 1080)
+  const g = cv.getContext('2d'); g.fillStyle = '#7b6cff'; g.fillRect(0, 0, 1920, 1080)
+  for (let i = 0; i < 3; i++) { const f = new VideoFrame(cv, { timestamp: i * 33333 }); enc.encode(f, { keyFrame: i === 0 }); f.close() }
+  enc.flush().then(() => res({ bytes, hevc: null })).catch(rej)
+}), 20000)
+await t('webcodecs_hevc', async () => (await VideoEncoder.isConfigSupported({ codec: 'hvc1.1.6.L120.B0', width: 1920, height: 1080, bitrate: 8e6 })).supported)
+await t('webcodecs_audio', () => new Promise((res, rej) => {
+  let bytes = 0
+  const enc = new AudioEncoder({ output: (c) => { bytes += c.byteLength }, error: (e) => rej(e) })
+  enc.configure({ codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 })
+  const data = new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: 4800, numberOfChannels: 2, timestamp: 0, data: new Float32Array(9600) })
+  enc.encode(data); data.close()
+  enc.flush().then(() => res({ bytes })).catch(rej)
+}), 20000)
+await t('audio_context', async () => { const c = new AudioContext(); const s = c.state; await c.close(); return s })
+await t('net_anthropic', async () => {
+  const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', 'x-api-key': 'sk-ant-invalida', 'anthropic-dangerous-direct-browser-access': 'true' }, body: '{}' })
+  return r.status
+}, 20000)
+await t('worker_net_anthropic', () => workerTest(URL.createObjectURL(new Blob([
+  `fetch('https://api.anthropic.com/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', authorization: 'Bearer sk-ant-oat01-invalido', 'anthropic-beta': 'oauth-2025-04-20', 'anthropic-dangerous-direct-browser-access': 'true' }, body: '{}' }).then((r) => postMessage('status ' + r.status)).catch((e) => postMessage('ERROR ' + e))`,
+], { type: 'text/javascript' }))), 20000)
+await t('npm', async () => (await fetch('https://registry.npmjs.org/@anthropic-ai%2fclaude-code-linux-arm64/latest')).status, 20000)
+
+window.webkit.messageHandlers.oa.postMessage({ op: 'diag.result', json: JSON.stringify(R) })
+</script>
+</body>
+</html>

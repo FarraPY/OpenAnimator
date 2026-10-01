@@ -23,6 +23,8 @@
   var projectId = qs.get('p');
   var timelineId = qs.get('tl');
   var mode = qs.get('mode') || 'preview';
+  // audio=0: la vista previa no hace sonar nada (en el iPhone el sonido lo pone la página, con Web Audio).
+  var previewAudio = mode === 'preview' && qs.get('audio') !== '0';
   var capture = qs.get('capture') === '1';
   var marker = capture && qs.get('marker') === '1';
   var MARK_PX = 16; // alto de la franja de marca en píxeles de la pantalla (Capture.MARK)
@@ -48,7 +50,7 @@
     return base + src.split('/').map(encodeURIComponent).join('/');
   }
   function isImage(src) { return /\.(png|jpe?g|gif|webp|svg|avif)$/i.test(src); }
-  function post(msg) { if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'oa-compositor' }, msg), '*'); }
+  function post(msg, transfer) { if (window.parent !== window) window.parent.postMessage(Object.assign({ source: 'oa-compositor' }, msg), '*', transfer || []); }
 
   async function loadJSON(path) {
     var r = await fetch(url(path) + '?_=' + Date.now());
@@ -295,7 +297,7 @@
       } else L.el.style.display = 'none';
     });
     gc(keep);
-    if (mode === 'preview') syncAudio(t);
+    if (previewAudio) syncAudio(t);
     if (!opts.skipPaint) await new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); });
     return { t: t };
   }
@@ -393,6 +395,19 @@
     return vendor;
   }
   var shotCtx = new Map(); // iframe → contexto reutilizable (fuentes e imágenes ya embebidas)
+  /**
+   * Safari (el iPhone) decodifica en segundo plano las imágenes que van dentro del SVG del rasterizador: el primer
+   * dibujo puede salir sin ellas. modern-screenshot lo arregla redibujando una vez por imagen con ~100 ms de espera
+   * cada vez (6 imágenes: ~660 ms por fotograma en WebKit; 30 s de video, 10 minutos). Acá, el primer fotograma de
+   * cada escena espera más (hasta 4 × 60 ms: las imágenes se decodifican ahí y quedan en la caché) y los siguientes
+   * redibujan una sola vez (~30 ms). Sin imágenes no se redibuja.
+   */
+  var SAFARI = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  function capRedraws(ctx) {
+    var n = 0;
+    ctx.__redraws = 4; ctx.drawImageInterval = 60;
+    Object.defineProperty(ctx, 'drawImageCount', { get: function () { return Math.min(n, ctx.__redraws); }, set: function (v) { n = v; }, configurable: true });
+  }
 
   function fitRect(fit, sw, sh, W, H) {
     if (!sw || !sh || fit === 'fill') return [0, 0, W, H];
@@ -427,11 +442,13 @@
         if (!ctx || ctx.__w !== W) {
           if (ctx) try { ms.destroyContext(ctx); } catch (e) {}
           ctx = await ms.createContext(doc.documentElement, { width: PW, height: PH, scale: W / PW, backgroundColor: null, timeout: 15000,
-            // Chromium no necesita los arreglos de Safari/Firefox (redibujar con demoras).
-            features: { fixSvgXmlDecode: false, copyScrollbar: false, restoreScrollPosition: false } });
+            // Chromium no necesita los arreglos de Safari/Firefox (redibujar con demoras); Safari sí (ver capRedraws).
+            features: { fixSvgXmlDecode: SAFARI, copyScrollbar: false, restoreScrollPosition: false } });
+          if (SAFARI) capRedraws(ctx);
           ctx.__w = W; shotCtx.set(L.el, ctx);
         }
         var img = await ms.domToCanvas(ctx);
+        if (SAFARI && ctx.__redraws > 1) { ctx.__redraws = 1; ctx.drawImageInterval = 16; }
         g.drawImage(img, 0, 0, W, H);
       } else {
         var el = L.el, sw = L.kind === 'video' ? el.videoWidth : el.naturalWidth, sh = L.kind === 'video' ? el.videoHeight : el.naturalHeight;
@@ -579,7 +596,7 @@
       } else if (m.type === 'pause') {
         playing = false;
         layers.forEach(function (L) { if (L.kind === 'video') L.el.pause(); });
-        syncAudio(m.t == null ? lastT : m.t);
+        if (previewAudio) syncAudio(m.t == null ? lastT : m.t);
       } else if (m.type === 'reload') {
         await reload(); post({ type: 'reloaded' });
       } else if (m.type === 'audit') {
@@ -587,13 +604,19 @@
       } else if (m.type === 'probe') {
         post({ type: 'probe', id: m.id, result: await probeScene(m.src) });
       } else if (m.type === 'frame') {
-        // Un fotograma como imagen (base64). format: jpeg | png. cost: medir lo que le cuesta a la escena.
+        // Un fotograma como imagen (base64). format: jpeg | png | bitmap (el iPhone: una ImageBitmap que va directo al
+        // codificador, sin pasar por JPEG). cost: medir lo que le cuesta a la escena.
         var cost = m.cost ? {} : null, f0 = performance.now();
         var cv = await rasterAt(m.t, m.width, m.height, cost);
-        var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
-        var data = await canvasData(cv, mime, m.quality || 0.92);
-        if (cost) { cost.frameMs = performance.now() - f0; await measureCost(m.t, cost); }
-        post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: data, width: cv.width, height: cv.height, cost: cost });
+        if (m.format === 'bitmap') {
+          var bmp = await createImageBitmap(cv);
+          post({ type: 'frame', id: m.id, t: m.t, bitmap: bmp, width: cv.width, height: cv.height }, [bmp]);
+        } else {
+          var mime = m.format === 'png' ? 'image/png' : 'image/jpeg';
+          var data = await canvasData(cv, mime, m.quality || 0.92);
+          if (cost) { cost.frameMs = performance.now() - f0; await measureCost(m.t, cost); }
+          post({ type: 'frame', id: m.id, t: m.t, mime: mime, data: data, width: cv.width, height: cv.height, cost: cost });
+        }
       }
     } catch (err) {
       post({ type: 'error', id: m.id, message: String(err && err.message || err) });
