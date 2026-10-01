@@ -163,7 +163,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `messageHandlers.oaCap` y cada fotograma va de `takeSnapshot` directo a AVFoundation (`NativeEncoder.appendCaptured`;
   en la app el codificador siempre es AVFoundation). La vista va debajo de la página detrás de la ventana de exportar,
   achicada con una transformación (fuera de la pantalla WebKit no la dibuja). Antes, «captura compatible» iba a 1,3 fps y
-  con «Prueba de render» la interfaz pasaba los 2 GB en el fotograma 78. Pendiente: los fotogramas para Claude siguen
+  con «Prueba de render» la interfaz pasaba los 2 GB en el fotograma 78. Con una sola vista: 10,9 fps (91 ms por
+  fotograma, 68 de takeSnapshot: en iOS espera el próximo cuadro del motor web y lo copia el servidor de Core Animation,
+  WKWebViewIOS.mm `CARenderServerSnapshot`; casi todo es espera). Por eso van varias vistas a la vez (`workers`, 3 por
+  defecto; `localStorage oa.capWorkers` para probar): el exportador pide el doble de fotogramas que vistas, cada vista
+  hace los que le tocan y `NativeEncoder.appendCaptured(index:)` los pone en el video por su número. Pendiente: los fotogramas para Claude siguen
   con el compositor de la página.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
   go-ios (`go-ios/ios.exe`) y pymobiledevice3 (venv `pmd3/`). Pasos: `ios tunnel start --userspace` (sin administrador);

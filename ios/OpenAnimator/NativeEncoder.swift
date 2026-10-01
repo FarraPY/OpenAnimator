@@ -116,12 +116,31 @@ final class NativeEncoder {
         }
     }
 
-    /// Una imagen de la captura de iOS al codificador, en orden (en la cola del video). done: nil o el error.
-    static func appendCaptured(_ image: CGImage, _ done: @escaping (String?) -> Void) {
+    /// La imagen del fotograma `index` de la captura de iOS (varias vistas a la vez: llegan desordenadas). Entra al video
+    /// cuando le toca; done (nil o el error) recién ahí. Si una falla, las que esperaban también.
+    static func appendCaptured(_ image: CGImage, index: Int, _ done: @escaping (String?) -> Void) {
         video.async {
             guard let job = current else { done("No hay una exportación en curso"); return }
-            do { try job.appendImage(image); done(nil) } catch { done((error as? LocalizedError)?.errorDescription ?? error.localizedDescription) }
+            job.waiting[index] = (image, done)
+            while let next = job.waiting.removeValue(forKey: Int(job.frames)) {
+                do { try job.appendImage(next.image); next.done(nil) } catch {
+                    let why = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    next.done(why)
+                    job.failWaiting(why)
+                    return
+                }
+            }
         }
+    }
+
+    /// La captura falló o se canceló: las imágenes que esperaban su turno no van a entrar.
+    static func failCaptured(_ why: String) { video.async { current?.failWaiting(why) } }
+
+    private var waiting: [Int: (image: CGImage, done: (String?) -> Void)] = [:]
+    private func failWaiting(_ why: String) {
+        let w = waiting
+        waiting.removeAll()
+        for (_, x) in w { x.done(why) }
     }
 
     /// Un fotograma (JPEG en base64) al codificador, en orden.
@@ -236,6 +255,7 @@ final class NativeEncoder {
 
     /// Cancelada o fallida: se cierra todo y se borran los temporales.
     private func discard() {
+        failWaiting("cancelado")
         if writer.status == .writing { writer.cancelWriting() }
         NativeEncoder.sound.sync { audio = nil }
         try? FileManager.default.removeItem(at: dir)

@@ -165,8 +165,8 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal),
     'zip.import': async (a, ev) => Zip.unzipTo(fs, a.zip, a.dest, ev), 'zip.export': async (a, ev) => Zip.zipDir(fs, a.dir, a.out, a.prefix, a.skip, ev),
     'audio.peaks': async (a) => Aud.peaks(fs, a.path, a.perSec || 100), 'audio.decode': async (a) => Aud.decodePcm(fs, a),
-    'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height }),
-    'cap.frame': async (a) => nativeCall('cap.frame', { t: a.t, preview: !!a.preview }), 'cap.stop': async () => nativeCall('cap.stop'),
+    'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height, workers: a.workers }),
+    'cap.frame': async (a) => nativeCall('cap.frame', { t: a.t, i: a.i, preview: !!a.preview }), 'cap.stop': async () => nativeCall('cap.stop'),
     'enc.frame': async (a) => Enc.frame(a), 'enc.frames': async () => Enc.frames(), 'enc.mix': async (a, ev) => Enc.mix(fs, a, ev), 'enc.finish': async () => Enc.finish(fs),
   }
   const unavailable = (m: string) => new Error(`${m} no está disponible en el iPhone`)

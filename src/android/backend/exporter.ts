@@ -62,7 +62,7 @@ type Diag = {
   cap?: {
     mode?: string; frames?: number; msPerFrame?: number; lost?: number; ahead?: number; page?: { n: number; ms: number; max: number }
     // iPhone (NativeCapture.swift)
-    snapMs?: number; encMs?: number; maxMs?: number
+    snapMs?: number; encMs?: number; maxMs?: number; frameMs?: number; workers?: number
     framesAt?: number[]; dropsAt?: number[]; screenHz?: number; displayHz?: number; view?: string
     encoder?: {
       images?: number; msPerImage?: number; msMax?: number; encodeMsMax?: number; writesPendingMax?: number
@@ -232,7 +232,7 @@ class Export {
     const inFlight = !!c?.encoder?.reorder
     if (c) lines.push(`Por fotograma (${c.frames}): ${msf(c.msPerFrame)}; el JavaScript de la página lo prepara en ${pg && pg.n ? `${msf(pg.ms / pg.n)} (máx ${msf(pg.max)})` : '—'}${c.mode === 'gpu' ? ` · perdidos ${c.lost ?? 0} · ${inFlight ? 'en camino a la vez' : 'por adelantado'} ${c.ahead ?? '—'}` : ''}`)
     // iPhone (NativeCapture.swift): cuánto tarda la imagen de cada fotograma y pasarla al codificador.
-    if (c?.mode === 'ios') lines.push(`Captura de iOS: imagen ${msf(c.snapMs)} · al codificador ${msf(c.encMs)} · el fotograma más lento ${msf(c.maxMs)}`)
+    if (c?.mode === 'ios') lines.push(`Captura de iOS: ${c.workers ?? 1} vistas a la vez · cada fotograma ${msf(c.frameMs)} (la imagen ${msf(c.snapMs)}) · el más lento ${msf(c.maxMs)}`)
     if (c?.mode === 'gpu') {
       const hz = (x?: number) => (x ? `${Math.round(x)} Hz` : '—')
       lines.push(`Pantalla: ${hz(c.screenHz)} · pantalla virtual ${hz(c.displayHz)}`)
@@ -336,10 +336,12 @@ class Export {
     const capUrl = compositorUrl(job.projectId, { p: job.projectId, tl: tlId, mode: 'export', capture: '1' })
     let method: Method = 'compat'
     const why = d.why // por qué no anduvo cada método (se muestra al terminar)
+    // iPhone: cuántas vistas de captura a la vez (NativeCapture.swift; oa.capWorkers para probar otras cantidades).
+    const iosWorkers = host().kind === 'web' ? Math.max(1, Math.min(6, Number((() => { try { return localStorage.getItem('oa.capWorkers') } catch { return null } })()) || 3)) : 1
     const openCapture = async (modes: Array<'gpu' | 'draw'>) => {
       for (const m of modes) {
         if (this.cancelled || this.over) break
-        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${label(m)} en este equipo:`, e) }
+        try { await host().callAsync('cap.start', { url: capUrl, width: W, height: H, mode: m, workers: iosWorkers }); return m } catch (e: any) { why[m] = String(e?.message || e); console.warn(`Sin ${label(m)} en este equipo:`, e) }
       }
       return 'compat' as const
     }
@@ -377,7 +379,29 @@ class Export {
     let inflight: Promise<unknown> | null = null
     let lastEmit = 0, lastPreview = 0, rate = 0, lastCall = 0
     this.emit({ phase: 'render', message: `Fotograma 1 de ${frames} · ${label(method)}`, done: 0, total: frames })
-    for (let i = 0; i < frames; i++) {
+    if ((method as Method) === 'gpu' && host().kind === 'web') {
+      // iPhone: varias vistas de captura a la vez (NativeCapture.swift). Se piden el doble de fotogramas que vistas
+      // (ninguna queda esperando) y el codificador los pone en el video por su número.
+      let next = 0, done = 0
+      const one = async () => {
+        while (next < frames) {
+          this.check()
+          if (mixError) throw mixError
+          const i = next++
+          const wantPreview = performance.now() - lastPreview > 1200
+          if (wantPreview) lastPreview = performance.now()
+          const r = await host().callAsync<{ preview?: string }>('cap.frame', { t: start + i / fps, i, preview: wantPreview })
+          done++
+          const now = performance.now()
+          if (now - lastEmit > 250 || done === frames || r?.preview) {
+            lastEmit = now
+            rate = done / Math.max(0.001, (now - tr0) / 1000)
+            this.emit({ phase: 'render', message: `Fotograma ${done} de ${frames} · ${label(method)} ×${iosWorkers}`, done, total: frames, fps: rate, eta: (frames - done) / Math.max(0.01, rate), preview: r?.preview ? `data:image/jpeg;base64,${r.preview}` : undefined })
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: iosWorkers * 2 }, one))
+    } else for (let i = 0; i < frames; i++) {
       this.check()
       if (mixError) throw mixError
       const t = start + i / fps
