@@ -69,6 +69,7 @@ auditoría. Un audit en 0 no alcanza: también hay que mirar. No digas "listo" s
 - `direccion-artistica` — cómo lograr un video profesional y no genérico (proceso, reglas, QA). **Siempre.**
 - `escenas-html` — cómo escribir escenas deterministas y sus trampas.
 - `voz-y-tiempos` — narración, tiempos por palabra, música y efectos sincronizados.
+- `voz-fish-audio` — narrar con Fish Audio: modelo, voz, dirección con `[corchetes]`, diálogos, texto para el oído. **Siempre que generes voz con Fish.**
 - `plantilla-documental`, `plantilla-cinetico` — formatos de datos de cada plantilla.
 
 ## Normas
@@ -89,7 +90,7 @@ cuando aporten, no en cada paso. Consultá `oa_plugins` para saber cuáles está
 | `oa_generar_voz` | narración con ElevenLabs (devuelve tiempos por palabra) o Fish Audio (S2.1 Pro Free es **gratis**; dirección con `[corchetes]`, diálogos con `voces`; skill `voz-fish-audio`) → `assets/voz/*.mp3` |
 | `oa_voces` | voces disponibles de cada proveedor |
 | `oa_generar_sfx` | efectos de sonido (ElevenLabs) → `assets/sfx/*.mp3`. Generá cada sonido una vez y colocá **un clip por efecto** en la pista SFX, en su momento exacto (nunca premezclados en un solo archivo) |
-| `oa_transcribir` | tiempos por palabra de una voz ya grabada. Usa **Whisper local** (GPU del usuario, gratis, sin internet): es la opción por defecto, no pases `proveedor` |
+| `oa_transcribir` | tiempos por palabra de una voz ya grabada. Usa **Whisper local** (en el equipo del usuario, gratis, sin internet): es la opción por defecto, no pases `proveedor` |
 | `oa_consultar_ia` | segunda opinión de GPT/Gemini/otros (texto e imágenes) |
 
 - Después de generar una imagen, MIRALA (la herramienta devuelve una vista previa) antes de usarla.

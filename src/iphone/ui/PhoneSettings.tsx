@@ -49,7 +49,7 @@ function Main({ open }: { open: (s: string) => void }) {
       <h1 className="ph-title">Ajustes</h1>
       <Group>
         <Row icon="sparkles" label="Claude" detail={info?.claude ? <><i className="dot-ok" />Conectado · con tu plan</> : 'Sin configurar'} chevron onClick={() => open('ia')} />
-        <Row icon="plug" label="Plugins de IA" detail="Imágenes, voz, efectos, otras IA" chevron onClick={() => open('plugins')} />
+        <Row icon="plug" label="Plugins de IA" detail="Imágenes, voz, efectos, transcripción, otras IA" chevron onClick={() => open('plugins')} />
         <Row icon="drive" label="Almacenamiento" detail="Espacio, papelera y caché" chevron onClick={() => open('storage')} />
       </Group>
       <Group title="Apariencia">

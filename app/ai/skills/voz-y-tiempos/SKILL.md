@@ -29,10 +29,12 @@ Fish Audio **S2.1 Pro Free** es gratis: si el usuario tiene Fish configurado, es
 (detalles en la skill `voz-fish-audio`).
 
 **Transcripción = Whisper local.** `oa_transcribir` sin `proveedor` corre Whisper en el equipo del usuario: en la
-PC, large-v3-turbo con la GPU; en la tablet, whisper.cpp en Termux (si el usuario lo instaló: `oa_plugins` lo dice).
+PC, large-v3-turbo con la GPU; en la tablet, whisper.cpp en Termux; en el iPhone, WhisperKit en el Neural Engine (si el
+usuario lo instaló: `oa_plugins` lo dice).
 Tiempos por palabra precisos, gratis, sin enviar el audio a internet. Usalo siempre que necesites tiempos o control
 de calidad; pasá `idioma: "es"` si lo sabés (es más rápido y evita que detecte otro idioma). En la tablet tarda más:
-transcribí cada parte una vez, no el video entero de nuevo por cada cambio.
+transcribí cada parte una vez, no el video entero de nuevo por cada cambio. En el iPhone es rápido (10 minutos de audio
+en menos de un minuto).
 No uses ElevenLabs/OpenAI/Fish para transcribir salvo que el usuario lo pida o que no haya Whisper. Ni escribas
 scripts propios de Whisper: la herramienta ya lo hace.
 

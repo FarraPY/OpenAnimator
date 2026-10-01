@@ -255,7 +255,7 @@ export default function PhoneTimeline(p: Props) {
                   {row >= 62 && <span className="tlp-trk-name">{tr.name}</span>}
                 </MenuButton>
                 {/* Con el timeline grande (montaje), mostrar u ocultar la pista (el audio: silenciarla) de un toque. */}
-                {row >= 62 && (tr.type === 'audio'
+                {row >= 46 && (tr.type === 'audio'
                   ? <button className={`tlp-trk-eye ${tr.muted ? 'off' : ''}`} aria-label={tr.muted ? 'Activar el sonido' : 'Silenciar la pista'} onClick={() => p.onPatchTrack(tr.id, { muted: !tr.muted })}><Icon name={tr.muted ? 'volume-x' : 'volume-2'} size={15} /></button>
                   : <button className={`tlp-trk-eye ${tr.hidden ? 'off' : ''}`} aria-label={tr.hidden ? 'Mostrar la pista' : 'Ocultar la pista'} onClick={() => p.onPatchTrack(tr.id, { hidden: !tr.hidden })}><Icon name={tr.hidden ? 'eye-off' : 'eye'} size={15} /></button>)}
                 </div>

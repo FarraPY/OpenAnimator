@@ -16,7 +16,6 @@ que eligió el usuario. `oa_plugins` te dice el modelo configurado; `oa_voces` b
 | `s2.1-pro` | pago (≈ US$ 15 por millón de bytes de texto) | 83 | `[corchetes]` | producción con garantías de latencia (sólo si el usuario lo pide) |
 | `s2-pro` | pago | 80+ | `[corchetes]` | integraciones viejas |
 | `s1` | pago, heredado | 13 | `(paréntesis)` con etiquetas fijas | sólo si el usuario lo eligió |
-| `drama-3-preview` | acceso por solicitud | — | dirección tipo actor | sólo si el usuario tiene acceso |
 
 Si una llamada con un modelo pago da **402** (sin saldo), volvé a generar con `modelo: "s2.1-pro-free"`.
 No cambies a un modelo pago por tu cuenta.
@@ -85,7 +84,8 @@ La normalización automática de Fish **sólo** cubre inglés y chino: en españ
 2. Generá **por párrafo o sección** (`nombre`: `cap1-parte-3`). Los textos largos se procesan en tramos y la voz
    se mantiene coherente, pero regenerar un párrafo es más barato que rehacer todo.
 3. **Tiempos por palabra**: Fish no los devuelve. Usá `oa_transcribir` sobre cada archivo **sin `proveedor`**: corre
-   Whisper local (gratis, en la GPU del usuario) con tiempos por palabra precisos. Pasá `idioma: "es"`.
+   Whisper local (gratis, en el equipo del usuario: la PC, la tablet o el iPhone) con tiempos por palabra precisos.
+   Pasá `idioma: "es"`.
    (Con `proveedor: "fish"` los tiempos son por frase y aproximados: evitalo.)
 4. Control de calidad: compará la transcripción con el texto. Palabras que faltan, se repiten o cambian =
    regenerá **ese** párrafo (bajando un poco la temperatura). Escuchá también que ninguna indicación se haya leído
