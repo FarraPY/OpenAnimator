@@ -20,7 +20,16 @@ const PERMS = [
   { value: 'plan', label: 'Planificar', desc: 'Propone un plan sin tocar nada', icon: 'list' as IconName },
   { value: 'bypassPermissions', label: 'Sin preguntar', desc: 'Hace todo sin pedir permiso', icon: 'zap' as IconName },
 ]
-type Ctx = { timeline: string; t: number }
+type Ctx = { timeline: string; t: number; scene?: string }
+/** Lo que necesita una cabecera propia del chat (la del iPhone): el estado y las opciones de la conversación. */
+export type ChatHeadApi = {
+  busy: boolean; model: string; modelValue: string; effort: string; permissionMode: string; saver: boolean
+  modelName: (v: string) => string; models: Array<{ value: string; label: ReactNode; desc?: ReactNode }>
+  perms: typeof PERMS
+  setOption: (patch: { model?: string; effort?: string; permissionMode?: string; saver?: boolean }, label: string) => void
+  history: () => void; newChat: () => void; compact: () => void
+  context: { used: number; window: number; pct: number; turns: number } | null
+}
 type ProjFile = { path: string; size: number; dir: boolean }
 
 function toolMeta(it: ChatItem): { icon: IconName; name: string; arg: string } {
@@ -215,8 +224,12 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
 
 /** assistant: respuestas terminadas de la conversación `session` (el editor cuenta las que no se vieron). */
 export type ChatStatus = { busy: boolean; waiting: boolean; assistant: number; session: string | null }
-export default function ChatPanel({ projectId, context, visible, windowMode, attachTo, onStatus, inject }: {
+export default function ChatPanel({ projectId, context, visible, windowMode, attachTo, onStatus, inject, head, compactBar }: {
   projectId: string; context: () => Ctx | Promise<Ctx>; visible: boolean
+  /** Cabecera propia en vez de la de siempre (el iPhone: «Claude», la escena y un menú con las opciones). */
+  head?: (api: ChatHeadApi) => ReactNode
+  /** Sin modelo, esfuerzo ni modo ahorro en la barra del cuadro de mensaje (están en la cabecera propia). */
+  compactBar?: boolean
   /** Ventana separada: se conecta a la conversación `attachTo` y no la cierra al salir. */
   windowMode?: boolean; attachTo?: string
   /** Estado para mostrar afuera (pestaña de Claude en la tablet): trabajando, esperando permiso, respuestas. */
@@ -417,7 +430,8 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     const ment = mentioned(msg)
     const fl = files.length ? ` Archivos adjuntos (copiados en la carpeta del proyecto; leelos con Read): ${files.map((f) => f.rel).join(', ')}.${files.some((f) => f.image) ? ' Las imágenes adjuntas también van en este mensaje.' : ''}` : ''
     const ml = ment.length ? ` Archivos del proyecto que menciona el usuario con @ (rutas relativas a la carpeta del proyecto): ${ment.join(', ')}.` : ''
-    const full = `${msg}\n\n(Contexto del editor: timeline activo "${ctx.timeline}", cursor en ${ctx.t.toFixed(2)} s.${att ? ` La primera imagen adjunta es el fotograma en t=${att.t.toFixed(2)} s.` : ''}${fl}${ml})`
+    const sc = ctx.scene ? ` El usuario habla de la escena ${ctx.scene}.` : ''
+    const full = `${msg}\n\n(Contexto del editor: timeline activo "${ctx.timeline}", cursor en ${ctx.t.toFixed(2)} s.${sc}${att ? ` La primera imagen adjunta es el fotograma en t=${att.t.toFixed(2)} s.` : ''}${fl}${ml})`
     const images = [...(att ? [{ mediaType: 'image/png', data: att.data }] : []), ...files.filter((f) => f.image).slice(0, 8).map((f) => ({ mediaType: 'image/jpeg', data: f.image! }))]
     setText(''); setAttach(null); setFiles([]); setMention(null)
     toBottom()
@@ -522,7 +536,12 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     <div style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }}
       onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDrag(true) } }} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false) }} onDrop={onDrop}>
       {drag && <div className="chat-drop"><Icon name="paperclip" size={26} /><b>Soltá para adjuntar</b><span>Imágenes, PDF, guiones, audio, video…</span></div>}
-      <div className={`pane-head ${windowMode ? 'drag-region' : ''}`} style={{ gap: 4, height: windowMode ? 38 : 38, paddingLeft: 12, paddingRight: windowMode ? 140 : undefined }}>
+      {head ? head({
+        busy, model: opts.model, modelValue: models.value(opts.model), effort: opts.effort, permissionMode: opts.permissionMode, saver,
+        modelName: (v) => models.name(v), models: models.options as ChatHeadApi['models'], perms: PERMS, setOption,
+        history: () => setHistory(true), newChat, compact: () => compact(),
+        context: stats?.context ? { used: stats.context, window: stats.window, pct, turns: stats.turns } : null,
+      }) : <div className={`pane-head ${windowMode ? 'drag-region' : ''}`} style={{ gap: 4, height: windowMode ? 38 : 38, paddingLeft: 12, paddingRight: windowMode ? 140 : undefined }}>
         {busy ? <span className="row t2" style={{ gap: 6, fontSize: 12 }}><Spinner size={12} />Trabajando…</span>
           : <span className="row t3" style={{ gap: 6, fontSize: 12 }} data-tip="Modelo de la sesión"><span className="sys-dot ok" style={{ marginLeft: 0, width: 6, height: 6 }} />{liveModel ? models.name(liveModel) : 'Listo'}</span>}
         <div className="grow" />
@@ -548,7 +567,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           : <Button size="sm" variant="ghost" icon="popout" tip="Abrir el chat en otra ventana" onClick={() => session && call('chat:popout', projectId, session)} />}
         <Button size="sm" variant="ghost" icon="history" tip="Conversaciones anteriores" active={history} onClick={() => setHistory(true)} />
         <Button size="sm" variant="ghost" icon="plus" tip="Nueva conversación" onClick={newChat} />
-      </div>
+      </div>}
       <div className="chat-list-wrap" onKeyDown={(e) => { if (e.ctrlKey && e.key === 'End') { e.preventDefault(); toBottom() } }}>
       <div className="chat-list" ref={list} onScroll={onListScroll} tabIndex={-1}>
         {!items.length && (
@@ -609,6 +628,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               { label: android ? 'Archivos de la tablet…' : phone ? 'Archivos del iPhone…' : 'Archivos…', icon: 'file', onSelect: pickFiles },
               { label: 'Mencionar un archivo del proyecto', icon: 'at', hint: '@', onSelect: () => { const v = text + (text && !/\s$/.test(text) ? ' @' : '@'); setText(v); onTextChange(v, v.length); ta.current?.focus() } },
             ], { placement: 'top' })}
+            {!compactBar && <>
             <Select size="sm" variant="ghost" value={models.value(opts.model)} tip="Modelo" menuWidth={300} placement="top"
               renderValue={() => models.name(opts.model)}
               onChange={(v) => setOption({ model: v as string }, `Modelo: ${models.name(v as string)} (se aplica al próximo mensaje).`)}
@@ -619,6 +639,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               options={[{ header: 'Nivel de esfuerzo' }, ...EFFORTS.map((e) => ({ value: e.id, label: e.name, desc: e.desc }))]} />
             <Button size="sm" variant="ghost" icon="leaf" active={saver} className={saver ? 'saver-on' : ''} tip={saver ? 'Modo ahorro activado: Claude gasta menos contexto (clic para desactivar)' : 'Modo ahorro desactivado (clic para activarlo)'}
               onClick={() => setOption({ saver: !saver }, saver ? 'Modo ahorro desactivado (se aplica al próximo mensaje).' : 'Modo ahorro activado (se aplica al próximo mensaje).')} />
+            </>}
             <div className="grow" />
             {busy
               ? <Button variant="danger" className="send-btn" icon="stop" tip="Detener" onClick={() => session && call('chat:interrupt', session)} />

@@ -4,11 +4,14 @@
  * navegación, el inicio, el editor, el timeline y los ajustes son propios del teléfono.
  */
 import { handleBack } from '../../android/ui/back'
-import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { CSSProperties, ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AppCtx, type Route } from '../../App'
 import { AppInfo, call, Settings, SettingsPatch } from '../../api'
 import { Icon, IconName } from '../../ui/icons'
+import { MenuItem, useMenu } from '../../ui/kit'
+import { MenuEntry, registerMenu, unregisterMenu } from '../host/glassUI'
+import { isNative } from '../host/native'
 import { recoveredBoot } from '../../platform'
 import Projects from './Projects'
 import PhoneEditor from './PhoneEditor'
@@ -153,6 +156,35 @@ export function Sheet({ title, onClose, children, footer, tall, persistent }: { 
 }
 
 export type Act = { label: string; icon?: IconName; danger?: boolean; disabled?: boolean; desc?: string; onSelect: () => void } | { sep: true }
+
+/**
+ * Un botón con un menú que sale de él, como en iOS: en la app, el menú de iOS (NativeMenus.swift: su vidrio, su
+ * animación, los íconos del sistema y submenús); en Safari, o si el botón está en algo que se desplaza con el dedo
+ * (`native={false}`: el botón de iOS encima no dejaría desplazar), el menú de la página anclado al botón.
+ */
+export function MenuButton({ items, title, label, className, style, glass, align = 'end', native = true, children }: {
+  items: MenuEntry[]; title?: string; label: string; className?: string; style?: CSSProperties; glass?: boolean | 'accent'
+  align?: 'start' | 'end'; native?: boolean; children: ReactNode
+}) {
+  const key = useId()
+  const m = useMenu()
+  const nat = native && isNative()
+  useEffect(() => { if (nat) registerMenu(key, title, items) })
+  useEffect(() => () => unregisterMenu(key), [key])
+  return (
+    <>
+      <button className={className} style={style} aria-label={label} data-menu={nat ? key : undefined} data-glass={glass === true ? '' : glass || undefined}
+        onClick={(e) => { e.stopPropagation(); m.open(e) }}>{children}</button>
+      {m.render(flatMenu(items), { align })}
+    </>
+  )
+}
+
+/** Las opciones para el menú de la página (los submenús, con su título adelante). */
+export function flatMenu(items: MenuEntry[]): MenuItem[] {
+  return items.flatMap((it): MenuItem[] => ('sep' in it ? [{ sep: true }] : 'sub' in it ? [{ header: it.label }, ...flatMenu(it.sub)]
+    : [{ label: it.label, icon: it.icon, desc: it.desc, danger: it.danger, disabled: it.disabled, checked: it.checked, onSelect: it.onSelect }]))
+}
 
 /** Lista de acciones (como la hoja de acciones de iOS). */
 export function Actions({ title, items, onClose }: { title?: ReactNode; items: Act[]; onClose: () => void }) {

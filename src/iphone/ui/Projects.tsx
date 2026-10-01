@@ -8,7 +8,7 @@ import { useApp } from '../../App'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon, Logo } from '../../ui/icons'
 import { Button, Empty, Spinner, TextInput } from '../../ui/kit'
-import { Actions, Chips, Sheet, Tap, TopBar } from './PhoneApp'
+import { Chips, MenuButton, Sheet, Tap, TopBar } from './PhoneApp'
 
 export const FORMATS = [
   { id: 'v', name: 'Vertical', sub: '9:16', w: 1080, h: 1920 },
@@ -36,8 +36,6 @@ export default function Projects() {
   const [list, setList] = useState<ProjectSummary[] | null>(lastList)
   const [templates, setTemplates] = useState<Template[]>([])
   const [creating, setCreating] = useState(false)
-  const [acting, setActing] = useState<ProjectSummary | null>(null)
-  const [menu, setMenu] = useState(false)
   const [importing, setImporting] = useState(false)
 
   const refresh = () => call<ProjectSummary[]>('projects:list').then((l) => { lastList = l; setList(l) }).catch((e) => toast(e.message, true))
@@ -68,7 +66,13 @@ export default function Projects() {
   return (
     <>
       <TopBar left={<div className="ph-brand"><Logo size={26} /><b>OpenAnimator</b></div>}
-        right={<><Tap icon="more" label="Más" onClick={() => setMenu(true)} /><Tap icon="settings" label="Ajustes" onClick={() => go({ page: 'settings' })} /></>} />
+        right={<>
+          <MenuButton className="tap" label="Más" items={[
+            { label: importing ? 'Importando…' : 'Importar proyecto (.zip)', icon: 'import', disabled: importing, onSelect: importZip },
+            { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings' }) },
+          ]}><Icon name="more" size={22} /></MenuButton>
+          <Tap icon="settings" label="Ajustes" onClick={() => go({ page: 'settings' })} />
+        </>} />
       <div className="ph-scroll">
         <h1 className="ph-title">Proyectos</h1>
         {info && !info.claude && (
@@ -96,7 +100,14 @@ export default function Projects() {
                       <div className="pcard2-name ellipsis">{p.name}</div>
                       <div className="pcard2-meta ellipsis">{ratio(p.width, p.height)} · {ago(p.updatedAt)}</div>
                     </div>
-                    <button className="pcard2-more" aria-label="Opciones" onClick={(e) => { e.stopPropagation(); setActing(p) }}><Icon name="more" size={20} /></button>
+                    <MenuButton className="pcard2-more" label="Opciones" title={p.name} items={[
+                      { label: 'Abrir', icon: 'folder-open', onSelect: () => open(p.id) },
+                      { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(p) },
+                      { label: 'Duplicar', icon: 'copy', onSelect: async () => { await call('projects:duplicate', p.id).catch((e) => toast(e.message, true)); refresh() } },
+                      { label: 'Compartir proyecto (.zip)', icon: 'share', onSelect: () => zip(p, 'share') },
+                      { sep: true },
+                      { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(p) },
+                    ]}><Icon name="more" size={20} /></MenuButton>
                   </div>
                 </div>
               ))}
@@ -106,18 +117,6 @@ export default function Projects() {
       {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo</button>}
 
       {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }} />}
-      {acting && <Actions title={acting.name} onClose={() => setActing(null)} items={[
-        { label: 'Abrir', icon: 'folder-open', onSelect: () => open(acting.id) },
-        { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(acting) },
-        { label: 'Duplicar', icon: 'copy', onSelect: async () => { await call('projects:duplicate', acting.id).catch((e) => toast(e.message, true)); refresh() } },
-        { label: 'Compartir proyecto (.zip)', icon: 'share', onSelect: () => zip(acting, 'share') },
-        { sep: true },
-        { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(acting) },
-      ]} />}
-      {menu && <Actions onClose={() => setMenu(false)} items={[
-        { label: importing ? 'Importando…' : 'Importar proyecto (.zip)', icon: 'import', disabled: importing, onSelect: importZip },
-        { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings' }) },
-      ]} />}
       {dlg.element}
     </>
   )

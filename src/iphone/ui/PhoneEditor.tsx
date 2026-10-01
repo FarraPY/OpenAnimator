@@ -5,15 +5,17 @@
  * abierto queda el video chico y la hoja. La lógica de edición (deshacer, cortar, duplicar, agregar medios) es la del
  * editor de la PC; la forma de tocarla es la del teléfono.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { afterPaint, Asset, call, Clip, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../../api'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { afterPaint, Asset, call, Clip, EFFORTS, fmtTime, on, Project, Timeline as TL, Track, TrackType, uid } from '../../api'
 import { useApp } from '../../App'
 import Stage, { StageHandle } from '../../components/Stage'
-import ChatPanel, { ChatStatus } from '../../components/ChatPanel'
+import ChatPanel, { ChatHeadApi, ChatStatus } from '../../components/ChatPanel'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon } from '../../ui/icons'
 import { Spinner } from '../../ui/kit'
-import { Actions, Tap, TopBar } from './PhoneApp'
+import { useBack } from '../../android/ui/back'
+import { syncGlassNow } from '../host/glassUI'
+import { MenuButton, Tap, TopBar } from './PhoneApp'
 import PhoneTimeline from './PhoneTimeline'
 import PhoneMedia from './PhoneMedia'
 import PhoneInspector from './PhoneInspector'
@@ -27,6 +29,26 @@ const visualAt = (d: TL, x: number) => d.tracks.map((tr) => tr.type === 'audio' 
 type Tab = 'claude' | 'timeline' | 'media'
 /** La hoja de abajo: sólo las pestañas, a media altura o casi toda la pantalla (el timeline de arriba se esconde). */
 type Sheet = 'min' | 'mid' | 'max'
+const clipName = (c: Clip) => c.name || c.src.split('/').pop()!.replace(/\.[^.]+$/, '')
+/** Las áreas seguras (la isla dinámica arriba, el indicador de inicio abajo), medidas una vez. */
+let safe: { top: number; bottom: number } | null = null
+function insets() {
+  if (!safe) {
+    const p = document.createElement('div')
+    p.style.cssText = 'position:fixed;visibility:hidden;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)'
+    document.body.append(p)
+    const cs = getComputedStyle(p)
+    safe = { top: parseFloat(cs.paddingTop) || 0, bottom: parseFloat(cs.paddingBottom) || 0 }
+    p.remove()
+  }
+  return safe
+}
+/** Las tres alturas de la hoja: sólo las pestañas, media altura y casi toda la pantalla (lo que deja el video chico). */
+function detents(): Record<Sheet, number> {
+  const vh = window.visualViewport?.height || window.innerHeight, s = insets()
+  const max = vh - s.top - 54 - (vh * 0.17 + 12) - 62 - 4
+  return { min: 84 + s.bottom, mid: Math.max(250, Math.round(vh * 0.31)), max: Math.max(320, Math.round(max)) }
+}
 
 export default function PhoneEditor({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const { toast, settings, go } = useApp()
@@ -42,7 +64,8 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   const [sheet, setSheet] = useState<Sheet>('mid')
   const [full, setFull] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [menu, setMenu] = useState(false)
+  const [scenePick, setScenePick] = useState<string | null>(null) // la escena de la que se habla con Claude (null: la del cursor)
+  const scenePickRef = useRef(scenePick); scenePickRef.current = scenePick
   const [chat, setChat] = useState<ChatStatus>({ busy: false, waiting: false, assistant: 0, session: null })
   const [seen, setSeen] = useState(0)
   const [inject, setInject] = useState<{ text: string; n: number } | null>(null)
@@ -163,7 +186,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       setSel(ids)
     })
     // Se ve en el timeline y abajo quedan sus ajustes.
-    setTab('timeline'); setSheet('mid')
+    setTab('timeline'); moveSheet('mid')
   }
 
   // ── reproducción: el reloj de la página; el sonido lo pone PreviewAudio ────
@@ -221,21 +244,98 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
   useEffect(() => { if (exporting) setPlaying(false) }, [exporting])
   const unread = tab === 'claude' ? 0 : Math.max(0, chat.assistant - seen)
-  /** Abrir una pestaña de la hoja (si estaba minimizada, sube a media altura). */
-  const openTab = (id: Tab) => { setTab(id); setSheet((s) => (s === 'min' ? 'mid' : s)) }
-  /** Tocar una pestaña: la abre; tocar la que ya está abierta minimiza la hoja. */
-  const pickTab = (id: Tab) => { if (id === tab && sheet !== 'min') setSheet('min'); else openTab(id) }
-  const askClaude = (text: string) => { openTab('claude'); setInject({ text, n: Date.now() }) }
-  // La manija: tocarla alterna media altura y casi toda la pantalla; arrastrarla, un paso hacia donde va el dedo.
-  const grab = useRef<number | null>(null)
-  const grabDown = (e: React.PointerEvent) => { grab.current = e.clientY; (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) }
-  const grabUp = (e: React.PointerEvent) => {
-    if (grab.current == null) return
-    const dy = e.clientY - grab.current
-    grab.current = null
-    const order: Sheet[] = ['min', 'mid', 'max'], i = order.indexOf(sheet)
-    setSheet(Math.abs(dy) < 12 ? (sheet === 'mid' ? 'max' : 'mid') : order[Math.max(0, Math.min(2, i + (dy < 0 ? 1 : -1)))])
+  // ── la hoja de abajo (el cajón) ────────────────────────────────────────────
+  // Sigue al dedo y, al soltarla, se acomoda en una de sus tres alturas con un resorte (como las hojas de iOS), según
+  // dónde quedó y con qué velocidad se soltó; el video, el timeline y el vidrio se van ajustando mientras se mueve
+  // (variables de CSS en .ed, sin volver a dibujar React en cada cuadro).
+  const edRef = useRef<HTMLDivElement>(null)
+  const sheetRef = useRef(sheet); sheetRef.current = sheet
+  const drawer = useRef({ h: 0, raf: 0, moving: false })
+  const drag = useRef<{ y0: number; h0: number; on: boolean; ys: Array<[number, number]> } | null>(null)
+  const justDragged = useRef(false)
+  const applyDrawer = (h: number) => {
+    drawer.current.h = h
+    const el = edRef.current
+    if (!el) return
+    const d = detents(), k = (a: number, b: number) => Math.max(0, Math.min(1, (h - a) / (b - a)))
+    el.style.setProperty('--sheet-h', `${Math.round(h)}px`)
+    el.style.setProperty('--pv', (0.3 - 0.09 * k(d.min, d.mid) - 0.04 * k(d.mid, d.max)).toFixed(4))
+    el.style.setProperty('--tl-o', (1 - k(d.max - 150, d.max - 20)).toFixed(3))
+    syncGlassNow()
   }
+  const moveSheet = (target: Sheet, v0 = 0) => {
+    const dr = drawer.current, to = detents()[target]
+    cancelAnimationFrame(dr.raf)
+    if (target === 'mid') setSheet('mid') // el contenido aparece mientras sube; al minimizar o expandir, cambia al llegar
+    let x = dr.h || to, v = v0, last = performance.now()
+    const K = 240, C = 2 * 0.86 * Math.sqrt(K) // un resorte rápido, apenas con rebote
+    dr.moving = true
+    const step = (now: number) => {
+      const dt = Math.min(0.034, (now - last) / 1000)
+      last = now
+      v += (-K * (x - to) - C * v) * dt
+      x += v * dt
+      if (Math.abs(x - to) < 0.6 && Math.abs(v) < 10) { applyDrawer(to); dr.moving = false; setSheet(target); return }
+      applyDrawer(x)
+      dr.raf = requestAnimationFrame(step)
+    }
+    dr.raf = requestAnimationFrame(step)
+  }
+  const dragDown = (e: React.PointerEvent) => {
+    if (e.button) return
+    cancelAnimationFrame(drawer.current.raf)
+    drawer.current.moving = false
+    drag.current = { y0: e.clientY, h0: drawer.current.h, on: false, ys: [[performance.now(), e.clientY]] }
+  }
+  const dragMove = (e: React.PointerEvent) => {
+    const g = drag.current
+    if (!g) return
+    const dy = e.clientY - g.y0
+    if (!g.on) {
+      if (Math.abs(dy) < 6) return
+      g.on = true
+      try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId) } catch { /* ya terminó */ }
+      if (sheetRef.current !== 'mid') setSheet('mid') // que se vea el contenido mientras se mueve
+    }
+    // Más allá de los extremos se estira con resistencia, como en iOS.
+    const d = detents(), rubber = (x: number) => 46 * (1 - 1 / (x / 140 + 1))
+    let h = g.h0 - dy
+    if (h > d.max) h = d.max + rubber(h - d.max)
+    else if (h < d.min) h = d.min - rubber(d.min - h)
+    g.ys.push([performance.now(), e.clientY])
+    if (g.ys.length > 5) g.ys.shift()
+    applyDrawer(h)
+  }
+  const dragEnd = (e: React.PointerEvent) => {
+    const g = drag.current
+    drag.current = null
+    if (!g) return
+    if (!g.on) {
+      // Un toque en la manija: media altura ↔ casi toda la pantalla (minimizada: a media altura).
+      if ((e.target as HTMLElement).closest('.ed-grab')) moveSheet(sheetRef.current === 'mid' ? 'max' : 'mid')
+      return
+    }
+    justDragged.current = true
+    setTimeout(() => { justDragged.current = false }, 80)
+    const [t0, y0] = g.ys[0], [t1, y1] = g.ys[g.ys.length - 1]
+    const v = t1 > t0 ? -(y1 - y0) / ((t1 - t0) / 1000) : 0 // px/s, hacia arriba
+    const d = detents(), proj = drawer.current.h + v * 0.2
+    moveSheet((['min', 'mid', 'max'] as Sheet[]).reduce((a, b) => (Math.abs(d[b] - proj) < Math.abs(d[a] - proj) ? b : a)), v)
+  }
+  // Al abrir el proyecto, al volver de pantalla completa y si cambia el tamaño (el teclado): la altura de su lugar.
+  useLayoutEffect(() => { if (!drawer.current.moving && !drag.current) applyDrawer(detents()[sheetRef.current]) }, [!!tl, !!project, full])
+  useEffect(() => {
+    const fit = () => { if (!drawer.current.moving && !drag.current) applyDrawer(detents()[sheetRef.current]) }
+    window.visualViewport?.addEventListener('resize', fit)
+    return () => { window.visualViewport?.removeEventListener('resize', fit); cancelAnimationFrame(drawer.current.raf) }
+  }, [])
+  // Pantalla completa: volver deslizando desde el borde sale de ella.
+  useBack(() => { setFull(false); return true }, full)
+  /** Abrir una pestaña de la hoja (si estaba minimizada, sube a media altura). */
+  const openTab = (id: Tab) => { setTab(id); if (sheetRef.current === 'min') moveSheet('mid') }
+  /** Tocar una pestaña: la abre; tocar la que ya está abierta minimiza la hoja. */
+  const pickTab = (id: Tab) => { if (justDragged.current) return; if (id === tab && sheet !== 'min') moveSheet('min'); else openTab(id) }
+  const askClaude = (text: string) => { openTab('claude'); setInject({ text, n: Date.now() }) }
   /** 00:28.24 (o 01:15 sin centésimas). */
   const clock = (x: number, frac = true) => {
     const cs = Math.round(Math.max(0, x) * 100), m = Math.floor(cs / 6000), sec = (cs % 6000) / 100
@@ -272,11 +372,60 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       onScrub={scrub} onSelect={setSel} onChange={change} onSplit={() => splitAt(tRef.current)} onDelete={delSel} onDuplicate={dupSel}
       onPatchTrack={patchTrack} onAdd={() => openTab('media')} onNote={addNote} onAsk={askClaude} onInspect={() => openTab('timeline')} />
   )
+  // La escena de la que se habla con Claude: la elegida o la que está en el cursor.
+  const scenes = tl.tracks.filter((x) => x.type === 'scene').flatMap((x) => [...x.clips].sort((a, b) => a.start - b.start))
+  const sceneOf = (pick: string | null, x: number) => (pick && scenes.find((c) => c.id === pick)) || scenes.find((c) => x >= c.start && x < c.start + c.duration)
+  const num = (c: Clip) => String(scenes.indexOf(c) + 1).padStart(2, '0')
+  const chatScene = sceneOf(scenePick, t)
+  const claudeHead = (api: ChatHeadApi) => {
+    const name = chatScene ? clipName(chatScene) : ''
+    const chips: Array<[string, string]> = chatScene
+      ? [['Animar escena', `Animá la escena «${name}»: `], ['Más rápido', `Hacé más rápida la escena «${name}».`], ['Cambiar colores', `Cambiá los colores de la escena «${name}»: `], ['Ajustar voz', `Ajustá la voz de la escena «${name}»: `]]
+      : [['Crear un video', 'Creá un video a partir de este guion: '], ['Agregar una escena', 'Agregá una escena que muestre ']]
+    const effort = EFFORTS.find((e) => e.id === api.effort) || EFFORTS[0]
+    const perm = api.perms.find((x) => x.value === api.permissionMode) || api.perms[1]
+    return (
+      <div className="cl-head">
+        <div className="cl-row">
+          <span className="cl-title"><Icon name="sparkles" size={21} />Claude{api.busy && <Spinner size={14} />}</span>
+          <div className="grow" />
+          {scenes.length > 0 && <MenuButton className="cl-scene" glass label="Escena para Claude" title="¿De qué escena hablamos?" items={[
+            { label: 'La del cursor', icon: 'film', checked: !scenePick, onSelect: () => setScenePick(null) },
+            { sep: true },
+            ...scenes.map((c) => ({ label: `${num(c)} · ${clipName(c)}`, checked: scenePick === c.id, onSelect: () => setScenePick(c.id) })),
+          ]}><Icon name="film" size={15} /><span className="ellipsis">{chatScene ? `Escena ${num(chatScene)}` : 'Escena'}</span><Icon name="chevron-down" size={14} /></MenuButton>}
+          <MenuButton className="g-btn cl-more" glass label="Opciones de Claude" title="Claude" items={[
+            { label: 'Nueva conversación', icon: 'plus', onSelect: api.newChat },
+            { label: 'Conversaciones anteriores', icon: 'history', onSelect: api.history },
+            { sep: true },
+            { label: 'Modelo', icon: 'cpu', desc: api.modelName(api.model), sub: api.models.map((o) => ({ label: typeof o.label === 'string' ? o.label : api.modelName(o.value), checked: o.value === api.modelValue, onSelect: () => api.setOption({ model: o.value }, `Modelo: ${api.modelName(o.value)} (se aplica al próximo mensaje).`) })) },
+            { label: 'Esfuerzo', icon: 'gauge', desc: effort.name, sub: EFFORTS.map((e) => ({ label: e.name, desc: e.desc, checked: e.id === api.effort, onSelect: () => api.setOption({ effort: e.id }, `Esfuerzo: ${e.name} (se aplica al próximo mensaje).`) })) },
+            { label: 'Permisos', icon: 'shield', desc: perm.label, sub: api.perms.map((x) => ({ label: x.label, desc: x.desc, checked: x.value === api.permissionMode, onSelect: () => api.setOption({ permissionMode: x.value }, `Permisos: ${x.label}`) })) },
+            { label: 'Modo ahorro', icon: 'leaf', desc: 'Imágenes más chicas y respuestas cortas', checked: api.saver, onSelect: () => api.setOption({ saver: !api.saver }, api.saver ? 'Modo ahorro desactivado (se aplica al próximo mensaje).' : 'Modo ahorro activado (se aplica al próximo mensaje).') },
+            { sep: true },
+            { label: 'Compactar la conversación', icon: 'compress', desc: api.context ? `${Math.round(api.context.used / 1000)} mil tokens (${api.context.pct} %)` : 'Todavía sin medir', disabled: api.busy || !api.context, onSelect: api.compact },
+          ]}><Icon name="more" size={19} /></MenuButton>
+        </div>
+        <div className="cl-chips">{chips.map(([label, text]) => <button key={label} className="cl-chip" onClick={() => setInject({ text, n: Date.now() })}>{label}</button>)}</div>
+      </div>
+    )
+  }
   return (
-    <div className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}>
+    <div ref={edRef} className={`ed sh-${sheet} tab-${tab} ${full ? 'full' : ''}`}>
       <div className="ph-top ed-top">
         <button className="g-btn" data-glass aria-label="Proyectos" data-back onClick={onClose}><Icon name="chevron-left" size={22} /></button>
-        <button className="ed-name" data-glass onClick={() => setMenu(true)}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></button>
+        <MenuButton className="ed-name" glass align="start" label="Proyecto" title={project.name} items={[
+          { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
+          { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
+          { sep: true },
+          { label: 'Timelines', icon: 'film', desc: project.timelines.find((x) => x.id === tlId)?.name, sub: [
+            ...project.timelines.map((x) => ({ label: x.name, checked: x.id === tlId, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
+            { sep: true as const },
+            { label: 'Nuevo timeline…', icon: 'plus', onSelect: newTl },
+          ] },
+          { sep: true },
+          { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
+        ]}><span className="ellipsis">{project.name}</span><Icon name="chevron-down" size={15} /></MenuButton>
         <div className="grow" />
         <button className="g-btn" data-glass aria-label="Deshacer" onClick={undo} disabled={!hist.current.past.length}><Icon name="undo" size={19} /></button>
         <button className="g-btn" data-glass aria-label="Rehacer" onClick={redo} disabled={!hist.current.future.length}><Icon name="redo" size={19} /></button>
@@ -309,22 +458,29 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       </div>
 
       {!full && <>
-        {sheet !== 'max' && <div className="ed-tl">{timeline}</div>}
+        <div className="ed-tl">{sheet !== 'max' && timeline}</div>
 
-        {/* La hoja de abajo (vidrio) con sus pestañas: Claude, Timeline (los ajustes del clip) y Medios. */}
+        {/* La hoja de abajo (vidrio) con sus pestañas: Claude, Timeline (los ajustes del clip) y Medios. Se arrastra
+            desde la manija o las pestañas. */}
         <div className="ed-sheet" data-glass>
-          <div className="ed-grab" onPointerDown={grabDown} onPointerUp={grabUp} onPointerCancel={() => { grab.current = null }}><i /></div>
-          <div className="ed-tabs" role="tablist" data-glass>
-            {tabs.map(([id, icon, label]) => (
-              <button key={id} role="tab" aria-selected={tab === id} className={`ed-tab ${tab === id ? 'on' : ''}`} data-glass={tab === id ? 'accent' : undefined} onClick={() => pickTab(id)}>
-                <Icon name={icon} size={17} />{label}
-                {id === 'claude' && (chat.waiting ? <span className="ed-dot warn" /> : chat.busy ? <span className="ed-dot busy" /> : unread ? <span className="ed-count">{unread}</span> : null)}
-              </button>
-            ))}
+          <div className="ed-sheet-head" onPointerDown={dragDown} onPointerMove={dragMove} onPointerUp={dragEnd} onPointerCancel={dragEnd}>
+            <div className="ed-grab"><i /></div>
+            <div className="ed-tabs" role="tablist" data-glass>
+              {tabs.map(([id, icon, label]) => (
+                <button key={id} role="tab" aria-selected={tab === id} className={`ed-tab ${tab === id ? 'on' : ''}`} data-glass={tab === id ? 'accent' : undefined} onClick={() => pickTab(id)}>
+                  <Icon name={icon} size={17} />{label}
+                  {id === 'claude' && (chat.waiting ? <span className="ed-dot warn" /> : chat.busy ? <span className="ed-dot busy" /> : unread ? <span className="ed-count">{unread}</span> : null)}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="ed-pane" style={{ display: sheet === 'min' ? 'none' : undefined }}>
             <div className="ed-chat" style={{ display: tab === 'claude' ? 'flex' : 'none' }}>
-              <ChatPanel projectId={projectId} visible={tab === 'claude' && sheet !== 'min'} context={() => ({ timeline: tlId, t: tRef.current })} onStatus={setChat} inject={inject} />
+              <ChatPanel projectId={projectId} visible={tab === 'claude' && sheet !== 'min'} onStatus={setChat} inject={inject} head={claudeHead} compactBar
+                context={() => {
+                  const c = sceneOf(scenePickRef.current, tRef.current)
+                  return { timeline: tlId, t: tRef.current, scene: c ? `«${clipName(c)}» (${c.src}, de ${fmtTime(c.start, true, fps)} a ${fmtTime(c.start + c.duration, true, fps)})` : undefined }
+                }} />
             </div>
             {tab === 'media' && <PhoneMedia projectId={projectId} assets={assets} onRefresh={refreshAssets} onAdd={addAssets} onAsk={askClaude} full={sheet === 'max'} />}
             {tab === 'timeline' && <div className="ed-montage">
@@ -337,15 +493,6 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       </>}
 
       {exporting && <PhoneExport project={project} currentTl={tlId} onClose={() => setExporting(false)} />}
-      {menu && <Actions title={project.name} onClose={() => setMenu(false)} items={[
-        { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
-        { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
-        { sep: true },
-        ...project.timelines.map((x) => ({ label: x.name, icon: x.id === tlId ? 'check' : 'film', desc: x.id === tlId ? 'Timeline actual' : undefined, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
-        { label: 'Nuevo timeline…', icon: 'plus', onSelect: newTl },
-        { sep: true },
-        { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings', from: { page: 'editor', id: projectId } }) },
-      ]} />}
       {dlg.element}
     </div>
   )

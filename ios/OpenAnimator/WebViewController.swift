@@ -7,6 +7,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private(set) var webView: WKWebView!
     private let backHint = UIImageView(image: UIImage(systemName: "chevron.backward.circle.fill"))
     let chrome = NativeChrome()
+    /// Los menús de iOS que salen de los botones de la página (los ubica la página: menu.layout).
+    let menus = NativeMenus()
     private let schemes = SchemeHandler()
     private lazy var bridge = Bridge(controller: self)
     static let diagMode = ProcessInfo.processInfo.arguments.contains("-OADiag")
@@ -68,6 +70,8 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        menus.host = view
+        menus.onSelect = { [weak self] key, index in self?.emit("menu", ["key": key, "index": index]) }
         load()
         let edge = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgePan(_:)))
         edge.edges = .left
@@ -86,6 +90,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
 
     private func load(recovered: Bool = false) {
         chrome.clear()
+        menus.layout([])
         let start = Self.diagMode ? "oa://localhost/__diag/index.html" : "oa://localhost/index.html" + (recovered ? "?recovered=1" : "")
         webView.load(URLRequest(url: URL(string: start)!))
     }

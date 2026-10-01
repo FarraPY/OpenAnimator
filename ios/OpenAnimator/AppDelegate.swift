@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 
 /// OpenAnimator para iPhone: una app nativa que lleva adentro la interfaz web (WKWebView), el compositor y el
@@ -8,6 +9,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         Storage.prepare()
         AppLog.start()
+        // La vista previa suena aunque el iPhone esté en silencio, como en las apps de video (sin esto, iOS usa la
+        // categoría de los sonidos de la interfaz, que calla con el interruptor).
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
         return true
     }
 

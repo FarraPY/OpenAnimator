@@ -152,10 +152,9 @@ html.kb .sheet-foot { padding-bottom: 12px; }
 .ed-export { flex: none; height: 44px; display: flex; align-items: center; gap: 7px; padding: 0 16px 0 14px; border-radius: 22px; color: #fff; font: 600 15.5px var(--font-display); }
 .ed-media { flex: none; display: flex; flex-direction: column; }
 .ed-player { flex: none; display: flex; justify-content: center; padding: 2px 12px 10px; }
-.ed-stage { position: relative; width: min(100%, calc(var(--vvh) * .24 / var(--ar))); aspect-ratio: 1 / var(--ar); border-radius: 16px; overflow: hidden; background: #000;
+/* El tamaño del video lo va dando la altura de la hoja (--pv, PhoneEditor: más chico cuanto más sube). */
+.ed-stage { position: relative; width: min(100%, calc(var(--vvh) * var(--pv, .21) / var(--ar))); aspect-ratio: 1 / var(--ar); border-radius: 16px; overflow: hidden; background: #000;
   box-shadow: 0 16px 40px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .08); }
-.ed.sh-min .ed-stage { width: min(100%, calc(var(--vvh) * .3 / var(--ar))); }
-.ed.sh-max .ed-stage { width: min(100%, calc(var(--vvh) * .17 / var(--ar))); }
 html.kb .ed-stage { width: min(100%, calc(var(--vvh) * .2 / var(--ar))); }
 .ed-stage .stage-wrap { position: absolute; inset: 0; }
 .ed-tapzone { position: absolute; inset: 0; border: 0; background: none; padding: 0; }
@@ -175,21 +174,14 @@ html.kb .ed-stage { width: min(100%, calc(var(--vvh) * .2 / var(--ar))); }
 .ed-fs { justify-self: end; }
 .ed-play { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 20px; padding: 0; margin: 0 4px; }
 html.kb .ed-transport { display: none; }
-/* Timeline expandido: el video chico a la izquierda y la reproducción al lado (más lugar para el montaje). */
-.ed.sh-max.tab-timeline .ed-media { flex-direction: row; align-items: center; gap: 10px; padding: 0 12px 8px; }
-.ed.sh-max.tab-timeline .ed-player { padding: 0; }
-.ed.sh-max.tab-timeline .ed-stage { width: min(46vw, calc(var(--vvh) * .14 / var(--ar))); }
-.ed.sh-max.tab-timeline .ed-transport { flex: 1; min-width: 0; margin: 0; height: auto; padding: 8px 6px; grid-template-columns: 1fr auto; row-gap: 2px; border-radius: 24px; }
-.ed.sh-max.tab-timeline .ed-time { grid-column: 1 / -1; text-align: center; }
-.ed.sh-max.tab-timeline .ed-tp { justify-self: center; }
-.ed-tl { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* El timeline se apaga al llegar arriba (--tl-o) y la hoja expandida ocupa su lugar. */
+.ed-tl { flex: 1; min-height: 0; display: flex; flex-direction: column; opacity: var(--tl-o, 1); }
 html.kb .ed-tl { display: none; }
-/* la hoja de abajo */
-.ed-sheet { flex: none; display: flex; flex-direction: column; height: max(260px, calc(var(--vvh) * .34)); margin: 0 4px; border-radius: 32px 32px 0 0; border-bottom: 0; }
-.ed.sh-min .ed-sheet { height: auto; padding-bottom: calc(var(--safe-b) + 2px); }
-.ed.sh-max .ed-sheet { flex: 1; height: auto; }
+/* la hoja de abajo: su altura la da el dedo o el resorte (--sheet-h, PhoneEditor); lo de adentro se recorta */
+.ed-sheet { flex: none; display: flex; flex-direction: column; height: var(--sheet-h, max(250px, calc(var(--vvh) * .31))); margin: 0 4px; border-radius: 32px 32px 0 0; border-bottom: 0; overflow: hidden; }
 html.kb .ed-sheet { flex: 1; height: auto; }
-.ed-grab { flex: none; height: 20px; display: grid; place-items: center; touch-action: none; }
+.ed-sheet-head { flex: none; touch-action: none; }
+.ed-grab { flex: none; height: 20px; display: grid; place-items: center; }
 .ed-grab i { width: 40px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .3); }
 .ed-tabs { flex: none; display: flex; gap: 4px; height: 50px; margin: 0 12px 8px; padding: 4px; border-radius: 25px; }
 .ed-tab { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; border-radius: 21px; border: 1px solid transparent; background: none; color: var(--t2); font: 600 15px var(--font-display); padding: 0; }
@@ -220,6 +212,24 @@ html.phone .composer-bar { padding: 4px 8px 8px; gap: 4px; }
 html.phone .composer-bar .b { height: 36px; }
 html.phone .perm-card .b { height: 38px; }
 .ed-sheet .pane-head { border-bottom: 0; }
+.cl-head { flex: none; display: flex; flex-direction: column; gap: 10px; padding: 0 14px 6px; }
+.cl-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cl-title { display: flex; align-items: center; gap: 8px; font: 700 21px var(--font-display); }
+.cl-title .ic { color: var(--accent-t); }
+.cl-scene { min-width: 0; max-width: 46%; height: 38px; display: flex; align-items: center; gap: 6px; padding: 0 12px; border-radius: 19px; color: var(--t1); font: 600 14px var(--font-display); }
+.cl-scene .ellipsis { min-width: 0; }
+.cl-scene .ic { flex: none; color: var(--t2); }
+.g-btn.cl-more { width: 38px; height: 38px; border-radius: 19px; }
+.cl-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 0 14px; }
+.cl-chips::-webkit-scrollbar { display: none; }
+.cl-chip { flex: none; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .06); color: var(--t1); font: 500 14px var(--font-display); }
+html.phone .ed-sheet .composer { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; grid-template-areas: "chips chips chips" "att text send"; align-items: end; padding: 4px; border-radius: 25px; }
+html.phone .ed-sheet .composer .att-chips { grid-area: chips; }
+html.phone .ed-sheet .composer textarea { grid-area: text; min-height: 40px; padding: 10px 6px; }
+html.phone .ed-sheet .composer .composer-bar { display: contents; }
+html.phone .ed-sheet .composer .composer-bar > .grow { display: none; }
+html.phone .ed-sheet .composer .composer-bar > .b:first-child { grid-area: att; width: 40px; height: 40px; border-radius: 20px; }
+html.phone .ed-sheet .composer .send-btn { grid-area: send; width: 40px; height: 40px; padding: 0; border-radius: 20px; }
 html.phone .ed-sheet .chat-list { padding: 4px 14px 8px; }
 html.phone .ed-sheet .composer-wrap { padding: 6px 12px calc(var(--safe-b) + 4px); }
 html.phone .ed-sheet .composer { border-radius: 24px; }
@@ -274,8 +284,8 @@ html.phone .ed-sheet .msg-user { background: var(--accent); color: #fff; border-
 .tlp-cursor { position: absolute; z-index: 4; top: 6px; bottom: 0; left: 50%; width: 2px; margin-left: -1px; border-radius: 1px; background: #fff; pointer-events: none; box-shadow: 0 0 8px rgba(255, 255, 255, .3); }
 .tlp-cursor::before { content: ''; position: absolute; top: -3px; left: -5px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
 /* La barra de herramientas: una cápsula de vidrio. */
-.tlp-bar { flex: none; height: 58px; margin: 8px 12px; display: flex; align-items: center; justify-content: space-around; padding: 0 6px; border-radius: 29px; }
-.tlp-btn { flex: 1; height: 50px; max-width: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: 22px; background: none; color: var(--t1); font-size: 11.5px; font-weight: 500; }
+.tlp-bar { flex: none; height: 52px; margin: 6px 12px 10px; display: flex; align-items: center; justify-content: space-around; padding: 0 6px; border-radius: 26px; }
+.tlp-btn { flex: 1; height: 46px; max-width: 84px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border: 0; border-radius: 22px; background: none; color: var(--t1); font-size: 11.5px; font-weight: 500; }
 .tlp-btn:disabled { opacity: .3; } .tlp-btn.danger { color: var(--err); }
 
 /* ── medios (pestaña de la hoja) ─────────────────────────────────────────── */
@@ -323,7 +333,7 @@ html.phone .ed-sheet .msg-user { background: var(--accent); color: #fff; border-
 .ins-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .ins-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 46px; padding: 0 12px 0 14px; border-radius: 14px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .08); }
 .ins-field span { color: var(--t2); font-size: 14px; }
-.ins-field input { width: 84px; min-width: 0; border: 0; background: none; color: var(--t1); font-size: 16px; font-weight: 600; text-align: right; outline: none; }
+.ins-field input { flex: 1; width: auto; min-width: 0; border: 0; background: none; color: var(--t1); font-size: 16px; font-weight: 600; text-align: right; outline: none; }
 .ins-acts { display: flex; gap: 8px; }
 .ins-btn { flex: 1; height: 44px; display: flex; align-items: center; justify-content: center; gap: 7px; border-radius: 14px; border: 1px solid rgba(255, 255, 255, .1); background: rgba(255, 255, 255, .06); color: var(--t1); font: 600 14.5px var(--font-display); }
 .ins-btn.danger { color: #ff6b6b; border-color: rgba(255, 107, 107, .45); background: rgba(255, 80, 80, .08); }

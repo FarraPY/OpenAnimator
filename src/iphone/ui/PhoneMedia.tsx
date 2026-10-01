@@ -8,8 +8,8 @@ import { Asset, call, fileUrl } from '../../api'
 import { useApp } from '../../App'
 import { useDialogs } from '../../components/Dialogs'
 import { Icon, IconName } from '../../ui/icons'
-import { Empty, Spinner } from '../../ui/kit'
-import { Actions, Sheet } from './PhoneApp'
+import { Empty, Menu, Spinner } from '../../ui/kit'
+import { flatMenu, Sheet } from './PhoneApp'
 
 const KIND: Record<Asset['kind'], { label: string; icon: IconName }> = {
   scene: { label: 'Escenas', icon: 'code' }, video: { label: 'Video', icon: 'video' }, image: { label: 'Imágenes', icon: 'image' },
@@ -26,7 +26,7 @@ export default function PhoneMedia({ projectId, assets, onRefresh, onAdd, onAsk,
   const [query, setQuery] = useState('')
   const [importing, setImporting] = useState(false)
   const [picked, setPicked] = useState<string[]>([])
-  const [acting, setActing] = useState<Asset | null>(null)
+  const [acting, setActing] = useState<{ a: Asset; at: DOMRect } | null>(null)
   const [viewing, setViewing] = useState<Asset | null>(null)
   const q = query.trim().toLowerCase()
   const shown = useMemo(() => assets.filter((a) => (filter === 'all' || a.kind === filter) && (!q || a.name.toLowerCase().includes(q))).sort((a, b) => (b.mtime || 0) - (a.mtime || 0)), [assets, filter, q])
@@ -67,7 +67,7 @@ export default function PhoneMedia({ projectId, assets, onRefresh, onAdd, onAsk,
         {!assets.length ? <Empty icon="folder" title="Sin medios todavía" desc="Importá videos, fotos o audio, o pedile a Claude que genere imágenes, voz o música con tus plugins." compact />
           : <>
             <div className="med-sec">En este proyecto</div>
-            <div className="med-grid">{shown.map((a) => <Tile key={a.path} projectId={projectId} a={a} on={picked.includes(a.path)} onTap={() => toggle(a)} onHold={() => setActing(a)} />)}</div>
+            <div className="med-grid">{shown.map((a) => <Tile key={a.path} projectId={projectId} a={a} on={picked.includes(a.path)} onTap={() => toggle(a)} onHold={(at) => setActing({ a, at })} />)}</div>
             {!shown.length && <div className="t3 med-none">Nada con ese nombre.</div>}
           </>}
       </div>
@@ -77,15 +77,15 @@ export default function PhoneMedia({ projectId, assets, onRefresh, onAdd, onAsk,
         <button className="g-btn sm" aria-label="Quitar la selección" onClick={() => setPicked([])}><Icon name="x" size={18} /></button>
         <button className="med-add" data-glass="accent" onClick={() => { onAdd(chosen); setPicked([]) }}>Añadir a timeline</button>
       </div>}
-      {acting && <Actions title={acting.name} onClose={() => setActing(null)} items={[
-        ...(acting.kind === 'doc' || acting.kind === 'other' ? [] : [{ label: 'Añadir en el cursor', icon: 'plus' as IconName, onSelect: () => onAdd([acting]) }]),
-        { label: 'Ver', icon: 'eye', onSelect: () => setViewing(acting) },
-        { label: 'Pedirle a Claude…', icon: 'sparkles', onSelect: () => onAsk(`Usá el archivo @${acting.path} para `) },
-        { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(acting) },
-        { label: 'Compartir', icon: 'share', onSelect: () => call('assets:share', projectId, acting.path).catch(() => {}) },
+      {acting && <Menu anchor={acting.at} align="start" onClose={() => setActing(null)} items={flatMenu([
+        ...(acting.a.kind === 'doc' || acting.a.kind === 'other' ? [] : [{ label: 'Añadir en el cursor', icon: 'plus', onSelect: () => onAdd([acting.a]) }]),
+        { label: 'Ver', icon: 'eye', onSelect: () => setViewing(acting.a) },
+        { label: 'Pedirle a Claude…', icon: 'sparkles', onSelect: () => onAsk(`Usá el archivo @${acting.a.path} para `) },
+        { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(acting.a) },
+        { label: 'Compartir', icon: 'share', onSelect: () => call('assets:share', projectId, acting.a.path).catch(() => {}) },
         { sep: true },
-        { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(acting) },
-      ]} />}
+        { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(acting.a) },
+      ])} />}
       {viewing && <Viewer projectId={projectId} a={viewing} onClose={() => setViewing(null)} />}
       {dlg.element}
     </div>
@@ -93,7 +93,7 @@ export default function PhoneMedia({ projectId, assets, onRefresh, onAdd, onAsk,
 }
 
 /** Una miniatura: tocar la elige; mantener apretado, sus acciones. */
-function Tile({ projectId, a, on, onTap, onHold }: { projectId: string; a: Asset; on: boolean; onTap: () => void; onHold: () => void }) {
+function Tile({ projectId, a, on, onTap, onHold }: { projectId: string; a: Asset; on: boolean; onTap: () => void; onHold: (at: DOMRect) => void }) {
   const [thumb, setThumb] = useState<string | null>(a.kind === 'image' ? fileUrl(projectId, a.path) : null)
   const key = projectId + '|' + a.path
   const [dur, setDur] = useState(durations.get(key))
@@ -104,7 +104,10 @@ function Tile({ projectId, a, on, onTap, onHold }: { projectId: string; a: Asset
     return () => { alive = false }
   }, [a.path])
   const hold = useRef<{ timer: number; fired: boolean } | null>(null)
-  const start = () => { hold.current = { fired: false, timer: window.setTimeout(() => { if (hold.current) hold.current.fired = true; navigator.vibrate?.(10); onHold() }, 480) } }
+  const start = (e: React.PointerEvent) => {
+    const el = e.currentTarget as HTMLElement
+    hold.current = { fired: false, timer: window.setTimeout(() => { if (hold.current) hold.current.fired = true; navigator.vibrate?.(10); onHold(el.getBoundingClientRect()) }, 480) }
+  }
   const stop = () => { if (hold.current) clearTimeout(hold.current.timer) }
   return (
     <button className={`mtile2 k-${a.kind} ${on ? 'on' : ''}`} onPointerDown={start} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop} onContextMenu={(e) => e.preventDefault()}

@@ -70,6 +70,9 @@ export class PreviewAudio {
   /** Hay que llamarlo dentro del toque: Safari sólo activa el audio así. */
   unlock() {
     try {
+      // Que suene aunque el iPhone esté en silencio (la app además pone la categoría «playback»: AppDelegate).
+      const nav = navigator as any
+      if (nav.audioSession) nav.audioSession.type = 'playback'
       if (!this.ctx) this.ctx = new AudioContext()
       if (this.ctx.state !== 'running') void this.ctx.resume()
     } catch (e) { console.warn('Sin audio en la vista previa:', e) } // sin Web Audio: se ve igual, sin sonido

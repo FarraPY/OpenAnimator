@@ -131,6 +131,13 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   Sin iOS 26 (o en Safari) el vidrio es CSS. Editor (diseño del usuario): botones de vidrio, video redondeado, cápsula de
   reproducción, timeline compacto (escenas como tarjetas con miniatura de `frames:png`, onda rellena) y una hoja de
   vidrio con Claude / Timeline (inspector del clip, PhoneInspector) / Medios en tres alturas (`sheet` min/mid/max).
+  La hoja sigue al dedo (manija y pestañas) y se acomoda con un resorte según dónde quedó y la velocidad; el tamaño
+  del video, de la hoja y el timeline salen de variables de CSS (`--sheet-h`, `--pv`, `--tl-o`) que se cambian sin
+  React, y `syncGlassNow()` manda el vidrio en el mismo cuadro (si no, queda un cuadro atrás). Menús «⋯»: `MenuButton`
+  (PhoneApp) → `NativeMenus.swift` (un botón invisible de iOS encima con un UIMenu, submenús incluidos; lo elegido
+  vuelve como evento `menu`); en lo que se desplaza con el dedo, `native={false}` (el botón de iOS no dejaría
+  desplazar) y queda el menú de la página anclado. El audio de la vista previa suena con el iPhone en silencio:
+  AVAudioSession `.playback` (AppDelegate) y `navigator.audioSession.type = 'playback'`.
 - Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`

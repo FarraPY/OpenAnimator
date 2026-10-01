@@ -9,7 +9,7 @@ import { call, Clip, fmtTime, on, Timeline as TL, Track } from '../../api'
 import { useApp } from '../../App'
 import { TYPE_COLOR, TYPE_ICON, WAVE, Wave, trackRole } from '../../components/Timeline'
 import { Icon, IconName } from '../../ui/icons'
-import { Actions } from './PhoneApp'
+import { MenuButton } from './PhoneApp'
 
 const RULER = 28
 const COL = 48 // la columna de las pistas (ícono)
@@ -71,7 +71,6 @@ export default function PhoneTimeline(p: Props) {
   const [vh, setVh] = useState(320)
   const [left, setLeft] = useState(0)
   const [pps, setPps] = useState(() => clamp((window.innerWidth * 0.85) / Math.max(4, tl.duration), 6, 120))
-  const [trackAct, setTrackAct] = useState<Track | null>(null)
   const ppsRef = useRef(pps); ppsRef.current = pps
   const pRef = useRef(p); pRef.current = p
   const touching = useRef(false)
@@ -234,10 +233,14 @@ export default function PhoneTimeline(p: Props) {
             </div>
             {tl.tracks.map((tr, i) => (
               <div key={tr.id} className={`tlp-track ${i % 2 ? 'alt' : ''} ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * row }}>
-                <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}>
+                <MenuButton native={false} align="start" className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} label={tr.name} title={tr.name} items={[
+                  ...(tr.type !== 'scene' ? [{ label: tr.muted ? 'Activar el sonido' : 'Silenciar la pista', icon: tr.muted ? 'volume-2' : 'volume-x', onSelect: () => p.onPatchTrack(tr.id, { muted: !tr.muted }) }] : []),
+                  ...(tr.type !== 'audio' ? [{ label: tr.hidden ? 'Mostrar la pista' : 'Ocultar la pista', icon: tr.hidden ? 'eye' : 'eye-off', onSelect: () => p.onPatchTrack(tr.id, { hidden: !tr.hidden }) }] : []),
+                  { label: tr.locked ? 'Desbloquear' : 'Bloquear (no se mueve)', icon: tr.locked ? 'unlock' : 'lock', onSelect: () => p.onPatchTrack(tr.id, { locked: !tr.locked }) },
+                ]}>
                   <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={19} />
                   {row >= 62 && <span className="tlp-trk-name">{tr.name}</span>}
-                </button>
+                </MenuButton>
                 {tr.clips.map((c) => {
                   const on = p.sel.includes(c.id)
                   // Sólo lo que está en pantalla (más una pantalla de margen a cada lado): con cientos de clips el
@@ -295,11 +298,6 @@ export default function PhoneTimeline(p: Props) {
         </>}
       </div>
 
-      {trackAct && <Actions title={trackAct.name} onClose={() => setTrackAct(null)} items={[
-        ...(trackAct.type !== 'scene' ? [{ label: trackAct.muted ? 'Activar el sonido' : 'Silenciar la pista', icon: trackAct.muted ? 'volume-2' : 'volume-x', onSelect: () => p.onPatchTrack(trackAct.id, { muted: !trackAct.muted }) }] : []),
-        ...(trackAct.type !== 'audio' ? [{ label: trackAct.hidden ? 'Mostrar la pista' : 'Ocultar la pista', icon: trackAct.hidden ? 'eye' : 'eye-off', onSelect: () => p.onPatchTrack(trackAct.id, { hidden: !trackAct.hidden }) }] : []),
-        { label: trackAct.locked ? 'Desbloquear' : 'Bloquear (no se mueve)', icon: trackAct.locked ? 'unlock' : 'lock', onSelect: () => p.onPatchTrack(trackAct.id, { locked: !trackAct.locked }) },
-      ]} />}
     </div>
   )
 }
