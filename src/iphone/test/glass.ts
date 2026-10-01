@@ -11,7 +11,7 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const say = (text: string) => nativeCall('log', { text }).catch(() => {})
 
 /** WAV mono de 16 bits. */
-function wav(sec: number, f: (t: number) => number, sr = 16000) {
+export function wav(sec: number, f: (t: number) => number, sr = 16000) {
   const n = Math.floor(sec * sr), v = new DataView(new ArrayBuffer(44 + n * 2))
   const str = (o: number, s: string) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)) }
   str(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); str(8, 'WAVE'); str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true)
@@ -21,9 +21,9 @@ function wav(sec: number, f: (t: number) => number, sr = 16000) {
   return b64encode(new Uint8Array(v.buffer))
 }
 const noise = () => Math.random() * 2 - 1
-const voice = (rate: number) => (t: number) => (t % 1.4 < 1 ? 0.2 + 0.8 * Math.abs(Math.sin(2 * Math.PI * rate * t)) : 0.02) * noise() * 0.7
-const music = (t: number) => (0.3 + 0.7 * Math.abs(Math.sin(Math.PI * t)) ** 3) * (0.5 * Math.sin(2 * Math.PI * 110 * t) + 0.3 * Math.sin(2 * Math.PI * 165 * t))
-const whoosh = (t: number) => Math.min(t / 0.45, 1, (1 - t) / 0.5) * noise() * 0.8
+export const voice = (rate: number) => (t: number) => (t % 1.4 < 1 ? 0.2 + 0.8 * Math.abs(Math.sin(2 * Math.PI * rate * t)) : 0.02) * noise() * 0.7
+export const music = (t: number) => (0.3 + 0.7 * Math.abs(Math.sin(Math.PI * t)) ** 3) * (0.5 * Math.sin(2 * Math.PI * 110 * t) + 0.3 * Math.sin(2 * Math.PI * 165 * t))
+export const whoosh = (t: number) => Math.min(t / 0.45, 1, (1 - t) / 0.5) * noise() * 0.8
 const click = (t: number) => Math.max(0, 1 - t / 0.25) * noise() * 0.9
 
 export async function runGlass() {

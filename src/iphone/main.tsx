@@ -73,6 +73,7 @@ async function boot() {
   // Prueba de punta a punta en el simulador (la app la abre con -OATest e2e).
   if ((window as any).__oaTest === 'e2e') void import('./test/e2e').then((m) => m.runE2E())
   if ((window as any).__oaTest === 'glass') void import('./test/glass').then((m) => m.runGlass())
+  if ((window as any).__oaTest === 'heavy') void import('./test/heavy').then((m) => m.runHeavy())
 }
 
 boot().catch(fatal)

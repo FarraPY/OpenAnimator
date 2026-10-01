@@ -198,6 +198,7 @@ html.phone .perm-card .b { height: 38px; }
 /* Con el Liquid Glass nativo encima (GlassOverlay.swift), la columna de la página sólo reserva el lugar (y recibe los toques). */
 .tlp.native-glass .tlp-trk { background: none; -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: none; }
 .tlp.native-glass .tlp-trk > *, .tlp.native-glass .tlp-trk::after { visibility: hidden; }
+.tlp.native-glass .tlp-corner { display: none; }
 .tlp-trk-name { position: relative; min-width: 0; font-size: 12.5px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tlp-clip { position: absolute; top: 6px; height: calc(var(--row, 54px) - 12px); border-radius: 9px; background: color-mix(in srgb, var(--c) 32%, #121318); border: 1.5px solid color-mix(in srgb, var(--c) 70%, transparent);
   overflow: hidden; display: flex; align-items: center; padding: 0 8px; touch-action: pan-x pan-y; }

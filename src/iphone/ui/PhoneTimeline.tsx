@@ -236,6 +236,10 @@ export default function PhoneTimeline(p: Props) {
               </button>
               {tr.clips.map((c) => {
                 const on = p.sel.includes(c.id)
+                // Sólo lo que está en pantalla (más una pantalla de margen a cada lado): con cientos de clips el
+                // timeline sigue liviano. El seleccionado se dibuja siempre (se puede estar arrastrando).
+                const cx = half + c.start * pps, cw = Math.max(4, c.duration * pps)
+                if (!on && (cx + cw < left - vw || cx > left + 2 * vw)) return null
                 return (
                   <div key={c.id} className={`tlp-clip ${on ? 'on' : ''} ${c.muted ? 'muted' : ''} ${waves && (tr.type === 'audio' || (tr.type === 'video' && !isImage(c.src))) ? 'wave' : ''}`} style={{ left: half + c.start * pps, width: Math.max(4, c.duration * pps), ['--c' as any]: color(tr, c) }}
                     onPointerDown={(e) => down(e, c, tr, 'move')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => { tap.current = null; up() }}>

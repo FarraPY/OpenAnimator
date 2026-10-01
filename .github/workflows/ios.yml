@@ -106,24 +106,30 @@ jobs:
           echo "::warning title=API de mentira::$(tail -n 30 mock.log | esc)"
 
       # Capturas del timeline en el simulador (el Liquid Glass es el de iOS): la app avisa «OA-SHOT <nombre>» y acá se saca.
-      - name: Simulador (capturas)
+      # Y un proyecto pesado (30 min, cientos de clips): cuánto tarda en abrir y si se traba al recorrerlo o reproducirlo.
+      - name: Simulador (capturas y proyecto pesado)
         continue-on-error: true
         run: |
           UDID=$(cat udid.txt)
           mkdir -p capturas
-          xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OATest glass > glass.log 2>&1 &
-          PID=$!
-          taken=" "
-          for i in $(seq 1 300); do
-            for s in $(grep -o 'OA-SHOT [a-z0-9-]*' glass.log | cut -c9- | sort -u); do
-              case "$taken" in *" $s "*) ;; *) sleep 1; xcrun simctl io "$UDID" screenshot "capturas/$s.png"; taken="$taken$s ";; esac
+          shots() {
+            xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OATest "$1" > "$1.log" 2>&1 &
+            local pid=$! taken=" "
+            for i in $(seq 1 400); do
+              for s in $(grep -o 'OA-SHOT [a-z0-9-]*' "$1.log" | cut -c9- | sort -u); do
+                case "$taken" in *" $s "*) ;; *) sleep 1; xcrun simctl io "$UDID" screenshot "capturas/$s.png"; taken="$taken$s ";; esac
+              done
+              grep -q "OA-DIAG-" "$1.log" && break
+              sleep 0.5
             done
-            grep -q "OA-DIAG-" glass.log && break
-            sleep 0.5
-          done
-          kill $PID 2>/dev/null || true
+            kill $pid 2>/dev/null || true
+            tail -n 30 "$1.log"
+          }
+          shots glass
+          shots heavy
           ls -la capturas
-          tail -n 40 glass.log
+          HEAVY=$(grep -o 'OA-HEAVY .*' heavy.log | head -1 | cut -c10-)
+          echo "::notice title=Proyecto pesado::${HEAVY:-sin resultado (ver el log)}"
 
       - uses: actions/upload-artifact@v4
         with:

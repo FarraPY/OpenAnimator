@@ -64,6 +64,7 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
                 }
             } else {
                 print("[web] " + (a["text"] as? String ?? ""))
+                fflush(stdout) // las pruebas esperan cada línea al momento (p. ej. «OA-SHOT» para sacar una captura)
             }
             replyHandler(true, nil)
         case "log.remote": replyHandler(AppLog.setRemote(a["url"] as? String), nil)
