@@ -187,7 +187,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   dos exportaciones iguales de la escena SVG dan ~39–43 dB entre sí (el codificador), y la de partículas (canvas 2D,
   función pura de t) da tramos de fotogramas distintos entre exportaciones (22–30 dB, sin fotogramas corridos ni
   repetidos; causa sin averiguar); comparar contra varias de referencia. En modo de ahorro de batería WebKit dibuja a 30 fps y la
-  CPU rinde la mitad. Pendiente: los fotogramas para Claude siguen con el compositor de la página.
+  CPU rinde la mitad. Los fotogramas para Claude (oa_ver_fotogramas, hojas de contactos, miniaturas) también van
+  por una vista web propia (`NativeSnap.swift`, `snap.*` como Snap.java): un CaptureWorker detrás del fondo de NativeChrome
+  (en pantalla, así WebKit la dibuja, pero tapada); ~0,6 s por fotograma de 960 px en las escenas pesadas.
 - iPhone por cable desde la PC (Windows, depuración): `Apple Devices` (Microsoft Store) para usbmux; en `.tools/`:
   go-ios (`go-ios/ios.exe`) y pymobiledevice3 (venv `pmd3/`). Pasos: `ios tunnel start --userspace` (sin administrador);
   montar la imagen de desarrollador con `pymobiledevice3 mounter mount-personalized <dmg> <trustcache> <BuildManifest>`
@@ -201,7 +203,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   `.tools/pmd3/Scripts/python.exe scripts/iphone-mem.py`; informes de cierres: `ios crash ls` / `crash cp "JetsamEvent*"`.
   Instalar un IPA nuevo: `MSYS_NO_PATHCONV=1 ios file push --app=com.openanimator.app --local=x.ipa --remote=/Documents/x.ipa`
   (sin esa variable Git Bash convierte `/…` en una ruta de Windows) y en Feather: + › Import from Files › En mi iPhone ›
-  OpenAnimator › Open, Sign, Start Signing, Abrir, Install (compartirlo desde OpenAnimator a Feather no lo importaba).
+  OpenAnimator › Open, Sign, Start Signing, Abrir, Install (compartirlo desde OpenAnimator a Feather no lo importaba). El
+  primer toque en «+» a veces no abre el menú (repetirlo). Si Safari dice «Not allowed to use restricted network port»,
+  Feather eligió un puerto vedado: volver a firmar la importación nueva. La lista Signed no está ordenada por fecha: no
+  instalar desde ahí (se instaló una vieja); confirmar siempre con la línea «Arranca … interfaz <versión>» del registro.
   La pantalla se bloquea fuera de OpenAnimator: para trabajar así, Bloqueo automático en Nunca (lo cambia el usuario).
 - Whisper en el iPhone (`LocalWhisper.swift`, operaciones `whisper.*` del puente; en plugins.ts `iosWhisper()`): WhisperKit
   (paquete `argmax-oss-swift` 1.1.0 en project.yml, MIT) corre Whisper en Core ML sobre el Neural Engine. Se eligió por
@@ -216,7 +221,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   prepara el modelo para el chip; iOS lo guarda y lo borra al actualizarse); 10,5 min de narración en español en 52 s
   (12×, 1628 palabras en orden), un video de 75 s sin idioma en 8,3 s, un archivo de 3 s en 1,2 s (mínimo de una ventana
   de 30 s). La prueba de Ajustes hace hablar a la voz de iOS (AVSpeechSynthesizer.write) y la transcribe.
-- Interfaz del iPhone: los modelos para elegir (Ajustes y el chat) salen de `useModels()` (src/claudeModels.ts).
+- Interfaz del iPhone: reproduciendo, el editor (PhoneEditor) se dibuja en cada cuadro (el tiempo es estado de React):
+  lo pesado que no depende del tiempo va aparte y memorizado (`EditorChat`: el chat con su cabecera y sus menús),
+  `registerMenu` (glassUI.ts) sólo vuelve a mandar un menú de iOS si cambió lo que se ve y desplazar algo sin vidrio ni
+  menús (el timeline, que avanza solo) no vuelve a medir el vidrio. Los modelos para elegir (Ajustes y el chat) salen de
+  `useModels()` (src/claudeModels.ts).
   Volver deslizando desde el borde: UIScreenEdgePanGestureRecognizer (WebViewController) → `window.__oaBack`
   (PhoneApp: cierra menú/ventana/hoja o toca el `Tap` con `back` de la pantalla). Ventanas y hojas miden `--vvh`
   (con el teclado abierto quedaban detrás) y en pantallas táctiles nada abre el teclado solo. Importar un .zip
