@@ -25,7 +25,12 @@ function open(file: string): Promise<Source> {
       const track = await input.getPrimaryAudioTrack()
       if (!track || !(await track.canDecode())) return null
       return { sink: new AudioSampleSink(track), sr: track.sampleRate, ch: track.numberOfChannels }
-    })().catch(() => null)
+    })().catch((e) => {
+      // Un error al leerlo (el teléfono muy ocupado, un archivo a medio guardar) no queda guardado: se reintenta.
+      console.warn(`Audio de la vista previa: no se pudo abrir ${file}:`, e)
+      sources.delete(file)
+      return null
+    })
     sources.set(file, s)
   }
   return s
@@ -77,7 +82,14 @@ export class PreviewAudio {
       // Que suene aunque el iPhone esté en silencio (la app además pone la categoría «playback»: AppDelegate).
       const nav = navigator as any
       if (nav.audioSession && nav.audioSession.type !== 'playback') nav.audioSession.type = 'playback'
-      if (!this.ctx || this.ctx.state === 'closed') {
+      // Si el contexto no está andando (iOS lo deja «interrumpido» cuando algo cambia el audio de la app y ya no vuelve
+      // con resume: quedaba mudo hasta salir del proyecto), se hace uno nuevo; dentro del toque arranca andando.
+      if (this.ctx && this.ctx.state !== 'running') {
+        console.warn(`Audio de la vista previa: estaba ${this.ctx.state}, se rehace`)
+        void this.ctx.close().catch(() => {})
+        this.ctx = null
+      }
+      if (!this.ctx) {
         this.ctx = new AudioContext()
         this.master = null
         const ctx = this.ctx
