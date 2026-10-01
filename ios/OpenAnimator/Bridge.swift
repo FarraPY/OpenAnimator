@@ -19,6 +19,13 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private var pickerDone: (([[String: Any]]) -> Void)?
     private var pickerAccept: [String] = []
     private var preview: URL?
+    private var background: UIBackgroundTaskIdentifier = .invalid
+
+    private func endBackground() {
+        guard background != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(background)
+        background = .invalid
+    }
 
     init(controller: WebViewController) { self.controller = controller }
 
@@ -37,7 +44,13 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
             replyHandler(true, nil)
         case "info": replyHandler(info(), nil)
         case "awake":
-            UIApplication.shared.isIdleTimerDisabled = (a["on"] as? Bool) ?? false
+            // Pantalla encendida mientras Claude trabaja o se exporta; y si el usuario sale de la app, iOS da un rato
+            // más antes de congelarla (beginBackgroundTask: no corta el turno o la exportación al instante).
+            let on = (a["on"] as? Bool) ?? false
+            UIApplication.shared.isIdleTimerDisabled = on
+            if on, background == .invalid {
+                background = UIApplication.shared.beginBackgroundTask(withName: "OpenAnimator") { [weak self] in self?.endBackground() }
+            } else if !on { endBackground() }
             replyHandler(true, nil)
         case "openUrl":
             if let s = a["url"] as? String, let url = URL(string: s), ["http", "https"].contains(url.scheme?.lowercased() ?? "") { UIApplication.shared.open(url) }
@@ -50,6 +63,9 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "pick": pick(a, replyHandler)
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
+        case "keychain.load": replyHandler(Keychain.load(), nil)
+        case "keychain.save":
+            Keychain.save(a["json"] as? String ?? "{}") ? replyHandler(true, nil) : replyHandler(nil, "No se pudieron guardar las claves en el Llavero")
         default:
             // Archivos: en otro hilo (pueden ser grandes); la respuesta vuelve al principal.
             io.async {

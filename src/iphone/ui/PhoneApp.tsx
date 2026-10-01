@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom'
 import { AppCtx, type Route } from '../../App'
 import { AppInfo, call, Settings, SettingsPatch } from '../../api'
 import { Icon, IconName } from '../../ui/icons'
+import { recoveredBoot } from '../../platform'
 import Projects from './Projects'
 import PhoneEditor from './PhoneEditor'
 import PhoneSettings from './PhoneSettings'
@@ -36,7 +37,10 @@ function useKeyboardViewport() {
 }
 
 export default function PhoneApp() {
-  const [route, setRoute] = useState<Route>({ page: 'home' })
+  // iOS cerró el motor web (casi siempre por falta de memoria) y la app lo volvió a abrir: de vuelta al proyecto.
+  const [route, setRoute] = useState<Route>(() => {
+    try { const id = recoveredBoot && localStorage.getItem('oa.openProject'); return id ? { page: 'editor', id } : { page: 'home' } } catch { return { page: 'home' } }
+  })
   const [toasts, setToasts] = useState<ToastT[]>([])
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -75,6 +79,7 @@ export default function PhoneApp() {
   const go = useCallback((r: Route) => {
     setRoute(r)
     if (r.page === 'editor') call('settings:set', { lastProject: r.id }).catch(() => {})
+    if (r.page !== 'settings') try { localStorage.setItem('oa.openProject', r.page === 'editor' ? r.id : '') } catch { /* sin almacenamiento */ }
   }, [])
 
   return (

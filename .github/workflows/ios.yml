@@ -90,6 +90,10 @@ jobs:
           RESULT=$(grep -o 'OA-DIAG-RESULT .*' e2e.log | head -1 | cut -c16-)
           echo "::notice title=Prueba de punta a punta::${RESULT:-sin resultado (ver el log)}"
           { echo '### Prueba de punta a punta'; echo '```json'; echo "${RESULT:-sin resultado}"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          # El final del registro (y de la API de mentira) como anotación: se lee sin entrar a los logs del run.
+          esc() { python3 -c "import sys; print(sys.stdin.read()[-12000:].replace('%','%25').replace('\r','').replace('\n','%0A'))"; }
+          echo "::warning title=Registro de la prueba::$(grep -v '^\[scheme\]' e2e.log | tail -n 80 | esc)"
+          echo "::warning title=API de mentira::$(tail -n 30 mock.log | esc)"
 
       - name: IPA sin firmar
         run: |

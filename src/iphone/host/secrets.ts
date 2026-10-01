@@ -4,6 +4,7 @@
  * descifradas (el puente las pide de forma sincrónica) y nunca se muestran enteras.
  */
 import type { WebFS } from './webfs'
+import { isNative, nativeCall } from './native'
 
 const FILE = '.secrets'
 
@@ -32,9 +33,15 @@ function idbKey(): Promise<CryptoKey> {
 export class Secrets {
   private map = new Map<string, string>()
   private key: CryptoKey | null = null
+  /** En la app nativa van al Llavero de iOS (Keychain.swift), no a un archivo cifrado. */
+  private native = isNative()
   constructor(private fs: WebFS) {}
 
   async load() {
+    if (this.native) {
+      try { for (const [k, v] of Object.entries(JSON.parse(await nativeCall<string>('keychain.load')))) this.map.set(k, String(v)) } catch (e) { console.error('No se pudieron leer las claves del Llavero', e) }
+      return
+    }
     this.key = await idbKey()
     if (!this.fs.exists(FILE)) return
     try {
@@ -44,6 +51,7 @@ export class Secrets {
     } catch (e) { console.error('No se pudieron leer las claves guardadas', e) }
   }
   private async save() {
+    if (this.native) { await nativeCall('keychain.save', { json: JSON.stringify(Object.fromEntries(this.map)) }).catch((e) => console.error(e)); return }
     if (!this.key) return
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const data = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, this.key, new TextEncoder().encode(JSON.stringify(Object.fromEntries(this.map)))))

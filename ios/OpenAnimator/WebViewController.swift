@@ -23,6 +23,18 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         config.mediaTypesRequiringUserActionForPlayback = []
         config.allowsInlineMediaPlayback = true
         config.userContentController.addScriptMessageHandler(bridge, contentWorld: .page, name: "oa")
+        if Self.diagMode || Self.argument("-OATest") != nil {
+            // Pruebas: lo que la página escribe en la consola (y sus errores) sale por la salida de la app.
+            let forward = """
+            (() => {
+              const send = (lvl, args) => { try { window.webkit.messageHandlers.oa.postMessage({ op: 'log', text: lvl + ' ' + args.map((a) => { try { return typeof a === 'string' ? a : (a && a.stack) || JSON.stringify(a) } catch (e) { return String(a) } }).join(' ').slice(0, 3000) }) } catch (e) {} }
+              for (const lvl of ['log', 'warn', 'error']) { const o = console[lvl]; console[lvl] = (...a) => { send(lvl, a); o.apply(console, a) } }
+              addEventListener('error', (e) => send('onerror', [e.message, (e.filename || '') + ':' + (e.lineno || '')]))
+              addEventListener('unhandledrejection', (e) => send('unhandled', [e.reason]))
+            })()
+            """
+            config.userContentController.addUserScript(WKUserScript(source: forward, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        }
         if let test = Self.argument("-OATest") {
             var js = "window.__oaTest = \(Self.json(test));"
             if let dev = Self.argument("-OADev") { js += "try { localStorage.setItem('oa.claudeDev', \(Self.json(dev))) } catch (e) {}" }

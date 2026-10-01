@@ -402,7 +402,7 @@
    * cada escena espera más (hasta 4 × 60 ms: las imágenes se decodifican ahí y quedan en la caché) y los siguientes
    * redibujan una sola vez (~30 ms). Sin imágenes no se redibuja.
    */
-  var SAFARI = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  var SAFARI = /AppleWebKit/i.test(navigator.userAgent) && !/Chrome|Chromium|CriOS|Android|Edg/i.test(navigator.userAgent); // Safari o la app (WKWebView: sin "Safari" en el UA)
   function capRedraws(ctx) {
     var n = 0;
     ctx.__redraws = 4; ctx.drawImageInterval = 60;

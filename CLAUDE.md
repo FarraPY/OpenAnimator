@@ -90,19 +90,24 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   herramienta (`streamed` = entrada de la herramienta que va llegando). Todo mensaje entra por `received()` (la
   tablet los recibe ya leídos): llamar a `onMessage` directo no cuenta como señal y el aviso salta en falso.
 
-## iPhone — `src/iphone/` (detalles en `src/iphone/README.md`)
-- App web instalable desde Safari (iOS 26), publicada con GitHub Pages (`.github/workflows/iphone.yml`, `npm run build:iphone`
-  → `dist-iphone/`). Todo corre en el teléfono: backend de Android (`src/android/backend`) sobre un puente hecho con APIs
-  de Safari (`src/iphone/host`: OPFS, WebCodecs + Mediabunny, Web Audio, fflate, WebCrypto) e interfaz propia del
-  teléfono (`src/iphone/ui`). `isIphone()` en platform.ts; `host().kind === 'web'` en el backend.
+## iPhone — app nativa `ios/` + interfaz `src/iphone/` (detalles en `ios/README.md` y `src/iphone/README.md`)
+- App de iOS (Swift + WKWebView, `ios/`; proyecto con XcodeGen) que lleva todo adentro, sin servidores: la app sirve la
+  interfaz, los proyectos y Claude Code con dos esquemas propios (`SchemeHandler.swift`: `oa://localhost` interfaz, `fs/`,
+  `cc/`; `oaproj://localhost` proyectos, otro origen). GitHub Actions (`ios.yml`) la compila SIN FIRMAR (el usuario la
+  firma con su cuenta de Apple) y corre en el simulador un diagnóstico (`-OADiag`) y una prueba de punta a punta
+  (`-OATest e2e`: src/iphone/test/e2e.ts contra `ios/test/mock-anthropic.mjs`); los resultados quedan como anotaciones
+  del run (API pública de check-runs). El navegador integrado y el WebKit de Windows no sirven para probarla.
+- Interfaz propia del teléfono (`src/iphone/ui`) sobre el backend de Android con un puente de WebKit
+  (`src/iphone/host`: WebFS con índice en memoria y el disco del iPhone por `Bridge.swift` en base64 —en Safari, OPFS—,
+  WebCodecs + Mediabunny, Web Audio, fflate, WebCrypto). `isIphone()` en platform.ts; `host().kind === 'web'` en el
+  backend; `isNative()` (src/iphone/host/native.ts) dentro de la app. También corre como app web (`npm run build:iphone`).
 - Claude Code con el plan del usuario y sin PC: el instalador (Worker) baja `@anthropic-ai/claude-code-linux-arm64` de
   npm, saca los módulos del ejecutable de Bun y los adapta (`claude/transform.ts`); corre en un Worker con un "Node" de
   navegador (`claude/node/`). Cuenta: token de `claude setup-token` (el OAuth no admite navegadores) →
   `CLAUDE_CODE_OAUTH_TOKEN`. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la página (`backend/webclaude.ts`).
-- Las escenas comparten origen con la app (no hay un segundo origen en GitHub Pages): importar proyectos confiables.
-- Probar: el navegador integrado no registra Service Workers → Playwright (Edge y WebKit; el WebKit de Windows no trae
-  WebCodecs ni Web Audio y su OPFS no escribe). En localhost, `localStorage['oa.claudeDev']` = `{env, tarball}` usa una
-  API de mentira y un paquete local.
+- Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
+  WebCrypto), los Workers de módulos cargan desde el esquema, `fetch` con `Range` y `PUT` con Uint8Array (un Blob llega
+  sin cuerpo).
 
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente

@@ -18,6 +18,7 @@ import './phone.css'
 const BASE = location.pathname.replace(/[^/]*$/, '')
 
 function fatal(e: unknown) {
+  console.error('[arranque]', e)
   const root = document.getElementById('root')!
   root.innerHTML = ''
   const box = document.createElement('div')
