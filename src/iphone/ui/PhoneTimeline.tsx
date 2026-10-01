@@ -181,7 +181,7 @@ export default function PhoneTimeline(p: Props) {
             {(tl.notes || []).map((n) => <button key={n.id} className="tlp-note" style={{ left: half + n.t * pps }} aria-label={n.text} onClick={() => { p.onScrub(n.t, 'move'); toast(`Nota: ${n.text}`, 'info') }} />)}
           </div>
           {tl.tracks.map((tr, i) => (
-            <div key={tr.id} className={`tlp-track ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * ROW }}>
+            <div key={tr.id} className={`tlp-track ${tr.muted || tr.hidden ? 'off' : ''}`} style={{ top: RULER + i * ROW, ['--lane' as any]: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }}>
               <button className="tlp-trk" style={{ color: TYPE_COLOR[tr.type === 'audio' ? trackRole(tr) : tr.type] }} aria-label={tr.name} onClick={() => setTrackAct(tr)}>
                 <Icon name={tr.muted ? 'volume-x' : tr.hidden ? 'eye-off' : icon(tr)} size={15} />
                 <span className="tlp-trk-name">{tr.name}</span>

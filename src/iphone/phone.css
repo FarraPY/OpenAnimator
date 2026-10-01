@@ -179,7 +179,8 @@ html.phone .perm-card .b { height: 38px; }
 .tlp-tick { position: absolute; top: 5px; font-size: 11px; color: var(--t3); transform: translateX(-50%); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tlp-tick::after { content: ''; position: absolute; left: 50%; top: 15px; width: 1px; height: 5px; background: var(--line-3); }
 .tlp-note { position: absolute; top: 4px; width: 18px; height: 18px; margin-left: -9px; border: 0; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px var(--bg-0); padding: 0; }
-.tlp-track { position: absolute; left: 0; right: 0; height: 54px; }
+/* Cada pista con un fondo apenas teñido de su color y una línea abajo: se ve dónde empieza y termina cada una. */
+.tlp-track { position: absolute; left: 0; right: 0; height: 54px; background: color-mix(in srgb, var(--lane, #fff) 7%, transparent); border-bottom: 1px solid rgba(255, 255, 255, .08); }
 .tlp-track.off .tlp-clip { opacity: .35; }
 .tlp-trk { position: sticky; left: 8px; top: 13px; z-index: 2; max-width: 116px; height: 28px; margin-top: 13px; padding: 0 9px 0 7px; border: 0; border-radius: 8px; background: rgba(20, 21, 26, .9); display: flex; align-items: center; gap: 5px; box-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
 .tlp-trk-name { min-width: 0; font-size: 12px; font-weight: 600; color: var(--t1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
