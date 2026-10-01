@@ -95,4 +95,6 @@ export function installAppLog(on: (ch: string, cb: (p: any) => void) => unknown)
   }
   const watch = () => { until = performance.now() + 1500; if (!raf) raf = requestAnimationFrame(tick) }
   for (const ev of ['touchstart', 'touchmove', 'scroll']) addEventListener(ev, watch, { capture: true, passive: true })
+  // En segundo plano no hay cuadros: el hueco hasta volver no es un tirón (antes salía «el peor, 6024 ms»).
+  document.addEventListener('visibilitychange', () => { cancelAnimationFrame(raf); raf = 0; last = 0; dt = [] })
 }
