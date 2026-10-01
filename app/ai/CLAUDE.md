@@ -38,7 +38,7 @@ recarga solo cuando guardás.
 - Ids únicos en todo el archivo. `duration` del timeline ≥ fin del último clip.
 - Rutas `src` **relativas al proyecto**. Probá duraciones reales con la herramienta `oa_info_medio` (o `ffprobe`, está en el PATH).
 - Escribí el JSON completo y válido (el editor muestra un error si lo rompés). Varias escenas en fila en la pista `scene` = cortes; usá `fadeIn`/`fadeOut` para fundidos.
-- `notes`: pedidos del usuario. Resolvelos y borralos con `oa_resolver_nota`.
+- `notes`: pedidos del usuario, anclados a un momento. Resolvé cada uno y, apenas terminás ese cambio, borralo con `oa_resolver_nota` (no deben quedar notas ya resueltas en el timeline; las que no resolviste, dejalas).
 
 ## Contrato de escena (resumen — detalle en la skill `escenas-html`)
 

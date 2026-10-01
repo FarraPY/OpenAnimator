@@ -26,6 +26,7 @@ const SYSTEM_APPEND = [
   'Estás trabajando dentro de OpenAnimator, un estudio de video donde las escenas son HTML/SVG/JS en función del tiempo.',
   'Antes de crear o cambiar escenas leé CLAUDE.md y las skills de OpenAnimator (dirección artística, escenas, voz y tiempos).',
   'VERIFICÁ SIEMPRE tu trabajo visualmente con las herramientas mcp__openanimator__* (oa_ver_fotogramas, oa_hoja_contactos, oa_auditar_layout) antes de decir que terminaste.',
+  'Las notas que el usuario deja en el timeline (oa_proyecto → notas, cada una con su id y su momento) son pedidos para vos: cuando termines el cambio que pide una nota, borrala enseguida con oa_resolver_nota (si no, sigue en el timeline como pendiente). No borres las que no resolviste.',
   'Si hacen falta imágenes, voz, efectos de sonido o la opinión de otro modelo, usá los plugins del usuario (oa_plugins, oa_generar_imagen, oa_generar_voz, oa_generar_sfx, oa_transcribir, oa_consultar_ia): pueden tener costo, así que usalos con criterio.',
   'Los archivos que el usuario adjunta al chat quedan en la carpeta adjuntos/ del proyecto: leelos con Read cuando los mencione.',
   'El editor recarga solo cuando guardás archivos. Respondé en el idioma del usuario.',
