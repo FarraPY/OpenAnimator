@@ -20,6 +20,8 @@ import { PreviewAudio } from './previewAudio'
 
 const KIND_TRACK: Record<string, TrackType> = { scene: 'scene', video: 'video', image: 'video', audio: 'audio' }
 const TRACK_NAME: Record<TrackType, string> = { scene: 'Escenas', video: 'Video', audio: 'Audio' }
+/** Los clips que se ven en x (escenas y videos): si cambian, la vista previa tiene que cargar algo. */
+const visualAt = (d: TL, x: number) => d.tracks.map((tr) => tr.type === 'audio' ? '' : tr.clips.find((c) => x >= c.start && x < c.start + c.duration)?.id || '').join()
 type Tab = 'claude' | 'timeline' | 'media'
 
 export default function PhoneEditor({ projectId, onClose }: { projectId: string; onClose: () => void }) {
@@ -183,10 +185,24 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
     setT(nt)
     if (playing && tl) audio.current!.play(projectId, tl, nt, rate)
   }
-  /** El dedo en el timeline pausa (como en los editores de teléfono) y mueve el cursor. */
+  /** El dedo en el timeline pausa (como en los editores de teléfono) y mueve el cursor. Si va rápido y pasa a otra
+   *  escena (o video), la vista previa se queda en su cuadro hasta que frena: cada escena nueva se carga entera, en el
+   *  mismo hilo que la interfaz, y recorrer un proyecto largo iba a 2 cuadros por segundo (prueba del proyecto pesado). */
+  const [hold, setHold] = useState<number | null>(null)
+  const fling = useRef({ t: 0, at: 0, timer: 0 })
   const scrub = (x: number, phase: 'start' | 'move' | 'end') => {
     if (phase === 'start' && playing) setPlaying(false)
-    setT(Math.max(0, Math.min(tl?.duration || 0, x)))
+    const nt = Math.max(0, Math.min(tl?.duration || 0, x))
+    const f = fling.current, now = performance.now()
+    const fast = phase === 'move' && Math.abs(nt - f.t) * 1000 > 10 * Math.max(1, now - f.at) // más de 10 s del timeline por segundo
+    f.t = nt; f.at = now
+    const shown = hold ?? tRef.current
+    if (fast && tl && visualAt(tl, nt) !== visualAt(tl, shown)) {
+      if (hold == null) setHold(shown)
+      clearTimeout(f.timer)
+      f.timer = window.setTimeout(() => setHold(null), 150)
+    }
+    setT(nt)
   }
   const fps = project?.fps || 30
   useEffect(() => { if (tab === 'claude') setSeen(chat.assistant) }, [tab, chat.assistant])
@@ -229,7 +245,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
         </>} />
 
       <div className="ed-player" style={{ ['--ar' as any]: ar }}>
-        {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={full ? 0 : 6} bg="black" onError={(m) => toast(m, true)} />}
+        {!exporting && <Stage ref={stage} projectId={projectId} tlId={tlId} t={hold ?? t} playing={playing} rate={rate} width={project.width} height={project.height} reloadKey={0} pad={full ? 0 : 6} bg="black" onError={(m) => toast(m, true)} />}
         <button className="ed-tapzone" aria-label={playing ? 'Pausa' : 'Reproducir'} onClick={togglePlay} />
         {full && <div className="ed-fullbar">
           <Tap icon="minimize" label="Salir de pantalla completa" onClick={() => setFull(false)} />

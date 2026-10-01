@@ -202,13 +202,15 @@ html.phone .perm-card .b { height: 38px; }
 .tlp.native-glass .tlp-corner::after { display: none; }
 .tlp-trk-name { position: relative; min-width: 0; font-size: 12.5px; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .45); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tlp-clip { position: absolute; top: 6px; height: calc(var(--row, 54px) - 12px); border-radius: 9px; background: color-mix(in srgb, var(--c) 32%, #121318); border: 1.5px solid color-mix(in srgb, var(--c) 70%, transparent);
-  overflow: hidden; display: flex; align-items: center; padding: 0 8px; touch-action: pan-x pan-y; }
+  overflow: hidden; overflow: clip; display: flex; align-items: center; padding: 0 8px; touch-action: pan-x pan-y; }
 .tlp-clip.on { border: 2px solid #fff; background: color-mix(in srgb, var(--c) 45%, #121318); overflow: visible; z-index: 1; touch-action: none; box-shadow: 0 4px 14px rgba(0, 0, 0, .5); }
 .tlp-clip.muted { background-image: repeating-linear-gradient(135deg, transparent 0 6px, rgba(0, 0, 0, .25) 6px 12px); }
 /* La onda real abajo del clip; el nombre, arriba. */
 .tlp-wave { position: absolute; left: 0; right: 0; top: 17px; bottom: 1px; overflow: hidden; pointer-events: none; opacity: .9; }
 .tlp-clip.wave { align-items: flex-start; padding-top: 2px; }
-.tlp-clip-name { position: relative; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); pointer-events: none; }
+/* El nombre queda a la vista al lado de la columna de pistas mientras el clip pasa por detrás (con overflow: clip el
+   clip no es un contenedor de desplazamiento y el sticky se mide contra el timeline). */
+.tlp-clip-name { position: sticky; left: 124px; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); pointer-events: none; }
 .tlp-fade { position: absolute; top: 0; bottom: 0; pointer-events: none; background: linear-gradient(to var(--d, right), rgba(0, 0, 0, .45), transparent); }
 .tlp-fade.l { left: 0; } .tlp-fade.r { right: 0; --d: left; }
 .tlp-h { position: absolute; top: -2px; bottom: -2px; width: 26px; display: grid; place-items: center; touch-action: none; }

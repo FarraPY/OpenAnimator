@@ -64,11 +64,11 @@ export async function runGlass() {
       window.dispatchEvent(new Event('resize'))
       await wait(2500)
       await say(`OA-SHOT vidrio-${k}1`)
-      await wait(3000)
+      await wait(7000)
       if (sc) sc.scrollLeft = 260
       await wait(2500)
       await say(`OA-SHOT vidrio-${k}2`)
-      await wait(3000)
+      await wait(7000)
     }
   } catch (e: any) { await say('ERROR ' + (e?.stack || e)) }
   await nativeCall('diag.result', { json: '{}' })

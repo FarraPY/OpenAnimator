@@ -43,7 +43,7 @@ export default function PhoneTimeline(p: Props) {
   const ppsRef = useRef(pps); ppsRef.current = pps
   const pRef = useRef(p); pRef.current = p
   const touching = useRef(false)
-  const ours = useRef(-1) // el scrollLeft que puso el programa (no es el dedo)
+  const ours = useRef(NaN) // el scrollLeft que puso el programa (no es el dedo; con -1, llegar a 0 no movía el cursor)
   const half = vw / 2
   const width = half * 2 + tl.duration * pps + 80
   // Las pistas llenan el alto que hay (antes quedaba espacio vacío abajo): entre 54 y 112 px cada una.
@@ -68,7 +68,7 @@ export default function PhoneTimeline(p: Props) {
     const el = sc.current!
     setLeft(el.scrollLeft)
     if (!touching.current && Math.abs(el.scrollLeft - ours.current) <= 1.5) return
-    ours.current = -1
+    ours.current = NaN
     p.onScrub(el.scrollLeft / ppsRef.current, 'move')
   }
 
