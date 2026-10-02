@@ -3,7 +3,7 @@
  * Edit, Glob, Grep, Skill) y las de OpenAnimator (oa_*), que en la PC llegan por MCP.
  * Todas trabajan dentro de la carpeta del proyecto.
  */
-import { appManifest, assetUsage, listAssets, projectDir, readProject, readTimeline, writeTimeline } from './projects'
+import { appManifest, assetUsage, listAssets, moveToTrash, projectDir, readProject, readTimeline, writeTimeline } from './projects'
 import { base64ToBytes, canvasBase64, extname, fs, join, normalizeRel } from './fsx'
 import * as F from './frames'
 import * as M from './media'
@@ -49,6 +49,7 @@ TOOL_DEFS.push(
   { name: 'oa_guardar_iconos', kind: 'edit', description: 'Baja íconos (nombres de oa_buscar_iconos) a assets/iconos/ como SVG y devuelve los chicos para pegarlos en la escena. Gratis.', input_schema: { type: 'object', properties: { project: P, iconos: { type: 'array', items: { type: 'string' }, description: 'Nombres «colección:ícono»' }, color: { type: 'string', description: '#rrggbb para los de un color (si no, usan currentColor)' } }, required: ['iconos'] } },
   { name: 'oa_buscar_fuentes', kind: 'read', description: 'Busca tipografías libres (las de Google Fonts y otras, vía Fontsource) por nombre o por estilo: sans-serif, serif, display (títulos), handwriting (manuscrita) o monospace. Sin parámetros, las más usadas. Gratis.', input_schema: { type: 'object', properties: { project: P, buscar: { type: 'string' }, categoria: { type: 'string', enum: ['sans-serif', 'serif', 'display', 'handwriting', 'monospace'] } } } },
   { name: 'oa_usar_fuente', kind: 'edit', description: 'Baja una tipografía al proyecto (assets/fuentes/<id>.css y sus woff2, para español y portugués) y dice cómo usarla en la escena: se ve igual en la vista previa, al exportar y en cualquier equipo. Gratis.', input_schema: { type: 'object', properties: { project: P, familia: { type: 'string', description: 'Nombre, p. ej. "Space Grotesk"' }, pesos: { type: 'array', items: { type: 'number' }, description: 'Por defecto [400, 700]' }, cursiva: { type: 'boolean' } }, required: ['familia'] } },
+  { name: 'oa_borrar', kind: 'edit', description: 'Borra archivos o carpetas del proyecto: van a la papelera de la app (el usuario los puede recuperar desde Ajustes durante 30 días). Para limpiar pruebas, versiones viejas o archivos que ya no se usan. No borra project.json ni los timelines; si un archivo se usa en el timeline, avisa (sacá también sus clips).', input_schema: { type: 'object', properties: { project: P, rutas: { type: 'array', items: { type: 'string' }, description: 'Rutas relativas al proyecto (archivos o carpetas)' } }, required: ['rutas'] } },
   { name: 'oa_ejecutar_js', kind: 'edit', description: 'Ejecuta JavaScript en un espacio aislado del equipo (sin internet ni acceso a la app; acá no hay terminal) para generar o procesar archivos del proyecto: sintetizar efectos de sonido o música simple con Web Audio (OfflineAudioContext → wav(buffer) → guardar), dibujar imágenes con OffscreenCanvas (convertToBlob → guardar), calcular datos o tiempos. El código es el cuerpo de una función async que recibe guardar(ruta, datos), leer(ruta) → ArrayBuffer, leerTexto(ruta), decodificarAudio(ruta) → AudioBuffer, wav(audioBuffer) → bytes de un WAV y console.log; lo que devuelve con return vuelve como texto. Rutas relativas al proyecto (p. ej. assets/sfx/whoosh.wav).', input_schema: { type: 'object', properties: { project: P, codigo: { type: 'string', description: 'Cuerpo de una función async' }, segundos: { type: 'number', description: 'Tiempo máximo, 5-120 (por defecto 60)' } }, required: ['codigo'] } },
   { name: 'oa_quitar_fondo', kind: 'edit', description: 'Quita el fondo de una imagen del proyecto (personas, animales u objetos) y guarda un PNG con transparencia en assets/recortes/. Corre en el teléfono y es gratis. Devuelve una vista previa sobre un damero para revisar el recorte.', input_schema: { type: 'object', properties: { project: P, imagen: { type: 'string', description: 'Ruta relativa de la imagen (png, jpg, webp, heic)' }, nombre: { type: 'string', description: 'Nombre del PNG (sin extensión)' }, recortar: { type: 'boolean', description: 'Recortar al tamaño de la figura (por defecto, el mismo tamaño que la original)' } }, required: ['imagen'] } },
 )
@@ -389,6 +390,20 @@ export async function runTool(name: string, input: any, ctx: ToolCtx): Promise<T
     case 'oa_guardar_iconos': return txt(await WA.saveIcons(webNet(project, ctx), input.iconos, { color: input.color }))
     case 'oa_buscar_fuentes': return txt(await WA.searchFonts(webNet(project), input.buscar, input.categoria))
     case 'oa_usar_fuente': return txt(await WA.saveFont(webNet(project, ctx), input.familia, { pesos: input.pesos, cursiva: input.cursiva }))
+    case 'oa_borrar': {
+      const name = readProject(project).name
+      const out: string[] = []
+      for (const r of (input.rutas as string[]).slice(0, 100)) {
+        const { rel, abs } = resolvePath({ ...ctx, projectId: project }, r)
+        if (!rel || rel === 'project.json' || /^timelines(\/|$)/.test(rel)) { out.push(`- ${r}: no (project.json y los timelines no se borran)`); continue }
+        if (!fs.exists(abs)) { out.push(`- ${rel}: no existe`); continue }
+        const uses = assetUsage(project, rel)
+        moveToTrash(abs, `${rel.split('/').pop()} (${name})`)
+        ctx.changed(rel)
+        out.push(`- ${rel}: a la papelera${uses.length ? ` · OJO: lo usan ${uses.map((u) => `${u.count} clip${u.count === 1 ? '' : 's'} en «${u.timeline}»`).join(', ')}` : ''}`)
+      }
+      return txt(['Borrados (se recuperan desde Ajustes › Almacenamiento › Papelera):', ...out].join('\n'))
+    }
     case 'oa_ejecutar_js': {
       const at = (p: string) => resolvePath({ ...ctx, projectId: project }, p)
       const r = await runJs(project, String(input.codigo || ''), {

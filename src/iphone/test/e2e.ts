@@ -224,6 +224,9 @@ export async function runE2E() {
         await fsw.writeBytes(`projects/${project.id}/assets/figura.png`, Uint8Array.from(atob(cv.toDataURL('image/png').split(',')[1]), (ch) => ch.charCodeAt(0)))
         recorte = await text('oa_quitar_fondo', { imagen: 'assets/figura.png' })
       } catch (e: any) { recorte = 'ERROR ' + (e?.message || e) }
+      // Borrar: a la papelera; project.json no se puede.
+      await text('oa_borrar', { rutas: ['assets/figura.png', 'project.json'] })
+      if (fsw.exists(`projects/${project.id}/assets/figura.png`) || !fsw.exists(`projects/${project.id}/project.json`)) throw new Error('oa_borrar no hizo lo esperado')
       // Código aislado: un «bip» con Web Audio a un WAV del proyecto; sin ver la app ni la red.
       const js = await text('oa_ejecutar_js', { codigo: `
         const sr = 48000, ctx = new OfflineAudioContext(1, sr / 2, sr), o = ctx.createOscillator(), g = ctx.createGain()

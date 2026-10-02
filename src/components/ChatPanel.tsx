@@ -42,7 +42,7 @@ function toolMeta(it: ChatItem): { icon: IconName; name: string; arg: string } {
     oa_plugins: ['plug', 'Ver plugins'], oa_generar_imagen: ['image', 'Generar imagen'], oa_generar_voz: ['mic', 'Generar voz'], oa_voces: ['mic', 'Ver voces'],
     oa_generar_sfx: ['wave', 'Generar efecto'], oa_transcribir: ['story', 'Transcribir'], oa_consultar_ia: ['message', 'Consultar a otra IA'],
     oa_buscar_iconos: ['shapes', 'Buscar íconos'], oa_guardar_iconos: ['shapes', 'Guardar íconos'], oa_buscar_fuentes: ['type', 'Buscar tipografías'],
-    oa_usar_fuente: ['type', 'Usar tipografía'], oa_quitar_fondo: ['scissors', 'Quitar el fondo'], oa_ejecutar_js: ['code', 'Ejecutar código'],
+    oa_usar_fuente: ['type', 'Usar tipografía'], oa_quitar_fondo: ['scissors', 'Quitar el fondo'], oa_ejecutar_js: ['code', 'Ejecutar código'], oa_borrar: ['trash', 'Borrar'],
   }
   const STD: Record<string, [IconName, string]> = {
     Read: ['file', 'Leer'], Write: ['edit', 'Escribir'], Edit: ['edit', 'Editar'], MultiEdit: ['edit', 'Editar'], Bash: ['terminal', 'Terminal'], PowerShell: ['terminal', 'PowerShell'],
@@ -51,7 +51,7 @@ function toolMeta(it: ChatItem): { icon: IconName; name: string; arg: string } {
   }
   // En la tablet con Termux, los archivos del proyecto también llegan por el MCP de OpenAnimator.
   const m = OA[oa] || STD[raw] || STD[oa] || ['wand', raw.replace(/^mcp__/, '').replace(/__/g, ' · ')]
-  const arg = i.file_path || i.path || i.command || i.pattern || i.skill || i.description || i.query || i.prompt || i.texto || i.descripcion || i.consulta || i.buscar || i.familia || i.imagen || (i.iconos ? i.iconos.join(', ') : '') || (i.times ? `t = ${i.times.join(', ')} s` : '') || (i.count ? `${i.count} cuadros` : '') || ''
+  const arg = i.file_path || i.path || i.command || i.pattern || i.skill || i.description || i.query || i.prompt || i.texto || i.descripcion || i.consulta || i.buscar || i.familia || i.imagen || (i.iconos ? i.iconos.join(', ') : '') || (i.rutas ? i.rutas.join(', ') : '') || (i.times ? `t = ${i.times.join(', ')} s` : '') || (i.count ? `${i.count} cuadros` : '') || ''
   return { icon: m[0], name: m[1], arg: String(arg).replace(/\\/g, '/').split('/').slice(-3).join('/').slice(0, 120) }
 }
 
