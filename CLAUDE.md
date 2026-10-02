@@ -269,6 +269,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   YouTube están en `NetStream.allowed`). Claude escribe el análisis con `runAgent` (webclaude.ts: `-p` con las
   herramientas de OpenAnimator por MCP; `resolvePath` acepta la ruta virtual `/home/user/proyectos/<id>/…`). La prueba
   del simulador lo corre entero con el video de prueba (la API de mentira escribe un análisis mínimo).
+- «Guardar como plantilla» en el iPhone (PhoneSaveTemplate: menú de la tarjeta y del nombre en el editor; en «Nuevo
+  proyecto», las propias tienen «⋯» › Borrar, a la papelera): con «Que Claude describa el estilo», `describeStyle`
+  (analyzer.ts) corre `runAgent` sólo con herramientas de lectura y su respuesta final (paleta, tipografía, composición,
+  animaciones, ritmo, cómo está hecho) va a PLANTILLA.md, que Claude lee cuando un proyecto sale de esa plantilla.
 - Whisper al abrir la app: `whisperPreload` (plugins.ts, 5 s después de arrancar) carga el modelo en segundo plano
   (`whisper.preload`); sin eso la primera transcripción de cada vez esperaba la carga (~1 min).
 

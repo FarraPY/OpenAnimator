@@ -46,6 +46,7 @@ const SF: Record<string, string> = {
   folder: 'folder', 'folder-open': 'folder', history: 'clock.arrow.circlepath', compress: 'arrow.down.right.and.arrow.up.left', leaf: 'leaf',
   cpu: 'cpu', gauge: 'gauge.with.dots.needle.67percent', shield: 'checkmark.shield', code: 'chevron.left.forwardslash.chevron.right',
   zap: 'bolt', bolt: 'bolt', clipboard: 'list.clipboard', hand: 'hand.raised', x: 'xmark', scissors: 'scissors', brain: 'brain',
+  bookmark: 'bookmark', wand: 'wand.and.stars',
 }
 
 /** Las opciones para Swift: cada una con su número (`id`), que es lo que vuelve al elegirla. */

@@ -164,7 +164,16 @@ export async function runE2E() {
       if (!(await call<any[]>('projects:templates')).some((x) => x.id === t.id)) throw new Error('La plantilla no aparece en la lista')
       return { phases, stats: res.stats, analysis: res.analysis, template: t.id }
     }, 300000)
-    const out = await step(R, 'export',() => new Promise<any>((resolve, reject) => {
+    // «Guardar como plantilla» con la guía de estilo de Claude (la API de mentira contesta un texto cualquiera).
+    await step(R, 'template:describe', async () => {
+      const t = await call<{ id: string; dir: string }>('templates:saveProject', project.id, { name: 'Estilo E2E', includeAssets: false, describe: true })
+      const guide = (host() as WebHost).fs.readText(`${t.dir}/files/PLANTILLA.md`)
+      if (!/^# Plantilla «Estilo E2E»/.test(guide) || !/Claude de prueba/.test(guide)) throw new Error('PLANTILLA.md sin la guía de Claude: ' + guide.slice(0, 300))
+      const tpl = (await call<any[]>('projects:templates')).find((x) => x.id === t.id)
+      if (!tpl) throw new Error('La plantilla no aparece en la lista')
+      return { id: t.id, description: tpl.description, guide: guide.slice(0, 200) }
+    }, 180000)
+    const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''
       let shown = 0
       const off = on('export:progress', (p: any) => {

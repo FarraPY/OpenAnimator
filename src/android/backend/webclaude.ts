@@ -591,7 +591,7 @@ export function setChatOptions(id: string, patch: any, label: string) {
 /**
  * Un pedido a Claude Code sin chat, hasta que termina (el analizador de videos, como `claude -p` en la PC): sólo las
  * herramientas de `tools` (las de OpenAnimator, por MCP, sobre el proyecto `projectId`) y el pedido por la entrada.
- * `onTool` y `onText` cuentan lo que va haciendo; `cancel` lo corta.
+ * `onTool` y `onText` cuentan lo que va haciendo; `cancel` lo corta. `done` termina con la respuesta final de Claude.
  */
 export function runAgent(o: { projectId: string; prompt: string; system?: string; tools: string[]; model?: string; effort?: string; timeoutMs?: number; onTool?: (name: string, input: any) => void; onText?: (text: string) => void }) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits',
@@ -600,9 +600,9 @@ export function runAgent(o: { projectId: string; prompt: string; system?: string
   if (o.system) args.push('--append-system-prompt', o.system)
   if (o.model) args.push('--model', o.model)
   if (o.effort) args.push('--effort', o.effort)
-  let out = '', err = '', failed = '', gotResult = false, over = false
+  let out = '', err = '', failed = '', final = '', gotResult = false, over = false
   let settle: (e?: Error) => void = () => {}
-  const done = new Promise<void>((resolve, reject) => { settle = (e) => (e ? reject(e) : resolve()) })
+  const done = new Promise<string>((resolve, reject) => { settle = (e) => (e ? reject(e) : resolve(final)) })
   const release = holdAwake()
   const l = launch(args, {
     projectId: o.projectId,
@@ -619,7 +619,7 @@ export function runAgent(o: { projectId: string; prompt: string; system?: string
               if (b.type === 'tool_use') o.onTool?.(b.name, b.input)
               else if (b.type === 'text' && b.text?.trim()) o.onText?.(b.text.trim())
             }
-          } else if (x.type === 'result') { gotResult = true; if (x.is_error) failed = String(x.result || x.subtype || 'error') }
+          } else if (x.type === 'result') { gotResult = true; if (x.is_error) failed = String(x.result || x.subtype || 'error'); else final = String(x.result || '') }
         }
       } else if (m.type === 'stderr') err = (err + m.data).slice(-3000)
       else if (m.type === 'exit' || m.type === 'crash') {

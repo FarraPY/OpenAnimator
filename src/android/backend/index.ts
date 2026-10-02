@@ -399,8 +399,16 @@ h('clipboard:text', (text: string) => host().call('clipboard.text', { text: Stri
 // ── plantillas del usuario ────────────────────────────────────────────────────
 h('templates:saveProject', async (projectId, o) => {
   if (!fs.exists(join(P.projectDir(projectId)!, 'thumbnail.jpg'))) await makeThumb(projectId)
+  // En el iPhone, Claude puede describir el estilo (PLANTILLA.md); si no se escribió descripción, va su primera línea.
+  if (o?.describe) {
+    const guide = await (await AN()).describeStyle(projectId, o.name, P.readProject(projectId).name)
+    const lead = guide.split('\n').find((l) => l.trim() && !/^(#|---)/.test(l.trim()))?.trim() || ''
+    o = { ...o, guide, description: o.description || lead.slice(0, 220) }
+  }
   return P.saveProjectAsTemplate(projectId, o)
 })
+h('templates:canDescribe', () => analyzing())
+h('templates:cancelDescribe', async () => (await AN()).cancelStyle())
 h('templates:get', (id) => P.getTemplate(id))
 h('templates:delete', (id) => P.deleteTemplate(id))
 h('templates:update', (id, patch) => P.updateTemplate(id, patch))

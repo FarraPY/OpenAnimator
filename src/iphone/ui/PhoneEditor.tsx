@@ -21,6 +21,7 @@ import PhoneTimeline from './PhoneTimeline'
 import PhoneMedia from './PhoneMedia'
 import PhoneInspector from './PhoneInspector'
 import PhoneExport from './PhoneExport'
+import PhoneSaveTemplate from './PhoneSaveTemplate'
 import { PreviewAudio } from './previewAudio'
 
 const KIND_TRACK: Record<string, TrackType> = { scene: 'scene', video: 'video', image: 'video', audio: 'audio' }
@@ -65,6 +66,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   const [assets, setAssets] = useState<Asset[]>([])
   const [tab, setTab] = useState<Tab>('claude')
   const [sheet, setSheet] = useState<Sheet>('mid')
+  const [saveTpl, setSaveTpl] = useState(false)
   const [full, setFull] = useState(false)
   const [exporting, setExporting] = useState(false)
   // De qué se habla con Claude: todo el proyecto (null), la escena del cursor ('cursor') o una escena (el id del clip).
@@ -424,6 +426,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
   const projectItems = [
     { label: 'Renombrar proyecto…', icon: 'edit', onSelect: renameProject },
     { label: 'Nota para Claude en el cursor…', icon: 'note', onSelect: addNote },
+    { label: 'Guardar como plantilla…', icon: 'bookmark', onSelect: () => setSaveTpl(true) },
     { sep: true as const },
     { label: 'Timelines', icon: 'film', desc: project.timelines.find((x) => x.id === tlId)?.name, sub: [
       ...project.timelines.map((x) => ({ label: x.name, checked: x.id === tlId, onSelect: () => { if (x.id !== tlId) switchTl(x.id) } })),
@@ -525,6 +528,7 @@ export default function PhoneEditor({ projectId, onClose }: { projectId: string;
       </>}
 
       {exporting && <PhoneExport project={project} currentTl={tlId} onClose={() => setExporting(false)} />}
+      {saveTpl && <PhoneSaveTemplate projectId={projectId} projectName={project.name} onClose={() => setSaveTpl(false)} />}
       {dlg.element}
     </div>
   )

@@ -10,6 +10,7 @@ import { useDialogs } from '../../components/Dialogs'
 import { Icon, Logo } from '../../ui/icons'
 import { Button, Empty, Spinner, TextInput } from '../../ui/kit'
 import { Chips, MenuButton, Sheet, Tap, TopBar } from './PhoneApp'
+import PhoneSaveTemplate from './PhoneSaveTemplate'
 
 export const FORMATS = [
   { id: 'v', name: 'Vertical', sub: '9:16', w: 1080, h: 1920 },
@@ -44,6 +45,7 @@ export default function Projects() {
   const [canAnalyze, setCanAnalyze] = useState(false)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [saveTpl, setSaveTpl] = useState<ProjectSummary | null>(null)
   const [q, setQ] = useState('')
   const [view, setView] = useState(() => pref('oa.homeView', 'grid'))
   const [sort, setSort] = useState<Sort>(() => pref('oa.homeSort', 'recent') as Sort)
@@ -87,6 +89,7 @@ export default function Projects() {
       { label: 'Renombrar…', icon: 'edit', onSelect: () => rename(p) },
       { label: 'Duplicar', icon: 'copy', onSelect: async () => { await call('projects:duplicate', p.id).catch((e) => toast(e.message, true)); refresh() } },
       { label: 'Compartir proyecto (.zip)', icon: 'share', onSelect: () => zip(p, 'share') },
+      { label: 'Guardar como plantilla…', icon: 'bookmark', onSelect: () => setSaveTpl(p) },
       { sep: true },
       { label: 'Borrar', icon: 'trash', danger: true, onSelect: () => remove(p) },
     ]}><Icon name="more" size={20} /></MenuButton>
@@ -161,20 +164,27 @@ export default function Projects() {
       {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo proyecto</button>}
 
       {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }}
+        onTemplatesChanged={() => call<Template[]>('projects:templates').then(setTemplates).catch(() => {})}
         onAnalyze={canAnalyze ? () => { setCreating(false); go({ page: 'analyze' }) } : undefined} />}
+      {saveTpl && <PhoneSaveTemplate projectId={saveTpl.id} projectName={saveTpl.name} onClose={() => { setSaveTpl(null); call<Template[]>('projects:templates').then(setTemplates).catch(() => {}) }} />}
       {dlg.element}
     </>
   )
 }
 
-function NewProject({ templates, onClose, onCreated, onAnalyze }: { templates: Template[]; onClose: () => void; onCreated: (id: string) => void; onAnalyze?: () => void }) {
+function NewProject({ templates, onClose, onCreated, onAnalyze, onTemplatesChanged }: { templates: Template[]; onClose: () => void; onCreated: (id: string) => void; onAnalyze?: () => void; onTemplatesChanged: () => void }) {
   const { toast } = useApp()
+  const dlg = useDialogs() // adentro de la hoja: un diálogo de afuera quedaría tapado por ella
   const [name, setName] = useState('Mi video')
   const [fmt, setFmt] = useState('v')
   const [fps, setFps] = useState(30)
   const [tpl, setTpl] = useState('')
   const [busy, setBusy] = useState(false)
   useEffect(() => { if (!tpl && templates.length) setTpl(templates[0].id) }, [templates])
+  const removeTpl = async (t: Template) => {
+    if (!(await dlg.confirm({ title: `¿Borrar la plantilla «${t.name}»?`, message: 'Va a la papelera: la podés recuperar durante 30 días desde Ajustes › Almacenamiento.', ok: 'Borrar', danger: true }))) return
+    try { await call('templates:delete', t.id); if (tpl === t.id) setTpl(''); onTemplatesChanged(); toast('Plantilla en la papelera') } catch (e: any) { toast(e.message, true) }
+  }
   const create = async () => {
     const f = FORMATS.find((x) => x.id === fmt)!
     setBusy(true)
@@ -207,13 +217,18 @@ function NewProject({ templates, onClose, onCreated, onAnalyze }: { templates: T
       </button>}
       <div className="tpls">
         {templates.map((t) => (
-          <button key={t.id} className={`tpl ${tpl === t.id ? 'on' : ''}`} onClick={() => { setTpl(t.id); const f = t.user && t.width && t.height ? FORMATS.find((x) => x.w * t.height! === x.h * t.width!) : null; if (f) setFmt(f.id) }}>
-            <span className="tpl-img" style={t.preview ? { backgroundImage: `url("${t.preview}")` } : undefined}>{!t.preview && <Icon name="template" size={26} stroke={1.3} />}</span>
-            <b className="ellipsis">{t.name}</b>
-            <small>{t.description}</small>
-          </button>
+          <div key={t.id} className="tpl-cell">
+            <button className={`tpl ${tpl === t.id ? 'on' : ''}`} onClick={() => { setTpl(t.id); const f = t.user && t.width && t.height ? FORMATS.find((x) => x.w * t.height! === x.h * t.width!) : null; if (f) setFmt(f.id) }}>
+              <span className="tpl-img" style={t.preview ? { backgroundImage: `url("${t.preview}")` } : undefined}>{!t.preview && <Icon name="template" size={26} stroke={1.3} />}</span>
+              <b className="ellipsis">{t.name}</b>
+              <small>{t.description}</small>
+            </button>
+            {t.user && <MenuButton native={false} className="tpl-more" label="Opciones de la plantilla" title={t.name}
+              items={[{ label: 'Borrar plantilla', icon: 'trash', danger: true, onSelect: () => removeTpl(t) }]}><Icon name="more" size={16} /></MenuButton>}
+          </div>
         ))}
       </div>
+      {dlg.element}
     </Sheet>
   )
 }

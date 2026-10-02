@@ -276,3 +276,47 @@ export function save(id: string, o: { name: string; description?: string; tags?:
 export function cleanup() {
   try { for (const e of fs.list(PROJECTS)) if (e.dir && e.name.startsWith('.analisis-')) fs.delete(join(PROJECTS, e.name)) } catch { /* ignore */ }
 }
+
+// ── guía de estilo de un proyecto propio («Guardar como plantilla») ───────────────
+
+const STYLE_TOOLS = ['Read', 'Glob', 'Grep', 'oa_proyecto', 'oa_ver_fotogramas'].map((n) => 'mcp__openanimator__' + n)
+const STYLE_SYSTEM = 'Corrés dentro de la app OpenAnimator del iPhone. Los archivos viven en la app, NO en tu disco: usá mcp__openanimator__Read, Glob y Grep con rutas relativas a la carpeta del proyecto. No hay terminal. No cambies ningún archivo.'
+const stylePrompt = (name: string) => `Este proyecto de OpenAnimator se va a guardar como la plantilla «${name}», para hacer videos nuevos con el mismo estilo y otro contenido. Escribí la guía de estilo que va a leer Claude cuando la use.
+
+Mirá el proyecto sin cambiar nada: project.json, el timeline activo (timelines/), brief.md si existe y las escenas de scenes/ (si son muchas, las más representativas; con Glob y Grep encontrás lo que se repite). Si te ayuda, mirá 2 a 4 fotogramas con oa_ver_fotogramas.
+
+Respondé sólo con la guía en Markdown, sin nada antes ni después, con esta forma:
+# Plantilla «${name}»
+Una o dos oraciones con la idea visual.
+## Paleta: colores en hex y para qué se usa cada uno.
+## Tipografía: familias (con alternativas), pesos, tamaños relativos, mayúsculas, interletrado.
+## Composición: márgenes, grilla, jerarquía, formas y recursos que se repiten.
+## Animaciones: cómo entran, se mueven y salen las cosas (tipo, duración en segundos, curvas, escalonado), transiciones entre escenas, loops.
+## Ritmo: cuánto dura cada escena y cada texto en pantalla, y cómo acompaña a la voz o la música.
+## Cómo está hecho: técnica (CSS, SVG, canvas, librerías), estructura de las escenas y qué conviene reutilizar tal cual (con sus rutas).
+## Claves: 5 a 8 puntos concretos para mantener el estilo.
+## Evitar: lo que lo rompería.
+Datos concretos (valores, nombres de archivo) en vez de adjetivos.`
+
+let styleJob: { cancel: () => void } | null = null
+
+/**
+ * Claude mira el proyecto (sólo lee) y escribe su guía de estilo: paleta, tipografía, animaciones, ritmo y cómo está
+ * hecho. Va a PLANTILLA.md, que Claude lee cuando un proyecto sale de esa plantilla. El avance va como templates:progress.
+ */
+export async function describeStyle(projectId: string, name: string, projectName: string) {
+  const s = getSettings().claude
+  styleJob?.cancel()
+  const job = runAgent({
+    projectId, system: STYLE_SYSTEM, tools: STYLE_TOOLS, prompt: stylePrompt(name), model: s.model || undefined, effort: s.effort || undefined, timeoutMs: 15 * 60000,
+    onTool: (tool, input) => send('templates:progress', { projectId, text: describeTool(tool, input).label }),
+  })
+  styleJob = job
+  try {
+    let g = (await job.done).trim()
+    if (g.length < 40) throw new Error('Claude no devolvió la guía de estilo.')
+    if (!/^#\s/.test(g)) g = `# Plantilla «${name}»\n\n${g}`
+    return `${g}\n\n---\nCreada a partir del proyecto «${projectName}»: sus escenas son la referencia visual. Mantené este estilo y cambiá el contenido según el brief.\n`
+  } finally { if (styleJob === job) styleJob = null }
+}
+export function cancelStyle() { styleJob?.cancel() }
