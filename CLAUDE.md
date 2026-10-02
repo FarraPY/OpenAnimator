@@ -23,7 +23,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Diálogos con `useDialogs()` (`components/Dialogs.tsx`): `window.prompt` NO existe en Electron.
 - Tooltips: atributo `data-tip` (+ `data-kbd` para el atajo). Tokens de color/medidas en `src/styles.css`.
 - Ajustes: esquema en `electron/settings.ts`; `DEFAULTS` + merge profundo en `electron/settings-defaults.ts` (sin Node:
-  lo comparte Android); en la interfaz `useApp().updateSettings`.
+  lo comparte Android); en la interfaz `useApp().updateSettings`, que aplica el cambio al instante con el mismo
+  `mergeSettings` (con una mezcla de un nivel, `{ plugins: { fish: { voiceId } } }` dejaba fish sin el resto y la pantalla
+  se rompía hasta que volvía lo guardado: en el iPhone, elegir una voz la dejaba vacía). Si una pantalla falla al
+  dibujarse, `components/Crash.tsx` lo muestra y lo anota en vez de dejar la ventana vacía.
 
 ## Plugins, plantillas y análisis de video
 - `electron/plugins.ts`: ChatGPT vía Codex CLI (cuenta del usuario, `codex exec --json`; las imágenes quedan en
