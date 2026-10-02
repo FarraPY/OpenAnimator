@@ -132,7 +132,11 @@ async function startProc(procId, o) {
   if (allowed.length) args.push('--allowedTools', [...allowed, 'Agent', 'Task', 'WebSearch'].join(','))
   if (typeof o.model === 'string' && /^[\w.[\]-]+$/.test(o.model)) args.push('--model', o.model)
   if (EFFORTS.has(o.effort)) args.push('--effort', o.effort)
-  if (typeof o.resume === 'string' && /^[\w-]+$/.test(o.resume)) args.push('--resume', o.resume)
+  if (typeof o.resume === 'string' && /^[\w-]+$/.test(o.resume)) {
+    args.push('--resume', o.resume)
+    // Volver a un mensaje anterior (editar y reenviar, reintentar): una conversación nueva con lo de hasta ahí.
+    if (typeof o.resumeAt === 'string' && /^[\w-]+$/.test(o.resumeAt)) args.push('--resume-session-at', o.resumeAt, '--fork-session')
+  }
   const child = spawn(claudeBin, args, { cwd, env: claudeEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
   // project/sessionId/busy/perms/history: para que una app que se reinició (Android cerró la página por
   // memoria) pueda retomar la conversación sin cortarla (ver adopt en el hello).
@@ -250,11 +254,12 @@ function transcript(project, session) {
   if (!file || !/^[\w-]+$/.test(session) || !fs.existsSync(file)) return []
   const items = []
   const tools = new Map()
+  let last = '' // el último mensaje de la conversación, para volver a ese punto (como en claude-transcript.ts)
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     let m
     try { m = JSON.parse(line) } catch { continue }
     if (m.isSidechain) continue
-    if (m.type === 'system' && m.subtype === 'compact_boundary') { items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
+    if (m.type === 'system' && m.subtype === 'compact_boundary') { last = undefined; items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
     // Lo que el usuario mandó mientras Claude trabajaba y Claude leyó en el mismo turno (como midTurnPrompt en claude-transcript.ts).
     const a = m.type === 'attachment' ? m.attachment : null
     if (a?.type === 'queued_command' && (!a.commandMode || a.commandMode === 'prompt')) {
@@ -266,6 +271,7 @@ function transcript(project, session) {
     const c = m.message?.content
     if (m.type === 'user') {
       if (m.isMeta || m.isCompactSummary) continue
+      if (Array.isArray(c) && c.some((b) => b.type === 'tool_result') && m.uuid) last = m.uuid
       if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') {
         const it = tools.get(b.tool_use_id)
         if (!it) continue
@@ -274,12 +280,13 @@ function transcript(project, session) {
       }
       if (isRealPrompt(m)) {
         const imgs = Array.isArray(c) ? c.filter((b) => b.type === 'image').length : 0
-        items.push({ id: nid('u'), kind: 'user', text: userText(m), images: imgs || undefined })
+        items.push({ id: nid('u'), kind: 'user', text: userText(m), images: imgs || undefined, after: last })
       } else if (/^\[Request interrupted/.test(userText(m))) items.push({ id: nid('n'), kind: 'notice', text: 'Interrumpido.', level: 'info' })
     } else if (m.type === 'assistant' && Array.isArray(c)) {
+      if (m.uuid) last = m.uuid
       for (const b of c) {
-        if (b.type === 'text' && b.text?.trim()) items.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
-        else if (b.type === 'tool_use') { const it = { id: nid('tool'), kind: 'tool', name: b.name, input: b.input, status: 'ok' }; tools.set(b.id, it); items.push(it) }
+        if (b.type === 'text' && b.text?.trim()) items.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok', chain: m.uuid })
+        else if (b.type === 'tool_use') { const it = { id: nid('tool'), kind: 'tool', name: b.name, input: b.input, status: 'ok', chain: m.uuid }; tools.set(b.id, it); items.push(it) }
       }
     }
   }

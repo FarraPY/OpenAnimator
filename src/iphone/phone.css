@@ -260,6 +260,14 @@ html.kb .ed-grab, html.kb .ed-tabs { display: none; }
 html.phone .ed-chat .pane-head { height: 44px; padding: 0 6px 0 14px; gap: 2px; border-bottom: 0; }
 html.phone .chat-list { padding: 12px 14px 8px; gap: 14px; font-size: 15.5px; }
 html.phone .msg-user { max-width: 86%; padding: 10px 14px; border-radius: 20px 20px 6px 20px; font-size: 15.5px; }
+html.phone .msg-user-wrap { max-width: 86%; }
+html.phone .md .code-block code { font-size: 12.5px; }
+html.phone .turn-meta { margin-left: 34px; font-size: 12.5px; }
+html.phone .turn-act { width: 38px; height: 34px; }
+html.phone .msg-actions button { height: 36px; padding: 0 14px; font-size: 14.5px; border-radius: 12px; }
+html.phone .code-copy { height: 30px; padding: 0 10px; font-size: 13px; }
+html.phone .att-thumbs img { width: 96px; height: 96px; border-radius: 12px; }
+html.phone .edit-banner { font-size: 13px; border-radius: 14px; }
 html.phone .msg-ai { gap: 10px; }
 html.phone .msg-ai-body { font-size: 15.5px; line-height: 1.6; }
 html.phone :is(.tool-card, .perm-card, .thinking, .thinking-h, .think) { margin-left: 0; }

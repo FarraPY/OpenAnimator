@@ -56,9 +56,10 @@ function toolMeta(it: ChatItem): { icon: IconName; name: string; arg: string } {
 }
 
 // ── Markdown mínimo y seguro (sin HTML) ────────────────────────────────────────
+const openUrl = (url: string) => (e: { preventDefault: () => void }) => { e.preventDefault(); call('shell:openExternal', url) }
 function inline(s: string, k = 0): ReactNode[] {
   const out: ReactNode[] = []
-  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(\[[^\]]+\]\((https?:[^)\s]+)\))/g
+  const re = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(~~[^~]+~~)|(\[[^\]]+\]\((https?:[^)\s]+)\))|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"»])/g
   let last = 0, m: RegExpExecArray | null
   while ((m = re.exec(s))) {
     if (m.index > last) out.push(s.slice(last, m.index))
@@ -66,11 +67,81 @@ function inline(s: string, k = 0): ReactNode[] {
     if (m[1]) out.push(<code key={k++}>{x.slice(1, -1)}</code>)
     else if (m[2]) out.push(<strong key={k++}>{x.slice(2, -2)}</strong>)
     else if (m[3]) out.push(<em key={k++}>{x.slice(1, -1)}</em>)
-    else if (m[4]) { const url = m[5]; out.push(<a key={k++} href="#" onClick={(e) => { e.preventDefault(); call('shell:openExternal', url) }}>{x.slice(1, x.indexOf(']'))}</a>) }
+    else if (m[4]) out.push(<del key={k++}>{x.slice(2, -2)}</del>)
+    else if (m[5]) out.push(<a key={k++} href="#" onClick={openUrl(m[6])}>{x.slice(1, x.indexOf(']'))}</a>)
+    else if (m[7]) out.push(<a key={k++} href="#" onClick={openUrl(x)}>{x.replace(/^https?:\/\/(www\.)?/, '')}</a>)
     last = m.index + x.length
   }
   if (last < s.length) out.push(s.slice(last))
   return out
+}
+
+// Resaltado de código, liviano y propio: lo que más escribe Claude acá es HTML, CSS y JS (las escenas).
+const KW = new Set('const let var function return if else for while do switch case break continue new class extends import from export default async await try catch finally throw typeof instanceof in of this null undefined true false yield static get set delete void def elif lambda None True False'.split(' '))
+type Lang = 'js' | 'html' | 'css' | 'sh'
+const LANG: Record<string, Lang> = { js: 'js', javascript: 'js', mjs: 'js', ts: 'js', typescript: 'js', jsx: 'js', tsx: 'js', json: 'js', py: 'js', python: 'js', html: 'html', xml: 'html', svg: 'html', css: 'css', scss: 'css', sh: 'sh', bash: 'sh', shell: 'sh', zsh: 'sh', powershell: 'sh', ps1: 'sh', console: 'sh' }
+// Cada grupo de la expresión es una clase: comentario, cadena o etiqueta, número, palabra…
+const HL: Record<Lang, [RegExp, string[]]> = {
+  js: [/(\/\/.*$|\/\*[\s\S]*?\*\/|#.*$)|("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_$][\w$]*)/gm, ['hl-c', 'hl-s', 'hl-n', 'hl-k']],
+  html: [/(<!--[\s\S]*?-->)|(<\/?[\w:-]+|\/?>)|("[^"]*"|'[^']*')|([\w:-]+)(?==)/g, ['hl-c', 'hl-t', 'hl-s', 'hl-a']],
+  css: [/(\/\*[\s\S]*?\*\/)|("[^"]*"|'[^']*')|(#[0-9a-fA-F]{3,8}\b|-?\d*\.?\d+(?:px|%|em|rem|s|ms|deg|vh|vw|fr)?\b)|([\w-]+)(?=\s*:[^:])/g, ['hl-c', 'hl-s', 'hl-n', 'hl-p']],
+  sh: [/(^\s*#.*$|\s#.*$)|("(?:[^"\\]|\\.)*"|'[^']*')|(\s--?[\w-]+)|(^\s*[\w./-]+)/gm, ['hl-c', 'hl-s', 'hl-a', 'hl-k']],
+}
+function highlight(code: string, lang: string): ReactNode[] {
+  const kind: Lang | null = LANG[lang.toLowerCase()] || (/^\s*</.test(code) ? 'html' : lang ? 'js' : null)
+  if (!kind || code.length > 30000) return [code]
+  const [src, cls] = HL[kind]
+  const re = new RegExp(src.source, src.flags)
+  const out: ReactNode[] = []
+  let last = 0, k = 0, m: RegExpExecArray | null
+  while ((m = re.exec(code))) {
+    if (!m[0]) { re.lastIndex++; continue }
+    if (m.index > last) out.push(code.slice(last, m.index))
+    const g = m.findIndex((x, i) => i > 0 && x !== undefined)
+    let c = cls[g - 1] || ''
+    if (kind === 'js' && g === 4) c = KW.has(m[0]) ? 'hl-k' : code[m.index + m[0].length] === '(' ? 'hl-f' : /^[A-Z]/.test(m[0]) ? 'hl-ty' : ''
+    out.push(c ? <span key={k++} className={c}>{m[0]}</span> : m[0])
+    last = m.index + m[0].length
+  }
+  if (last < code.length) out.push(code.slice(last))
+  return out
+}
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false)
+  const body = useMemo(() => highlight(code, lang), [code, lang])
+  const copy = () => call('clipboard:text', code).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }, () => {})
+  return (
+    <div className="code-block">
+      <div className="code-head"><span>{lang || 'código'}</span><button className="code-copy" onClick={copy}><Icon name={copied ? 'check' : 'copy'} size={13} />{copied ? 'Copiado' : 'Copiar'}</button></div>
+      <pre><code>{body}</code></pre>
+    </div>
+  )
+}
+
+const LI = /^(\s*)([-*•+]|\d+[.)])\s+(.*)$/
+const HR = /^\s*([-*_])(\s*\1){2,}\s*$/
+/** Una lista desde la línea `start`, con las sublistas (más sangría) adentro de su ítem. Devuelve dónde sigue. */
+function list(lines: string[], start: number, key: number): [ReactNode, number] {
+  const first = LI.exec(lines[start])!
+  const base = first[1].length, ordered = /\d/.test(first[2])
+  const items: ReactNode[][] = []
+  let i = start
+  while (i < lines.length) {
+    const l = lines[i], m = HR.test(l) ? null : LI.exec(l)
+    if (m && m[1].length <= base + 1 && /\d/.test(m[2]) === ordered) {
+      const task = /^\[([ xX])\]\s+(.*)$/.exec(m[3])
+      items.push(task ? [<span key="t" className={`md-task ${task[1] === ' ' ? '' : 'done'}`}>{task[1] !== ' ' && <Icon name="check" size={10} stroke={3} />}</span>, ...inline(task[2], 1)] : inline(m[3]))
+      i++
+    } else if (m && m[1].length > base + 1 && items.length) {
+      const [sub, j] = list(lines, i, i)
+      items[items.length - 1].push(sub); i = j
+    } else if (!m && l.trim() && items.length && l.search(/\S/) > base) {
+      items[items.length - 1].push(<br key={`b${i}`} />, ...inline(l.trim(), 1000 + i)); i++ // continuación del ítem
+    } else break
+  }
+  const L = ordered ? 'ol' : 'ul'
+  const n = ordered ? parseInt(first[2]) : 1
+  return [<L key={key} start={n !== 1 ? n : undefined}>{items.map((c, j) => <li key={j}>{c}</li>)}</L>, i]
 }
 export function Markdown({ text }: { text: string }) {
   const lines = text.replace(/\r/g, '').split('\n')
@@ -78,20 +149,16 @@ export function Markdown({ text }: { text: string }) {
   let i = 0, k = 0
   while (i < lines.length) {
     const l = lines[i]
-    if (/^```/.test(l)) {
+    const fence = /^\s*```\s*([\w+#.-]*)/.exec(l)
+    if (fence) {
       const buf: string[] = []; i++
-      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++])
-      i++; blocks.push(<pre key={k++}><code>{buf.join('\n')}</code></pre>); continue
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++])
+      i++; blocks.push(<CodeBlock key={k++} code={buf.join('\n')} lang={fence[1]} />); continue
     }
     const h = /^(#{1,4})\s+(.*)/.exec(l)
     if (h) { const T = (`h${Math.min(4, h[1].length + 1)}`) as any; blocks.push(<T key={k++}>{inline(h[2])}</T>); i++; continue }
-    if (/^\s*[-*•]\s+/.test(l) || /^\s*\d+[.)]\s+/.test(l)) {
-      const ordered = /^\s*\d+[.)]\s+/.test(l)
-      const items: string[] = []
-      while (i < lines.length && (ordered ? /^\s*\d+[.)]\s+/ : /^\s*[-*•]\s+/).test(lines[i])) items.push(lines[i++].replace(/^\s*(?:[-*•]|\d+[.)])\s+/, ''))
-      const L = ordered ? 'ol' : 'ul'
-      blocks.push(<L key={k++}>{items.map((x, j) => <li key={j}>{inline(x)}</li>)}</L>); continue
-    }
+    if (HR.test(l)) { blocks.push(<hr key={k++} />); i++; continue }
+    if (LI.test(l)) { const [node, j] = list(lines, i, k++); blocks.push(node); i = j; continue }
     if (/^>\s?/.test(l)) {
       const buf: string[] = []
       while (i < lines.length && /^>\s?/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, ''))
@@ -107,7 +174,7 @@ export function Markdown({ text }: { text: string }) {
     }
     if (!l.trim()) { i++; continue }
     const buf: string[] = []
-    while (i < lines.length && lines[i].trim() && !/^(```|#{1,4}\s|>\s?|\s*[-*•]\s+|\s*\d+[.)]\s+|\s*\|)/.test(lines[i])) buf.push(lines[i++])
+    while (i < lines.length && lines[i].trim() && !/^(\s*```|#{1,4}\s|>\s?|\s*\|)/.test(lines[i]) && !LI.test(lines[i]) && !HR.test(lines[i])) buf.push(lines[i++])
     blocks.push(<p key={k++}>{buf.map((x, j) => <Fragment key={j}>{j > 0 && <br />}{inline(x)}</Fragment>)}</p>)
   }
   return <div className="md">{blocks}</div>
@@ -155,23 +222,55 @@ function ContextRing({ pct, level }: { pct: number; level: number }) {
   )
 }
 
+/** Lo que se puede hacer con un mensaje (estable: no hace volver a dibujar las filas memorizadas). */
+type RowActions = { copy: (text: string) => void; edit: (it: ChatItem) => void; retry: () => void }
+const IMG = /\.(png|jpe?g|webp|gif)$/i
+
+/** Un pedido del usuario: tocarlo muestra Copiar y Editar (como en la app de Claude); las fotos adjuntas se ven. */
+function UserMsg({ it, projectId, idle, act, onUnqueue }: { it: ChatItem; projectId: string; idle: boolean; act: RowActions; onUnqueue: (id: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [view, setView] = useState<string | null>(null)
+  const text = userText(it.text)
+  const imgs = (it.files || []).filter((f) => IMG.test(f))
+  const others = (it.files || []).filter((f) => !IMG.test(f))
+  const frame = (it.images || 0) > imgs.length
+  // Editar vuelve la conversación a ese punto: no con Claude trabajando ni en uno que leyó a mitad de un turno.
+  const canEdit = idle && !it.queued && it.after !== undefined
+  const toggle = (e: { target: EventTarget }) => {
+    if ((e.target as HTMLElement).closest('button, img, a') || window.getSelection()?.toString()) return
+    if (!it.queued) setOpen((o) => !o)
+  }
+  return (
+    <div className={`msg-user-wrap ${open ? 'open' : ''}`}>
+      <div className={`msg-user ${it.queued ? 'queued' : ''}`} onClick={toggle}>{text.split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
+        {imgs.length > 0 && <div className="att-thumbs">{imgs.map((f) => <img key={f} src={fileUrl(projectId, f)} alt="" onClick={() => setView(f)} />)}</div>}
+        {others.length || frame ? <div className="att-row">
+          {others.map((f) => <span key={f} className="att"><Icon name="file" size={12} />{f.split('/').pop()}</span>)}
+          {frame && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
+        </div> : null}
+        {it.queued && <div className="msg-queued"><Icon name="clock" size={12} /><span className="grow">{it.midTurn ? 'Claude lo lee en la próxima pausa, sin cortar lo que hace' : 'En cola: sale cuando Claude termine'}</span>
+          <button className="msg-unqueue" data-tip={it.midTurn ? 'Retirarlo antes de que Claude lo lea (vuelve al cuadro de texto)' : 'Sacarlo de la cola (vuelve al cuadro de texto)'} onClick={() => onUnqueue(it.id)}><Icon name="x" size={13} /></button></div>}
+      </div>
+      {open && <div className="msg-actions">
+        <button onClick={() => { act.copy(text); setOpen(false) }}><Icon name="copy" size={14} />Copiar</button>
+        {canEdit && <button onClick={() => { act.edit(it); setOpen(false) }}><Icon name="edit" size={14} />Editar</button>}
+      </div>}
+      {view && <Modal title={view.split('/').pop() || 'Imagen'} icon="image" onClose={() => setView(null)}><img className="att-view" src={fileUrl(projectId, view)} alt="" /></Modal>}
+    </div>
+  )
+}
+
 /**
  * Un mensaje del chat. Memoizado: mientras Claude escribe sólo cambia el último, y re-dibujar (y volver a
  * leer el markdown de) toda la conversación con cada palabra trababa la tablet en conversaciones largas.
+ * `turn`: el texto de las respuestas del turno que termina en esta fila (resultado), para copiarlo; `retry`: es el último
+ * turno y se puede reintentar.
  */
-const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, showCost, since, onUnqueue }: {
+const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, showCost, since, onUnqueue, idle, act, turn, retry }: {
   it: ChatItem; session: string | null; projectId: string; showThinking: boolean; showCost: boolean; since?: number; onUnqueue: (id: string) => void
+  idle: boolean; act: RowActions; turn?: string; retry?: boolean
 }) {
-  if (it.kind === 'user') return (
-    <div key={it.id} className={`msg-user ${it.queued ? 'queued' : ''}`}>{userText(it.text).split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
-      {it.files?.length || it.images ? <div className="att-row">
-        {it.files?.map((f) => <span key={f} className="att"><Icon name={/\.(png|jpe?g|webp|gif)$/i.test(f) ? 'image' : 'file'} size={12} />{f.split('/').pop()}</span>)}
-        {(it.images || 0) > (it.files?.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length || 0) && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
-      </div> : null}
-      {it.queued && <div className="msg-queued"><Icon name="clock" size={12} /><span className="grow">{it.midTurn ? 'Claude lo lee en la próxima pausa, sin cortar lo que hace' : 'En cola: sale cuando Claude termine'}</span>
-        <button className="msg-unqueue" data-tip={it.midTurn ? 'Retirarlo antes de que Claude lo lea (vuelve al cuadro de texto)' : 'Sacarlo de la cola (vuelve al cuadro de texto)'} onClick={() => onUnqueue(it.id)}><Icon name="x" size={13} /></button></div>}
-    </div>
-  )
+  if (it.kind === 'user') return <UserMsg it={it} projectId={projectId} idle={idle} act={act} onUnqueue={onUnqueue} />
   if (it.kind === 'assistant') return it.text ? (
     <div key={it.id} className="msg-ai"><span className="msg-ai-avatar"><Icon name="sparkles" size={13} stroke={2} /></span><div className="msg-ai-body"><Markdown text={it.text} /></div></div>
   ) : null
@@ -187,9 +286,15 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
     return secs && secs >= 2 ? <div key={it.id} className="think done"><Icon name="brain" size={12} />Pensó {dur(secs)}{it.tokens ? ` · ${kTok(it.tokens)} tokens` : ''}</div> : null
   }
   if (it.kind === 'notice') return <div key={it.id} className={`notice ${it.level || ''}`}><Icon name={it.level === 'error' ? 'x-circle' : it.level === 'warn' ? 'alert' : 'info'} size={14} />{it.text}</div>
-  if (it.kind === 'result') return it.isError
-    ? <div key={it.id} className="notice error"><Icon name="x-circle" size={14} />{it.text}</div>
-    : showCost ? <div key={it.id} className="turn-meta"><span className="row" style={{ gap: 4 }}><Icon name="check" size={11} />listo</span>{it.durationMs ? <span>{(it.durationMs / 1000).toFixed(0)} s</span> : null}{it.cost ? <span>US$ {it.cost.toFixed(3)}</span> : null}</div> : null
+  if (it.kind === 'result') {
+    const acts = turn || retry ? <span className="turn-acts">
+      {turn && <button className="turn-act" data-tip="Copiar la respuesta" aria-label="Copiar la respuesta" onClick={() => act.copy(turn)}><Icon name="copy" size={14} /></button>}
+      {retry && <button className="turn-act" data-tip="Reintentar: Claude vuelve a responder tu último mensaje" aria-label="Reintentar" onClick={act.retry}><Icon name="refresh" size={14} /></button>}
+    </span> : null
+    if (it.isError) return <><div className="notice error"><Icon name="x-circle" size={14} />{it.text}</div>{acts && <div className="turn-meta">{acts}</div>}</>
+    if (!acts && !showCost) return null
+    return <div className="turn-meta">{acts}{showCost && <><span className="row" style={{ gap: 4 }}><Icon name="check" size={11} />listo</span>{it.durationMs ? <span>{(it.durationMs / 1000).toFixed(0)} s</span> : null}{it.cost ? <span>US$ {it.cost.toFixed(3)}</span> : null}</>}</div>
+  }
   if (it.kind === 'tool') {
     const m = toolMeta(it)
     const media = !it.isError && it.result ? /guardad[oa] en (assets\/\S+?\.(png|jpe?g|webp|mp3|wav))/i.exec(it.result) : null
@@ -309,6 +414,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const [popped, setPopped] = useState(false)
   const [gone, setGone] = useState(false)
   const [history, setHistory] = useState(false)
+  const [editing, setEditing] = useState<ChatItem | null>(null) // un pedido que se va a reenviar cambiado
   const attMenu = useMenu()
   const ctxMenu = useMenu()
   const [opts, setOpts] = useState({ model: '', effort: '', permissionMode: 'acceptEdits' })
@@ -479,6 +585,11 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const send = async () => {
     const msg = text.trim() || (files.length ? 'Mirá los archivos adjuntos.' : '')
     if (!msg || !session) return
+    if (editing) {
+      // La conversación vuelve a antes de ese pedido (una copia: la original queda en el historial) y éste sale en su lugar.
+      if ((await call<string | null>('chat:rewind', session, editing.id).catch(() => null)) == null) { toast('No se puede editar ahora: esperá a que Claude termine', true); return }
+      setEditing(null)
+    }
     let ctx: Ctx = { timeline: 'main', t: 0 }
     try { ctx = (await context()) || ctx } catch { /* sin contexto */ }
     let att = attach
@@ -527,6 +638,22 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     try { const ctx = await context(); setAttach({ t: ctx.t, data: await call('frames:png', projectId, ctx.timeline, ctx.t, 1280) }) } catch (e: any) { toast(e.message, true) }
   }
   const newChat = async () => { if (session) await call('chat:kill', session); await start() }
+  // Acciones de los mensajes: un objeto fijo que llama a la versión del último dibujo (las filas están memorizadas).
+  const actNow = useRef<RowActions>(null!)
+  actNow.current = {
+    copy: (t) => { call('clipboard:text', t).then(() => toast('Copiado'), (e: any) => toast(e.message, true)) },
+    edit: (it) => {
+      setEditing(it); setText(userText(it.text)); setAttach(null); setFiles([])
+      setTimeout(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 60)
+    },
+    retry: async () => {
+      if (!session) return
+      setEditing(null); toBottom()
+      if (!(await call<boolean>('chat:retry', session).catch(() => false))) toast('No se puede reintentar ahora', true)
+    },
+  }
+  const act = useMemo<RowActions>(() => ({ copy: (t) => actNow.current.copy(t), edit: (it) => actNow.current.edit(it), retry: () => actNow.current.retry() }), [])
+  useEffect(() => setEditing(null), [session])
   const openOld = async (id: string) => {
     setHistory(false)
     if (id === claudeSession) return
@@ -602,6 +729,16 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const queuedN = items.reduce((n, x) => n + (x.queued ? 1 : 0), 0)
   const shown = queuedN ? [...items.filter((x) => !x.queued), ...items.filter((x) => x.queued)] : items
   const last = shown[shown.length - 1 - queuedN]
+  const idle = !busy && !tasks
+  // Lo que respondió Claude en cada turno (para copiarlo desde la fila del resultado) y si el último se puede reintentar.
+  const turns = new Map<string, string>()
+  let lastResult: string | null = null, lastUser: ChatItem | undefined, buf: string[] = []
+  for (const x of shown) {
+    if (x.queued) continue
+    if (x.kind === 'user') { buf = []; lastUser = x; lastResult = null } else if (x.kind === 'assistant' && x.text) buf.push(x.text)
+    else if (x.kind === 'result') { if (buf.length) turns.set(x.id, buf.join('\n\n')); buf = []; lastResult = x.id }
+  }
+  const canRetry = idle && !!lastUser && lastUser.after !== undefined
   const activeNow = last && ((last.kind === 'thinking' || last.kind === 'assistant') && last.status === 'streaming' || last.kind === 'tool' && last.status === 'ejecutando' || last.kind === 'permission' && last.status === 'pendiente')
   return (
     <div style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }}
@@ -651,10 +788,11 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             </div>
           </div>
         )}
-        {shown.slice(0, shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
+        {shown.slice(0, shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue}
+          idle={idle} act={act} turn={turns.get(it.id)} retry={canRetry && it.id === lastResult} />)}
         {busy && !activeNow && <div className="think live"><span className="think-dot" /><span>{last?.kind === 'tool' ? 'Procesando el resultado…' : 'Pensando…'}</span><Elapsed since={busySince || Date.now()} /></div>}
         {busy && !!signalAt && !(last?.kind === 'tool' && last.status === 'ejecutando' && !last.streamed) && !(last?.kind === 'permission' && last.status === 'pendiente') && <Stall key={signalAt} at={signalAt} />}
-        {shown.slice(shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
+        {shown.slice(shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} idle={idle} act={act} />)}
       </div>
       {away && (
         <button className={`to-bottom ${unread ? 'has-new' : ''}`} onClick={() => toBottom()} data-tip="Ir al último mensaje (Ctrl+Fin)">
@@ -668,6 +806,12 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
           <div className={`ctx-warn ${level === 2 ? 'err' : ''}`}>
             <Icon name="gauge" size={14} /><span className="grow">La conversación ya ocupa <b>{kTok(stats!.context)} tokens</b> y cada mensaje los reenvía: compactala para gastar menos{android ? '' : ' de tu límite'}.</span>
             <Button size="xs" icon="compress" onClick={() => compact()}>Compactar</Button>
+          </div>
+        )}
+        {editing && (
+          <div className="edit-banner">
+            <Icon name="edit" size={14} /><span className="grow"><b>Editando tu mensaje.</b> Claude responde de nuevo desde ahí: lo que vino después se descarta (la conversación original queda en el historial; los cambios en el proyecto no se deshacen).</span>
+            <Button size="xs" variant="ghost" icon="x" tip="Cancelar la edición" onClick={() => { setEditing(null); setText('') }} />
           </div>
         )}
         <div className="composer">

@@ -84,6 +84,18 @@ async function turn(text) {
     out({ type: 'result', subtype: 'success', is_error: false, duration_ms: 300, total_cost_usd: 0.01, result: '' })
     return
   }
+  // «[eco] texto»: contesta ese texto tal cual («\n» = salto de línea), para ver cómo se dibuja (markdown, código).
+  const echo = /^\[eco\]\s*([\s\S]*)$/.exec(text.replace(/\n\n\(Contexto del editor:[\s\S]*$/, ''))
+  if (echo) {
+    const answer = echo[1].replace(/\\n/g, '\n')
+    out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 15000, cache_creation_input_tokens: 0 } } } })
+    out({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
+    out({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: answer } } })
+    out({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    out({ type: 'assistant', uuid: crypto.randomUUID(), message: { role: 'assistant', model, content: [{ type: 'text', text: answer }] } })
+    out({ type: 'result', subtype: 'success', is_error: false, duration_ms: Date.now() - t0, total_cost_usd: 0.002, result: answer, modelUsage: { [model]: { contextWindow: 1000000 } } })
+    return
+  }
   // «[pensar]» o «[pensar 20]» (segundos, 4 por defecto): razonamiento oculto (sólo llegan los tokens
   // estimados, como con Opus 5.5) y una respuesta corta.
   const think = /^\[pensar(?:\s+(\d+))?\]/.exec(text)

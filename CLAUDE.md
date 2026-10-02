@@ -91,6 +91,19 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   vuelve a la cola de la app y `closed()` deja `opts.resume`: lo próximo retoma la conversación. Pruebas:
   `node --experimental-transform-types scripts/check-chat.mts` y, con el Claude Code de la PC contra una API de mentira
   local (no gasta el plan), `scripts/check-chat-midturn.mts`.
+- Acciones de los mensajes (como en la app de Claude): tocar un pedido muestra Copiar y Editar; debajo de cada respuesta,
+  Copiar y, en la última, Reintentar (`RowActions` en ChatPanel; copiar = canal `clipboard:text`). Editar pone el texto en
+  el cuadro con un aviso y al mandarlo `chat:rewind` vuelve la conversación a antes de ese pedido: `rewind()` mata el
+  proceso y el próximo arranca con `--resume <sesión> --resume-session-at <uuid> --fork-session` (una copia hasta ese
+  mensaje: la original queda en el historial; lo que Claude ya cambió en el proyecto NO se deshace). `retry()` hace lo
+  mismo con el último pedido y lo vuelve a mandar igual (con sus imágenes, `sent`). Cada pedido guarda `after`: el uuid
+  del último mensaje de Claude Code antes de él (assistant o tool_result del hilo principal, `lastChain`; en el
+  historial lo calcula parseTranscript; '' = el principio, de cero sin --resume); sin `after` (leído a mitad de un
+  turno, replay de Termux, después de compactar hasta la próxima respuesta) no se puede editar. Sólo con Claude Code:
+  agent.ts (API) devuelve null. Markdown del chat: código con resaltado propio (`highlight`: HTML, CSS, JS, shell) y
+  Copiar, listas anidadas y de tareas, tachado, separadores y enlaces sueltos; las fotos adjuntas se ven en el pedido.
+  Para verlo sin gastar: `node android/dev/server.mjs --mock-claude` (o el Claude Code de mentira de Termux) y un
+  mensaje `[eco] texto` contesta ese texto tal cual («\n» = salto de línea).
 - Subagentes (herramienta Agent de Claude Code; en el iPhone y Termux `--tools Task`, que en 2.x es Agent): corren en
   segundo plano y el turno que los lanza termina antes; al terminar, Claude Code empieza solo otro turno (`system/init`
   sin pedido → busy). En el flujo: `background_tasks_changed` (la lista entera), `task_started`/`task_notification`

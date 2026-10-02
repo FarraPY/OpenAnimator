@@ -35,7 +35,7 @@ class TermuxChat extends ClaudeStreamSession {
     const o = this.opts
     ;(async () => {
       const system = await buildSystem(o.projectId, 'code', o.saver !== false, o.extraInstructions || '')
-      await T.startProc(proc, o.projectId, { permissionMode: o.permissionMode, model: o.model, effort: o.effort, resume: o.resume, system, agents: sceneAgent(system), allowedTools: READONLY, tools: mcpTools() }, {
+      await T.startProc(proc, o.projectId, { permissionMode: o.permissionMode, model: o.model, effort: o.effort, resume: o.resume, resumeAt: o.resumeAt, system, agents: sceneAgent(system), allowedTools: READONLY, tools: mcpTools() }, {
         out: (m) => { if (this.proc === proc) this.received(m) },
         exit: (code, err) => { if (this.proc === proc) { this.reset(); this.closed(code, err) } },
       })
@@ -161,6 +161,8 @@ export async function listSessions(projectId: string) {
 export function sendChat(id: string, text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) { chats.get(id)?.send(String(text || ''), images || [], files || []) }
 export function interruptChat(id: string) { chats.get(id)?.interrupt() }
 export function unqueueChat(id: string, itemId?: string) { return chats.get(id)?.unqueue(itemId) || [] }
+export function rewindChat(id: string, itemId: string) { return chats.get(id)?.rewind(itemId) ?? null }
+export function retryChat(id: string) { return !!chats.get(id)?.retry() }
 export function respondPermission(id: string, itemId: string, allow: boolean, always: boolean) { chats.get(id)?.respondPermission(itemId, allow, always) }
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function compactChat(id: string, instructions?: string) { chats.get(id)?.compact(instructions) }

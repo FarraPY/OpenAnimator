@@ -808,6 +808,9 @@ export function getChat(id: string) { return chats.get(id)?.snapshot() || null }
 export function sendChat(id: string, text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) { chats.get(id)?.send(String(text || ''), images || [], files || []) }
 export function interruptChat(id: string) { chats.get(id)?.interrupt() }
 export function unqueueChat(id: string, itemId?: string) { return chats.get(id)?.unqueue(itemId) || [] }
+/** Volver a un mensaje anterior: sólo con Claude Code (con la API el historial sólo se agrega, ver «Chat» en CLAUDE.md). */
+export function rewindChat(_id: string, _itemId: string): string | null { return null }
+export function retryChat(_id: string) { return false }
 export function respondPermission(id: string, itemId: string, allow: boolean, always: boolean) { chats.get(id)?.respondPermission(itemId, allow, always) }
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function setChatOptions(id: string, patch: any, label: string) { chats.get(id)?.setOptions(patch || {}, String(label || 'Opciones actualizadas.')) }

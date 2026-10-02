@@ -457,6 +457,8 @@ class WebChat extends ClaudeStreamSession {
       if (o.model) args.push('--model', o.model)
       if (o.effort) args.push('--effort', o.effort)
       if (o.resume) args.push('--resume', o.resume)
+      // Volver a un mensaje anterior (editar y reenviar, reintentar): una conversación nueva con lo de hasta ahí.
+      if (o.resume && o.resumeAt) args.push('--resume-session-at', o.resumeAt, '--fork-session')
       // Pruebas: el registro de depuración de Claude Code queda en claude/home/oa-debug/<chat>.log.
       if (dev().debug) args.push('--debug-file', `${HOME}/oa-debug/${this.id}.log`)
       if (p.w !== this.w) return // se cerró mientras arrancaba
@@ -587,6 +589,8 @@ export function getChat(id: string) { const c = chats.get(id); return c ? snapsh
 export function sendChat(id: string, text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) { chats.get(id)?.send(String(text || ''), images || [], files || []) }
 export function interruptChat(id: string) { chats.get(id)?.interrupt() }
 export function unqueueChat(id: string, itemId?: string) { return chats.get(id)?.unqueue(itemId) || [] }
+export function rewindChat(id: string, itemId: string) { return chats.get(id)?.rewind(itemId) ?? null }
+export function retryChat(id: string) { return !!chats.get(id)?.retry() }
 export function respondPermission(id: string, itemId: string, allow: boolean, always: boolean) { chats.get(id)?.respondPermission(itemId, allow, always) }
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function compactChat(id: string, instructions?: string) { chats.get(id)?.compact(instructions) }

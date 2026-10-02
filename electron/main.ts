@@ -398,6 +398,9 @@ function registerIpc() {
   h('chat:send', (id, text, images, files) => chats.get(id)?.send(text, images || [], files || []))
   h('chat:interrupt', (id) => chats.get(id)?.interrupt())
   h('chat:unqueue', (id, itemId) => chats.get(id)?.unqueue(itemId) || [])
+  h('chat:rewind', (id, itemId) => chats.get(id)?.rewind(itemId) ?? null)
+  h('chat:retry', (id) => !!chats.get(id)?.retry())
+  h('clipboard:text', (text) => clipboard.writeText(String(text || '')))
   h('chat:permission', (id, itemId, allow, always) => chats.get(id)?.respondPermission(itemId, allow, !!always))
   h('chat:kill', (id) => {
     chats.get(id)?.kill(); chats.delete(id)

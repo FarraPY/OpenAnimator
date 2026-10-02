@@ -89,6 +89,8 @@ export class ChatSession extends ClaudeStreamSession {
     if (this.opts.model) args.push('--model', this.opts.model)
     if (this.opts.effort) args.push('--effort', this.opts.effort)
     if (this.opts.resume) args.push('--resume', this.opts.resume)
+    // Volver a un mensaje anterior (editar y reenviar, reintentar): una conversación nueva con lo de hasta ahí.
+    if (this.opts.resume && this.opts.resumeAt) args.push('--resume-session-at', this.opts.resumeAt, '--fork-session')
     // El subagente «escena» (en un archivo: en Windows el JSON en la línea de comandos es frágil).
     const agentsFile = path.join(CACHE_DIR, `agents-${this.opts.projectId}.json`)
     fs.writeFileSync(agentsFile, JSON.stringify(sceneAgent(SYSTEM_APPEND)))

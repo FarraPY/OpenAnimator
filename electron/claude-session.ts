@@ -23,6 +23,10 @@ export type ChatItem = {
   midTurn?: boolean
   /** Herramienta de un subagente: el id del item de la llamada que lo lanzó. */
   parent?: string
+  /** Respuesta o herramienta: el uuid del mensaje de Claude Code del que salió (en el registro de la conversación). */
+  chain?: string
+  /** Pedido del usuario: el último mensaje de la conversación antes de él ('' = el principio), para volver a ese punto. */
+  after?: string
 }
 /** Consumo de la conversación: contexto ocupado (tokens del último pedido al modelo) y ventana del modelo. */
 export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
@@ -32,7 +36,9 @@ export type ChatEvent = {
   /** tasks: subagentes que siguen trabajando en segundo plano (aunque el turno haya terminado). */
   state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number; tasks?: number }
 }
-export type ChatOptions = { projectId: string; permissionMode: string; model?: string; effort?: string; extraInstructions?: string; claudePath?: string; resume?: string; saver?: boolean }
+export type ChatOptions = { projectId: string; permissionMode: string; model?: string; effort?: string; extraInstructions?: string; claudePath?: string; resume?: string; saver?: boolean
+  /** Con resume: retomar sólo hasta este mensaje, en una conversación nueva (--resume-session-at + --fork-session). */
+  resumeAt?: string }
 
 let seq = 0
 export const nid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`
@@ -150,11 +156,14 @@ export abstract class ClaudeStreamSession {
   private cancels = new Map<string, (ok: boolean) => void>()
 
   send(text: string, images: Array<{ mediaType: string; data: string }> = [], files: string[] = []) {
-    if (!this.alive && !this.start()) return
     const content: any[] = []
     for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
     content.push({ type: 'text', text })
-    const it: ChatItem = { id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined }
+    this.sendContent(text, content, images.length, files)
+  }
+  private sendContent(text: string, content: any[], images: number, files: string[]) {
+    if (!this.alive && !this.start()) return
+    const it: ChatItem = { id: nid('u'), kind: 'user', text, images, files: files.length ? files : undefined }
     if (this.busy && this.lifecycle) {
       const u = uuid()
       this.unread.set(u, { id: it.id, content })
@@ -163,7 +172,8 @@ export abstract class ClaudeStreamSession {
       return
     }
     if (this.busy) { this.waiting.push({ id: it.id, content }); this.push({ ...it, queued: true }); return }
-    this.push(it)
+    this.push({ ...it, after: this.chainEnd() })
+    this.remember(it.id, content)
     this.deliver(content)
   }
   private deliver(content: any[]) {
@@ -210,7 +220,8 @@ export abstract class ClaudeStreamSession {
     if (this.busy || !this.waiting.length) return
     if (!this.alive && !this.start()) return
     const q = this.waiting.shift()!
-    this.patch(q.id, { queued: false })
+    this.patch(q.id, { queued: false, after: this.chainEnd() })
+    this.remember(q.id, q.content)
     this.deliver(q.content)
   }
   /**
@@ -234,6 +245,53 @@ export abstract class ClaudeStreamSession {
       this.emit({ session: this.id, type: 'remove', item: { id } })
     }
     return texts
+  }
+
+  /** El último mensaje de la conversación que mandó Claude Code (una respuesta o el resultado de una herramienta). */
+  private lastChain?: string
+  private chainLost = false
+  /**
+   * Hasta dónde llega la conversación ahora, para volver a este punto: lo último que mandó Claude Code o, en una retomada
+   * del historial, la última fila que sabe de qué mensaje salió; '' si todavía no hay nada; undefined si no se sabe.
+   */
+  private chainEnd(): string | undefined {
+    if (this.lastChain !== undefined) return this.lastChain
+    if (this.chainLost) return undefined
+    for (let i = this.items.length - 1; i >= 0; i--) if (this.items[i].chain) return this.items[i].chain
+    return this.items.some((x) => x.kind === 'user' || x.kind === 'assistant' || x.kind === 'tool') || this.sessionId ? undefined : ''
+  }
+  /** Lo que se mandó con cada pedido (imágenes incluidas), para reintentarlo igual. Sólo los últimos. */
+  private sent = new Map<string, any[]>()
+  private remember(id: string, content: any[]) { this.sent.set(id, content); if (this.sent.size > 12) this.sent.delete(this.sent.keys().next().value!) }
+
+  /**
+   * Vuelve la conversación a antes del pedido `itemId` (editarlo y reenviarlo, o reintentar la respuesta): Claude Code
+   * retoma una copia de la conversación hasta el mensaje anterior (--resume-session-at + --fork-session; la original
+   * queda en el historial). Lo que Claude ya cambió en el proyecto no se deshace. Devuelve el texto del pedido, o null si
+   * no se puede (Claude trabajando, o un pedido del que no se sabe dónde estaba).
+   */
+  rewind(itemId: string): string | null {
+    if (this.busy || this.bgTasks || this.unread.size || this.waiting.length) return null
+    const i = this.items.findIndex((x) => x.id === itemId)
+    const it = this.items[i]
+    if (!it || it.kind !== 'user' || it.after === undefined) return null
+    if (this.alive) this.kill()
+    if (it.after) { this.opts.resume = this.sessionId || this.opts.resume; this.opts.resumeAt = it.after }
+    else { this.opts.resume = undefined; this.opts.resumeAt = undefined; this.sessionId = undefined } // era el primero: de cero
+    this.lastChain = it.after
+    for (const x of this.items.splice(i)) this.emit({ session: this.id, type: 'remove', item: { id: x.id } })
+    this.usage.context = 0
+    this.state()
+    return it.text || ''
+  }
+  /** Reintentar: vuelve a antes del último pedido y lo manda de nuevo, igual (con sus imágenes si están). */
+  retry(): boolean {
+    const it = [...this.items].reverse().find((x) => x.kind === 'user' && !x.queued)
+    if (!it) return false
+    const content = this.sent.get(it.id) || [{ type: 'text', text: it.text || '' }]
+    if (this.rewind(it.id) === null) return false
+    this.sendContent(it.text || '', content, it.images || 0, it.files || [])
+    return true
   }
 
   /** Resume la conversación para liberar contexto (el /compact de Claude Code). */
@@ -350,6 +408,7 @@ export abstract class ClaudeStreamSession {
       case 'system':
         if (m.subtype === 'init') {
           this.sessionId = m.session_id; this.model = m.model
+          this.opts.resumeAt = undefined // ya retomó desde ahí (con otro sessionId): de acá en más, la conversación nueva
           const oa = (m.mcp_servers || []).find((s: any) => s.name === 'openanimator')
           if (oa && oa.status !== 'connected') this.notice(`Herramientas de OpenAnimator: ${oa.status}`, 'warn')
           // Un turno que empezó solo (terminó un subagente): Claude está trabajando y lo escrito espera en la cola.
@@ -370,13 +429,21 @@ export abstract class ClaudeStreamSession {
           const pre = m.compact_metadata?.pre_tokens
           this.usage.compactions++
           this.usage.context = 0
+          // Hasta la próxima respuesta no se sabe en qué mensaje queda la conversación (el resumen es otra rama).
+          this.lastChain = undefined; this.chainLost = true
           this.notice(`Conversación compactada${pre ? ` (tenía ${Math.round(pre / 1000)} mil tokens)` : ''}. Claude sigue con un resumen de lo hecho.`)
           this.state()
         }
         break
       case 'stream_event': this.onStream(m.event); break
-      case 'assistant': this.onAssistant(m.message, m.parent_tool_use_id || undefined); break
-      case 'user': this.onUser(m.message); break
+      case 'assistant':
+        if (!m.parent_tool_use_id && m.uuid) { this.lastChain = m.uuid; this.chainLost = false }
+        this.onAssistant(m.message, m.parent_tool_use_id || undefined, m.uuid)
+        break
+      case 'user':
+        if (!m.parent_tool_use_id && m.uuid && !m.isReplay) this.lastChain = m.uuid
+        this.onUser(m.message)
+        break
       case 'result':
         this.busy = false
         this.blocks.clear()
@@ -463,14 +530,16 @@ export abstract class ClaudeStreamSession {
   }
 
   /** `parent`: el mensaje es de un subagente (el id de la llamada que lo lanzó): sus herramientas van marcadas y su texto no se muestra. */
-  private onAssistant(msg: any, parent?: string) {
+  private onAssistant(msg: any, parent?: string, chain?: string) {
+    // De qué mensaje salió cada fila (sin avisar a la interfaz: no lo muestra); lo que llegó de a poco son sus bloques.
+    if (chain && !parent) for (const id of this.blocks.values()) { const it = this.items.find((x) => x.id === id); if (it) it.chain = chain }
     for (const b of msg?.content || []) {
       if (b.type === 'tool_use') {
         let id = this.toolItems.get(b.id)
-        if (!id) { id = nid('tool'); this.toolItems.set(b.id, id); this.push({ id, kind: 'tool', name: b.name, input: b.input, status: 'ejecutando', parent: parent && this.toolItems.get(parent) }) }
+        if (!id) { id = nid('tool'); this.toolItems.set(b.id, id); this.push({ id, kind: 'tool', name: b.name, input: b.input, status: 'ejecutando', parent: parent && this.toolItems.get(parent), chain: parent ? undefined : chain }) }
         else this.patch(id, { input: b.input, name: b.name })
       } else if (b.type === 'text' && !parent && !this.streamedText && b.text) {
-        this.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
+        this.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok', chain })
       }
     }
   }

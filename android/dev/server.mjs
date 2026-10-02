@@ -445,6 +445,9 @@ function mockScript(body) {
   // Para probar cómo se recupera el chat: "[rechazo]" → Claude declina; "[error400]" → la API rechaza el pedido.
   if (/\[rechazo\]/.test(texts)) return 'refusal'
   if (/\[error400\]/.test(texts)) return 'error400'
+  // "[eco] texto": contesta ese texto tal cual ("\n" = salto de línea), para ver cómo se dibuja (markdown, código).
+  const echo = /^\[eco\]\s*([\s\S]*?)(?:\n\n\(Contexto del editor:[\s\S]*)?$/.exec(texts)
+  if (echo) return [{ type: 'text', text: echo[1].replace(/\\n/g, '\n') }]
   const endsWithResults = Array.isArray(last?.content) && last.content.some((b) => b.type === 'tool_result')
   let lastUse = null
   if (endsWithResults) for (let i = msgs.length - 1; i >= 0 && !lastUse; i--) if (msgs[i].role === 'assistant') lastUse = msgs[i].content.filter((b) => b.type === 'tool_use').pop() || null

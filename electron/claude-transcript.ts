@@ -46,16 +46,19 @@ export function midTurnPrompt(m: any): { text: string; images: number } | null {
 export function parseTranscript(text: string): ChatItem[] {
   const items: ChatItem[] = []
   const tools = new Map<string, ChatItem>()
+  // El último mensaje de la conversación (respuesta o resultado de herramienta), para volver a ese punto ('' = el principio).
+  let last: string | undefined = ''
   for (const line of text.split('\n')) {
     let m: any
     try { m = JSON.parse(line) } catch { continue }
     if (m.isSidechain) continue
-    if (m.type === 'system' && m.subtype === 'compact_boundary') { items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
+    if (m.type === 'system' && m.subtype === 'compact_boundary') { last = undefined; items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
     const mid = midTurnPrompt(m)
     if (mid) { items.push({ id: nid('u'), kind: 'user', text: mid.text, images: mid.images || undefined, midTurn: true }); continue }
     const c = m.message?.content
     if (m.type === 'user') {
       if (m.isMeta || m.isCompactSummary) continue
+      if (Array.isArray(c) && c.some((b: any) => b.type === 'tool_result') && m.uuid) last = m.uuid
       if (Array.isArray(c)) for (const b of c) if (b.type === 'tool_result') {
         const it = tools.get(b.tool_use_id)
         if (!it) continue
@@ -64,12 +67,13 @@ export function parseTranscript(text: string): ChatItem[] {
       }
       if (isRealPrompt(m)) {
         const imgs = Array.isArray(c) ? c.filter((b: any) => b.type === 'image').length : 0
-        items.push({ id: nid('u'), kind: 'user', text: userText(m), images: imgs || undefined })
+        items.push({ id: nid('u'), kind: 'user', text: userText(m), images: imgs || undefined, after: last })
       } else if (/^\[Request interrupted/.test(userText(m))) items.push({ id: nid('n'), kind: 'notice', text: 'Interrumpido.', level: 'info' })
     } else if (m.type === 'assistant' && Array.isArray(c)) {
+      if (m.uuid) last = m.uuid
       for (const b of c) {
-        if (b.type === 'text' && b.text?.trim()) items.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
-        else if (b.type === 'tool_use') { const it: ChatItem = { id: nid('tool'), kind: 'tool', name: b.name, input: b.input, status: 'ok' }; tools.set(b.id, it); items.push(it) }
+        if (b.type === 'text' && b.text?.trim()) items.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok', chain: m.uuid })
+        else if (b.type === 'tool_use') { const it: ChatItem = { id: nid('tool'), kind: 'tool', name: b.name, input: b.input, status: 'ok', chain: m.uuid }; tools.set(b.id, it); items.push(it) }
       }
     }
   }
