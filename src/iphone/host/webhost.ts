@@ -16,7 +16,7 @@
  */
 import type { Host, DeviceInfo, AsyncOpts } from '../../android/host'
 import { WebFS } from './webfs'
-import { nativeCall } from './native'
+import { b64decode, b64encode, nativeCall } from './native'
 import { Secrets } from './secrets'
 import * as Enc from './encoder'
 import * as Aud from './audio'
@@ -173,7 +173,7 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
       const b = await fs.fileBlob(a.path); window.open(URL.createObjectURL(new Blob([b], { type: guessMime(a.path) })), '_blank'); return true
     },
     'clipboard.image': async (a) => { const b = await fs.fileBlob(a.path); await navigator.clipboard.write([new ClipboardItem({ [b.type || 'image/png']: b })]); return true },
-    'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal),
+    'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal, native ? host.onEvent : null),
     'zip.import': async (a, ev) => Zip.unzipTo(fs, a.zip, a.dest, ev), 'zip.export': async (a, ev) => Zip.zipDir(fs, a.dir, a.out, a.prefix, a.skip, ev),
     'audio.peaks': async (a) => Aud.peaks(fs, a.path, a.perSec || 100), 'audio.decode': async (a) => Aud.decodePcm(fs, a),
     'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height, workers: a.workers, prefs: a.prefs }),
@@ -214,14 +214,16 @@ const MIME: Record<string, string> = { mp4: 'video/mp4', mov: 'video/quicktime',
 export const guessMime = (p: string) => MIME[(p.split('.').pop() || '').toLowerCase()] || 'application/octet-stream'
 
 /**
- * http.request del puente (plugins por API: OpenAI, Gemini, ElevenLabs…): fetch del navegador. Las claves viajan como
- * {{secret:NOMBRE}} y se reemplazan acá, sólo en encabezados y sólo hacia el servicio de esa clave (como en Java).
+ * http.request del puente (plugins por API: OpenAI, Gemini, ElevenLabs…). Las claves viajan como {{secret:NOMBRE}} y se
+ * reemplazan acá, sólo en encabezados y sólo hacia el servicio de esa clave (como en Java). En la app, los de los plugins
+ * van por la red de iOS (appRequest); en Safari, fetch del navegador.
  */
 const SECRET_HOSTS: Record<string, RegExp> = {
   'plugin.openai': /^api\.openai\.com$/, 'plugin.gemini': /^generativelanguage\.googleapis\.com$/, 'plugin.openrouter': /^openrouter\.ai$/,
   'plugin.elevenlabs': /^api\.elevenlabs\.io$/, 'plugin.fish': /^api\.fish\.audio$/, claude: /^api\.anthropic\.com$/,
 }
-async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => void, signal?: AbortSignal) {
+type OnEvent = WebHost['onEvent']
+async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => void, signal?: AbortSignal, appNet?: OnEvent | null) {
   const url = String(a.url)
   if (!/^https:\/\//.test(url)) throw new Error('URL inválida')
   const hostName = new URL(url).hostname
@@ -231,6 +233,13 @@ async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => 
       if (!SECRET_HOSTS[name]?.test(hostName)) throw new Error(`La clave ${name} no se puede mandar a ${hostName}`)
       return secrets.get(name) || ''
     })
+  }
+  // Fish Audio no contesta la consulta previa de CORS en /v1/tts ni /v1/asr (404): desde WebKit la narración fallaba
+  // siempre. Los hosts tienen que estar también en NetStream.hosts.
+  if (appNet && Object.entries(SECRET_HOSTS).some(([k, re]) => k.startsWith('plugin.') && re.test(hostName))) {
+    const b64 = !a.body ? '' : a.body.type === 'base64' ? String(a.body.data)
+      : a.body.type === 'file' ? b64encode(new Uint8Array(await (await fs.fileBlob(a.body.path)).arrayBuffer())) : b64encode(new TextEncoder().encode(String(a.body.data)))
+    return appRequest(fs, appNet, { url, method: a.method || 'GET', headers, body: b64 }, a, ev, hostName, signal)
   }
   let body: BodyInit | undefined
   if (a.body) body = a.body.type === 'base64' ? Uint8Array.from(atob(a.body.data), (c) => c.charCodeAt(0)) : a.body.type === 'file' ? await fs.fileBlob(a.body.path) : String(a.body.data)
@@ -251,4 +260,46 @@ async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => 
     }
     return { status: r.status, headers: hs, text: await r.text() }
   } finally { clearTimeout(timer) }
+}
+
+/**
+ * Un pedido por la red de iOS (Bridge.swift http.stream → NetStream.swift): sin CORS, como Java en la tablet. Las partes
+ * de la respuesta vuelven como eventos "net" con el id; devuelve lo mismo que la versión con fetch.
+ */
+let netSeq = 0
+function appRequest(fs: WebFS, onEvent: OnEvent, req: { url: string; method: string; headers: Record<string, string>; body: string }, a: any, ev: (e: any) => void, hostName: string, signal?: AbortSignal) {
+  const id = `plugin-${Date.now().toString(36)}-${++netSeq}`
+  return new Promise<{ status: number; headers: Record<string, string>; text?: string; size?: number }>((resolve, reject) => {
+    let status = 0, headers: Record<string, string> = {}, done = false
+    const parts: Uint8Array[] = []
+    const dec = new TextDecoder()
+    const cancel = () => { void nativeCall('http.cancel', { id }).catch(() => {}) }
+    const finish = (err: unknown, v?: { status: number; headers: Record<string, string>; text?: string; size?: number }) => {
+      if (done) return
+      done = true
+      off(); clearTimeout(timer); signal?.removeEventListener('abort', onAbort)
+      if (err) reject(err instanceof Error || err instanceof DOMException ? err : new Error(String(err))); else resolve(v!)
+    }
+    const onAbort = () => { cancel(); finish(new DOMException('Cancelado', 'AbortError')) }
+    const timer = a.timeoutMs ? setTimeout(() => { cancel(); finish(new Error(`${hostName} no respondió en ${Math.round(a.timeoutMs / 1000)} s`)) }, a.timeoutMs) : 0
+    const off = onEvent('net', (e: any) => {
+      if (e?.id !== id || done) return
+      if (e.type === 'head') {
+        status = e.status; headers = e.headers || {}
+        if (a.stream) ev({ event: 'head', status, headers })
+      } else if (e.type === 'chunk') {
+        const u8 = b64decode(e.data)
+        if (a.stream) ev({ event: 'chunk', text: dec.decode(u8, { stream: true }) }); else parts.push(u8)
+      } else if (e.type === 'error') {
+        finish(new Error(`${hostName}: ${e.message || 'error de red'}`))
+      } else if (e.type === 'end') {
+        const blob = new Blob(parts as BlobPart[])
+        if (a.stream) finish(null, { status, headers })
+        else if (a.saveTo && status >= 200 && status < 300) fs.writeBlob(a.saveTo, blob).then(() => finish(null, { status, headers, size: blob.size }), finish)
+        else blob.text().then((text) => finish(null, { status, headers, text }), finish)
+      }
+    })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    nativeCall('http.stream', { id, ...req }).catch(finish)
+  })
 }

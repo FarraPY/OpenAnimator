@@ -8,6 +8,7 @@ import { Icon } from './ui/icons'
 import { TooltipLayer } from './ui/kit'
 import { isAndroid, recoveredBoot } from './platform'
 import AndroidIntegration from './android/ui/Integration'
+import { mergeSettings } from '../electron/settings-defaults'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
 export type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route }
@@ -45,13 +46,10 @@ export default function App() {
   }, [])
 
   const updateSettings = useCallback(async (patch: SettingsPatch) => {
-    // Optimista: la interfaz cambia al instante y se guarda en segundo plano.
-    setSettings((s) => {
-      if (!s) return s
-      const n: any = { ...s }
-      for (const k of Object.keys(patch) as Array<keyof Settings>) n[k] = typeof (patch as any)[k] === 'object' && !Array.isArray((patch as any)[k]) && k !== 'export' ? { ...(s as any)[k], ...(patch as any)[k] } : (patch as any)[k]
-      return n
-    })
+    // Optimista: la interfaz cambia al instante y se guarda en segundo plano. Con la misma mezcla profunda que el
+    // backend: un parche de dos niveles ({ plugins: { fish: { voiceId } } }) dejaba a Fish sin el resto de sus opciones
+    // y la pantalla se caía entera (cfg.temperature.toFixed).
+    setSettings((s) => (s ? mergeSettings(s, patch) : s))
     try { setSettings(await call<Settings>('settings:set', patch)) } catch (e: any) { toast(e.message, true) }
   }, [toast])
 

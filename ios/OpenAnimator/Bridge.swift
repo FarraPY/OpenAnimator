@@ -24,7 +24,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
     private var background: UIBackgroundTaskIdentifier = .invalid
     private var authSession: ASWebAuthenticationSession?
     private var callbackListener: NWListener?
-    /// Lo que Claude Code manda a Anthropic, por la red de iOS (NetStream.swift); las partes vuelven como evento "net".
+    /// Lo que Claude Code manda a Anthropic y los pedidos de los plugins, por la red de iOS (NetStream.swift); las partes
+    /// vuelven como evento "net".
     private lazy var net = NetStream { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
 
     private func endBackground() {

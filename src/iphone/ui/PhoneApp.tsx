@@ -13,6 +13,7 @@ import { MenuItem, useMenu } from '../../ui/kit'
 import { MenuEntry, registerMenu, unregisterMenu } from '../host/glassUI'
 import { isNative } from '../host/native'
 import { recoveredBoot } from '../../platform'
+import { mergeSettings } from '../../../electron/settings-defaults'
 import Projects from './Projects'
 import PhoneEditor from './PhoneEditor'
 import PhoneSettings from './PhoneSettings'
@@ -78,12 +79,9 @@ export default function PhoneApp() {
   }, [])
 
   const updateSettings = useCallback(async (patch: SettingsPatch) => {
-    setSettings((s) => {
-      if (!s) return s
-      const n: any = { ...s }
-      for (const k of Object.keys(patch) as Array<keyof Settings>) n[k] = typeof (patch as any)[k] === 'object' && !Array.isArray((patch as any)[k]) && k !== 'export' ? { ...(s as any)[k], ...(patch as any)[k] } : (patch as any)[k]
-      return n
-    })
+    // Mezcla profunda, como el backend: con una de un nivel, elegir una voz de Fish ({ plugins: { fish: { voiceId } } })
+    // le borraba las demás opciones y la interfaz se caía entera (pantalla vacía).
+    setSettings((s) => (s ? mergeSettings(s, patch) : s))
     try { setSettings(await call<Settings>('settings:set', patch)) } catch (e: any) { toast(e.message, true) }
   }, [toast])
 

@@ -23,7 +23,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Diálogos con `useDialogs()` (`components/Dialogs.tsx`): `window.prompt` NO existe en Electron.
 - Tooltips: atributo `data-tip` (+ `data-kbd` para el atajo). Tokens de color/medidas en `src/styles.css`.
 - Ajustes: esquema en `electron/settings.ts`; `DEFAULTS` + merge profundo en `electron/settings-defaults.ts` (sin Node:
-  lo comparte Android); en la interfaz `useApp().updateSettings`.
+  lo comparte Android); en la interfaz `useApp().updateSettings` (optimista, también con `mergeSettings`: con una mezcla
+  de un nivel, `{ plugins: { fish: { voiceId } } }` le borraba a Fish el resto de sus opciones y la interfaz se caía
+  entera). En el iPhone un error al dibujar muestra `Crashed` (main.tsx, con «Volver a cargar») en vez de la pantalla vacía.
 
 ## Plugins, plantillas y análisis de video
 - `electron/plugins.ts`: ChatGPT vía Codex CLI (cuenta del usuario, `codex exec --json`; las imágenes quedan en
@@ -111,7 +113,9 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   el canje y el perfil van por la red de iOS. Trampa: con una cuenta del plan la API rechaza todo pedido de navegador
   («401 CORS requests are not allowed for this Organization»), así que en la app TODO lo de Anthropic sale por
   `http.stream` (NetStream.swift, URLSession; las partes vuelven como evento `net` y el Worker arma un ReadableStream:
-  `appFetch` en worker.js); sin XMLHttpRequest, axios también usa fetch. También se puede pegar un token. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la
+  `appFetch` en worker.js); sin XMLHttpRequest, axios también usa fetch. Los plugins también (`appRequest` en webhost.ts;
+  los hosts, en `SECRET_HOSTS` y `NetStream.hosts`): Fish Audio no contesta la consulta previa de CORS en /v1/tts ni
+  /v1/asr (404) y desde WebKit la narración fallaba siempre. También se puede pegar un token. MCP por HTTP (`http://oa.mcp/mcp`) atendido en la
   página (`backend/webclaude.ts`). El puente nativo sólo atiende al marco principal de `oa://` (las escenas, en
   iframes `oaproj://`, no).
 - Verificado en el WebKit de iOS (simulador): los esquemas propios son contexto seguro (WebCodecs H.264/HEVC/AAC,
