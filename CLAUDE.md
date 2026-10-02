@@ -79,7 +79,14 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   al terminar el turno (`next()` en claude-session.ts; agent.ts igual). La ✕ del mensaje o Detener lo sacan
   (`chat:unqueue`, evento `remove`) y el texto vuelve al cuadro. Si Claude Code se cierra, `closed()` deja
   `opts.resume`: lo próximo retoma la conversación (antes empezaba otra sin decirlo). Prueba:
-  `node --experimental-transform-types scripts/check-chat-queue.mts`.
+  `node --experimental-transform-types scripts/check-chat.mts`.
+- Subagentes (herramienta Agent de Claude Code; en el iPhone y Termux `--tools Task`, que en 2.x es Agent): corren en
+  segundo plano y el turno que los lanza termina antes; al terminar, Claude Code empieza solo otro turno (`system/init`
+  sin pedido → busy). En el flujo: `background_tasks_changed` (la lista entera), `task_started`/`task_notification`
+  (por `tool_use_id`, con el resumen) y los mensajes del subagente con `parent_tool_use_id` (sin stream_event). Un
+  subagente NO ve las instrucciones del que lo lanza: el subagente propio `escena` (`sceneAgent` en claude-session.ts,
+  `--agents`; en la PC por archivo) lleva las de la app. Con subagentes trabajando no se relanza el proceso (opciones) ni
+  se cierra una conversación estacionada. Guía para Claude en app/ai/CLAUDE.md («Subagentes»).
 - Historial: `listSessions`/`loadTranscript` leen `~/.claude/projects/<ruta con [^a-zA-Z0-9]→->/*.jsonl`
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
 - Salir del editor NO corta a Claude: ChatPanel manda `chat:leave` (la conversación queda "estacionada" por

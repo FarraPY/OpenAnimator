@@ -78,7 +78,7 @@ setInterval(() => {
   for (const [projectId, p] of parked) {
     const chat = chats.get(p.id)
     if (!chat) { parked.delete(projectId); continue }
-    if (chat.busy) { p.since = Date.now(); continue }
+    if (chat.busy || chat.tasks) { p.since = Date.now(); continue } // con subagentes trabajando tampoco se cierra
     // Terminó el turno y el proyecto no está abierto: sus ventanas de fotogramas ya no hacen falta.
     if (!watchers.has(projectId)) closeFramePool(projectId)
     if (Date.now() - p.since > PARK_MS) { chat.kill(); chats.delete(p.id); parked.delete(projectId) }
@@ -349,7 +349,7 @@ function registerIpc() {
   })
   const snapshot = (chat: ChatSession) => {
     const o = chat.opts
-    return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined }
+    return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined, tasks: chat.tasks }
   }
   // Una ventana que se conecta a una conversación ya abierta (el chat separado o el editor al volver).
   h('chat:get', (id) => { const chat = chats.get(id); return chat ? snapshot(chat) : null })

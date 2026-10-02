@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import { app } from 'electron'
 import { APP_DIR, CACHE_DIR, DATA_DIR, claudePath, ffmpegPaths } from './paths'
 import { projectDir } from './projects'
-import { ClaudeStreamSession, type ChatItem } from './claude-session'
+import { ClaudeStreamSession, sceneAgent, type ChatItem } from './claude-session'
 import { parseTranscript, sessionInfo, sessionsSlug } from './claude-transcript'
 
 export type { ChatEvent, ChatItem, ChatOptions, ChatStats } from './claude-session'
@@ -88,6 +88,10 @@ export class ChatSession extends ClaudeStreamSession {
     if (this.opts.model) args.push('--model', this.opts.model)
     if (this.opts.effort) args.push('--effort', this.opts.effort)
     if (this.opts.resume) args.push('--resume', this.opts.resume)
+    // El subagente «escena» (en un archivo: en Windows el JSON en la línea de comandos es frágil).
+    const agentsFile = path.join(CACHE_DIR, `agents-${this.opts.projectId}.json`)
+    fs.writeFileSync(agentsFile, JSON.stringify(sceneAgent(SYSTEM_APPEND)))
+    args.push('--agents', agentsFile)
     const env = claudeEnv(this.opts.projectId)
     const p = spawn(bin, args, { cwd: dir, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
     this.proc = p

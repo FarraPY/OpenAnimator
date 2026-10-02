@@ -109,6 +109,25 @@ export async function runE2E() {
         if (!second?.wasQueued || second.queued) throw new Error('La cola no funcionó: ' + order)
         return { listed, loaded: again.items.length, messages: n, queue: order }
       }, 180000)
+      // Un subagente «escena» en segundo plano: arranca con sus instrucciones y su fila termina con el resumen.
+      await step(R, 'chat:subagent', async () => {
+        const c = await call<any>('chat:create', project.id)
+        const got: any[] = []
+        const done = new Promise<void>((resolve) => {
+          const off = on('chat:event', (e: any) => {
+            if (e.session !== c.id) return
+            if (e.type === 'item') got.push({ ...e.item })
+            if (e.type === 'patch') { const it = got.find((x) => x.id === e.item.id); if (it) Object.assign(it, e.item) }
+            if (e.type === 'state' && !e.state.busy && !e.state.tasks && got.find((x) => x.name === 'Agent')?.status === 'ok') { off(); resolve() }
+          })
+        })
+        await call('chat:send', c.id, `[mcp] Agent ${JSON.stringify({ description: 'Escena E2E', prompt: 'Escribí la escena de prueba', subagent_type: 'escena' })}`, [], [])
+        await done
+        await call('chat:kill', c.id).catch(() => {})
+        const agent = got.find((x) => x.name === 'Agent')
+        if (!/Subagente con guía/.test(String(agent?.result || ''))) throw new Error('El subagente no recibió sus instrucciones: ' + String(agent?.result || '').slice(0, 200))
+        return { result: String(agent.result).slice(0, 160), items: got.map((x) => `${x.kind}${x.name ? ':' + x.name : ''}${x.status ? '(' + x.status + ')' : ''}`) }
+      }, 180000)
       // Si Claude no la escribió, la escena igual existe (la exportación se prueba aparte).
       if (!R.sceneWritten) (host() as WebHost).fs.writeText(`projects/${project.id}/scenes/e2e.html`, scene)
     }
@@ -150,7 +169,10 @@ export async function runE2E() {
     // «Crear plantilla desde un video» con ese video: medirlo en Swift (VideoAnalysis.swift), que Claude escriba el
     // análisis (la API de mentira escribe uno mínimo) y guardarlo como plantilla.
     await step(R, 'analyzer', async () => {
-      await (host() as WebHost).fs.copy('exports/avf-prueba.mp4', '.incoming/e2e/avf.mp4')
+      // Lo escribió Swift: entra al índice de la página como lo que se elige con pick.files (en la app, con su tamaño).
+      const fsw = (host() as WebHost).fs
+      fsw.noteFile('exports/avf-prueba.mp4', Number((R.avfoundation as any)?.value?.size) || 1)
+      await fsw.copy('exports/avf-prueba.mp4', '.incoming/e2e/avf.mp4')
       const id = await call<string>('analyze:start', { source: '.incoming/e2e/avf.mp4', name: 'avf.mp4', transcribe: false, maxMinutes: 1 })
       const phases: string[] = []
       const res = await new Promise<any>((resolve, reject) => {

@@ -72,6 +72,22 @@ auditoría. Un audit en 0 no alcanza: también hay que mirar. No digas "listo" s
 - `voz-fish-audio` — narrar con Fish Audio: modelo, voz, dirección con `[corchetes]`, diálogos, texto para el oído. **Siempre que generes voz con Fish.**
 - `plantilla-documental`, `plantilla-cinetico` — formatos de datos de cada plantilla.
 
+## Subagentes: trabajar en paralelo
+
+Con la herramienta Agent (Task en versiones viejas) lanzás otros Claude que trabajan al mismo tiempo que vos. Para un
+video de varias escenas usá el subagente `escena` (subagent_type "escena"; ya conoce las reglas de OpenAnimator):
+
+1. Primero definí lo común: guion, tiempos (voz o música) y dirección de arte en `brief.md`.
+2. Lanzá un subagente por escena, todos en el mismo mensaje, cada uno con un pedido completo: qué archivo escribe
+   (`scenes/<nombre>.html`), duración, textos, momentos clave y qué tomar del estilo.
+3. Cada uno toca sólo su escena: el timeline, las voces, la música y `brief.md` los manejás vos (dos agentes editando
+   el mismo archivo se pisan).
+4. Siguen en segundo plano y te avisan al terminar: cuando tengas todos los resúmenes, revisá todo junto con
+   `oa_hoja_contactos` y armá el timeline.
+
+Cada subagente gasta como una conversación aparte: usalos cuando el trabajo se reparte de verdad (varias escenas), no
+para cambios chicos ni para una sola escena.
+
 ## Normas
 
 - Respondé en el idioma del usuario. Explicá qué cambiaste en pocas líneas.

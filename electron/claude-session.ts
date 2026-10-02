@@ -19,18 +19,35 @@ export type ChatItem = {
   streamed?: number
   /** Pedido escrito mientras Claude trabajaba: espera en la cola y sale solo cuando termina el turno. */
   queued?: boolean
+  /** Herramienta de un subagente: el id del item de la llamada que lo lanzó. */
+  parent?: string
 }
 /** Consumo de la conversación: contexto ocupado (tokens del último pedido al modelo) y ventana del modelo. */
 export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
 export type ChatEvent = {
   session: string; type: 'item' | 'patch' | 'remove' | 'state'; item?: Partial<ChatItem> & { id: string }
   /** signalAt: la última vez que Claude Code mandó algo (si pasa mucho sin nada mientras piensa, puede estar trabado). */
-  state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number }
+  /** tasks: subagentes que siguen trabajando en segundo plano (aunque el turno haya terminado). */
+  state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number; tasks?: number }
 }
 export type ChatOptions = { projectId: string; permissionMode: string; model?: string; effort?: string; extraInstructions?: string; claudePath?: string; resume?: string; saver?: boolean }
 
 let seq = 0
 export const nid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`
+
+/**
+ * El subagente «escena» (`--agents`): para repartir un video entre varios Claude a la vez, uno por escena. Un subagente
+ * no ve las instrucciones de sistema del que lo lanza, así que lleva las suyas: `guide` son las de OpenAnimator (en el
+ * iPhone y la tablet, las mismas de la conversación; en la PC además lee CLAUDE.md).
+ */
+export function sceneAgent(guide: string) {
+  return {
+    escena: {
+      description: 'Hace o corrige UNA escena de OpenAnimator (scenes/<nombre>.html) con las reglas y el estilo del proyecto. Para un video de varias escenas, lanzá uno por escena, todos en el mismo mensaje, cada uno con un pedido completo (archivo, duración, textos, tiempos y estilo).',
+      prompt: ['Sos un subagente de OpenAnimator: otro Claude te pasó UNA parte de un video (casi siempre una escena). Hacé sólo eso: escribí o corregí el archivo que te pidieron y no toques el timeline, brief.md, las voces ni la música (los maneja el que te llamó). Antes de escribir cargá las skills que correspondan (escenas-html y direccion-artistica) y leé brief.md y PLANTILLA.md si existen. Verificá tu escena con oa_ver_fotogramas (2 a 4 instantes) y corregí lo que veas mal. Al terminar respondé en 2 o 3 líneas: qué archivo hiciste, cuánto dura y lo que el otro tenga que saber.', guide].filter(Boolean).join('\n\n'),
+    },
+  }
+}
 
 export abstract class ClaudeStreamSession {
   id = nid('chat')
@@ -89,8 +106,15 @@ export abstract class ClaudeStreamSession {
   stats(): ChatStats { return { ...this.usage } }
   protected state() {
     this.signalSent = Date.now()
-    this.emit({ session: this.id, type: 'state', state: { busy: this.busy, alive: this.alive, sessionId: this.sessionId, model: this.model, effort: this.opts.effort || '', permissionMode: this.opts.permissionMode, stats: this.stats(), signalAt: this.signalAt || undefined } })
+    this.emit({ session: this.id, type: 'state', state: { busy: this.busy, alive: this.alive, sessionId: this.sessionId, model: this.model, effort: this.opts.effort || '', permissionMode: this.opts.permissionMode, stats: this.stats(), signalAt: this.signalAt || undefined, tasks: this.bgTasks } })
   }
+  /**
+   * Subagentes (herramienta Agent de Claude Code) que trabajan en segundo plano: el turno que los lanzó termina antes que
+   * ellos y, cuando terminan, Claude Code empieza solo otro turno con lo que hicieron. Cortar el proceso los mata.
+   */
+  private bgTasks = 0
+  private bgItems = new Set<string>()
+  get tasks() { return this.bgTasks }
   notice(text: string, level: ChatItem['level'] = 'info') { this.push({ id: nid('n'), kind: 'notice', text, level }) }
 
   /** Claude Code terminó (código de salida y el final de lo que escribió en stderr). */
@@ -99,6 +123,7 @@ export abstract class ClaudeStreamSession {
     if (code && code !== 0) this.notice(`Claude terminó (código ${code}). ${errTail.trim().split('\n').slice(-3).join(' ')}`, 'error')
     // Lo próximo retoma esta conversación (si no, empezaba otra sin decirlo, con la anterior todavía en pantalla).
     if (this.sessionId) this.opts.resume = this.sessionId
+    this.dropTasks()
     this.state()
     this.next()
   }
@@ -205,14 +230,20 @@ export abstract class ClaudeStreamSession {
   private restartPending = false
   private restartWhenIdle() {
     if (!this.alive) return
-    if (this.busy) { this.restartPending = true; return }
+    if (this.busy || this.bgTasks) { this.restartPending = true; return }
     this.restartPending = false
     const resume = this.sessionId
     this.kill()
     this.opts.resume = resume
   }
 
-  kill() { this.terminate(); this.busy = false; this.state() }
+  kill() { this.terminate(); this.busy = false; this.dropTasks(); this.state() }
+  /** Sin proceso no hay subagentes: los que seguían quedan cortados. */
+  private dropTasks() {
+    for (const id of this.bgItems) this.patch(id, { status: 'error', isError: true, result: 'Se cortó: Claude Code se cerró antes de que terminara.' })
+    this.bgItems.clear()
+    this.bgTasks = 0
+  }
 
   /**
    * Rearma la conversación con lo que guardó quien la transporta (el puente de Termux, al retomarla
@@ -253,7 +284,20 @@ export abstract class ClaudeStreamSession {
           this.sessionId = m.session_id; this.model = m.model
           const oa = (m.mcp_servers || []).find((s: any) => s.name === 'openanimator')
           if (oa && oa.status !== 'connected') this.notice(`Herramientas de OpenAnimator: ${oa.status}`, 'warn')
+          // Un turno que empezó solo (terminó un subagente): Claude está trabajando y lo escrito espera en la cola.
+          if (!this.busy) { this.busy = true; this.streamedText = false; this.signalAt = Date.now() }
           this.state()
+        } else if (m.subtype === 'background_tasks_changed') {
+          this.bgTasks = (m.tasks || []).length
+          this.state()
+          if (!this.bgTasks && this.restartPending && !this.busy) setTimeout(() => { this.restartWhenIdle(); this.next() }, 50)
+        } else if (m.subtype === 'task_started' && m.is_backgrounded) {
+          // La fila del subagente sigue «trabajando» hasta que avise que terminó (su tool_result llega enseguida).
+          const id = this.toolItems.get(m.tool_use_id)
+          if (id) { this.bgItems.add(id); this.patch(id, { status: 'trabajando' }) }
+        } else if (m.subtype === 'task_notification') {
+          const id = this.toolItems.get(m.tool_use_id)
+          if (id) { this.bgItems.delete(id); this.patch(id, { status: m.status === 'completed' ? 'ok' : 'error', isError: m.status !== 'completed', result: String(m.summary || m.status || '').slice(0, 4000) }) }
         } else if (m.subtype === 'compact_boundary') {
           const pre = m.compact_metadata?.pre_tokens
           this.usage.compactions++
@@ -263,7 +307,7 @@ export abstract class ClaudeStreamSession {
         }
         break
       case 'stream_event': this.onStream(m.event); break
-      case 'assistant': this.onAssistant(m.message); break
+      case 'assistant': this.onAssistant(m.message, m.parent_tool_use_id || undefined); break
       case 'user': this.onUser(m.message); break
       case 'result':
         this.busy = false
@@ -347,13 +391,14 @@ export abstract class ClaudeStreamSession {
     }
   }
 
-  private onAssistant(msg: any) {
+  /** `parent`: el mensaje es de un subagente (el id de la llamada que lo lanzó): sus herramientas van marcadas y su texto no se muestra. */
+  private onAssistant(msg: any, parent?: string) {
     for (const b of msg?.content || []) {
       if (b.type === 'tool_use') {
         let id = this.toolItems.get(b.id)
-        if (!id) { id = nid('tool'); this.toolItems.set(b.id, id); this.push({ id, kind: 'tool', name: b.name, input: b.input, status: 'ejecutando' }) }
+        if (!id) { id = nid('tool'); this.toolItems.set(b.id, id); this.push({ id, kind: 'tool', name: b.name, input: b.input, status: 'ejecutando', parent: parent && this.toolItems.get(parent) }) }
         else this.patch(id, { input: b.input, name: b.name })
-      } else if (b.type === 'text' && !this.streamedText && b.text) {
+      } else if (b.type === 'text' && !parent && !this.streamedText && b.text) {
         this.push({ id: nid('a'), kind: 'assistant', text: b.text, status: 'ok' })
       }
     }
@@ -363,7 +408,7 @@ export abstract class ClaudeStreamSession {
     for (const b of msg?.content || []) {
       if (b.type !== 'tool_result') continue
       const id = this.toolItems.get(b.tool_use_id)
-      if (!id) continue
+      if (!id || this.bgItems.has(id)) continue // un subagente en segundo plano: termina con task_notification
       let text = ''
       if (typeof b.content === 'string') text = b.content
       else if (Array.isArray(b.content)) text = b.content.map((c: any) => (c.type === 'text' ? c.text : c.type === 'image' ? '[imagen]' : '')).join('\n')

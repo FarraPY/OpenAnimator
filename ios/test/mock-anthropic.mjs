@@ -24,7 +24,8 @@ function sse(res, events) {
 function reply(body) {
   const msgs = body.messages || []
   const textOf = (m) => (typeof m?.content === 'string' ? m.content : (m?.content || []).map((b) => b.text || (b.type === 'tool_result' ? '[tool_result] ' + JSON.stringify(b.content).slice(0, 200) : '')).join(' '))
-  const texts = msgs.map(textOf)
+  // Los avisos del sistema que Claude Code mete en el mismo mensaje (según la versión) no son el pedido.
+  const texts = msgs.map(textOf).map((t) => t.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim())
   // El pedido del usuario: el último mensaje con texto propio (Claude Code agrega avisos de sistema que empiezan con "<").
   const ask = texts.findLastIndex((t) => /\S/.test(t) && !/^\s*(# Environment|<)/.test(t) && !t.startsWith('[tool_result]'))
   const answered = texts.slice(ask + 1).some((t) => t.includes('[tool_result]'))
@@ -44,7 +45,10 @@ function reply(body) {
       ['message_stop', {}]]
   }
   const result = /\[tool_result\] (.*)/.exec(texts.slice(ask).join(' '))
-  const text = answered ? `Listo: usé la herramienta y respondió ${result ? result[1].slice(0, 160) : ''}` : `Hola, soy el Claude de prueba. Herramientas: ${tools.length}. Mensajes: ${msgs.length}.`
+  // Un subagente «escena» (sceneAgent en claude-session.ts) trae sus propias instrucciones: lo dice, para la prueba.
+  const sys = Array.isArray(body.system) ? body.system.map((b) => b.text || '').join(' ') : String(body.system || '')
+  const sub = /Sos un subagente de OpenAnimator/.test(sys) ? ' Subagente con guía.' : ''
+  const text = answered ? `Listo: usé la herramienta y respondió ${result ? result[1].slice(0, 160) : ''}` : `Hola, soy el Claude de prueba. Herramientas: ${tools.length}. Mensajes: ${msgs.length}.${sub}`
   return [start,
     ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }],
     ...text.match(/.{1,16}/gs).map((t) => ['content_block_delta', { index: 0, delta: { type: 'text_delta', text: t } }]),

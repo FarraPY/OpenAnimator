@@ -67,8 +67,9 @@ const run = (bin, args, timeout = 30000) => new Promise((resolve) => {
 
 let claudeBin = findClaude()
 let noTools = null // ¿entiende --tools ""? (se averigua una vez)
+let agentsFlag = null // ¿y --agents (subagentes propios)?
 async function supportsToolsFlag() {
-  if (noTools === null && claudeBin) noTools = / --tools </.test((await run(claudeBin, ['--help'])).stdout)
+  if (noTools === null && claudeBin) { const help = (await run(claudeBin, ['--help'])).stdout; noTools = / --tools </.test(help); agentsFlag = / --agents </.test(help) }
   return !!noTools
 }
 // Las herramientas propias de Claude Code verían el disco de Termux, no el proyecto: van todas por MCP.
@@ -120,11 +121,13 @@ async function startProc(procId, o) {
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--permission-prompt-tool', 'stdio', '--permission-mode', MODES.has(o.permissionMode) ? o.permissionMode : 'acceptEdits',
     '--mcp-config', mcpFile, '--strict-mcp-config', '--setting-sources', '']
-  if (await supportsToolsFlag()) args.push('--tools', '')
-  else args.push('--disallowedTools', BUILTIN.join(','))
+  // Sólo los subagentes (Task; Agent en Claude Code 2.x) de las herramientas propias: trabajan en paralelo con las de la app.
+  if (await supportsToolsFlag()) args.push('--tools', 'Task')
+  else args.push('--disallowedTools', BUILTIN.filter((t) => t !== 'Task').join(','))
   if (typeof o.system === 'string' && o.system) args.push('--append-system-prompt', o.system)
+  if (agentsFlag && o.agents && typeof o.agents === 'object') args.push('--agents', JSON.stringify(o.agents))
   const allowed = (Array.isArray(o.allowedTools) ? o.allowedTools : []).filter((t) => /^[\w-]+$/.test(t))
-  if (allowed.length) args.push('--allowedTools', allowed.join(','))
+  if (allowed.length) args.push('--allowedTools', [...allowed, 'Agent', 'Task'].join(','))
   if (typeof o.model === 'string' && /^[\w.[\]-]+$/.test(o.model)) args.push('--model', o.model)
   if (EFFORTS.has(o.effort)) args.push('--effort', o.effort)
   if (typeof o.resume === 'string' && /^[\w-]+$/.test(o.resume)) args.push('--resume', o.resume)

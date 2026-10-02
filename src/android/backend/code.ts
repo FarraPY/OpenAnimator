@@ -3,7 +3,7 @@
  * que en la PC (el protocolo está en electron/claude-session.ts); cambia el transporte: en vez de un
  * proceso hijo, el puente de Termux (termux.ts). Mismas funciones que agent.ts, así index.ts elige.
  */
-import { ClaudeStreamSession, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
+import { ClaudeStreamSession, sceneAgent, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
 import { send } from './events'
 import { projectDir } from './projects'
 import { buildSystem } from './prompt'
@@ -35,7 +35,7 @@ class TermuxChat extends ClaudeStreamSession {
     const o = this.opts
     ;(async () => {
       const system = await buildSystem(o.projectId, 'code', o.saver !== false, o.extraInstructions || '')
-      await T.startProc(proc, o.projectId, { permissionMode: o.permissionMode, model: o.model, effort: o.effort, resume: o.resume, system, allowedTools: READONLY, tools: mcpTools() }, {
+      await T.startProc(proc, o.projectId, { permissionMode: o.permissionMode, model: o.model, effort: o.effort, resume: o.resume, system, agents: sceneAgent(system), allowedTools: READONLY, tools: mcpTools() }, {
         out: (m) => { if (this.proc === proc) this.received(m) },
         exit: (code, err) => { if (this.proc === proc) { this.reset(); this.closed(code, err) } },
       })
@@ -89,8 +89,9 @@ class TermuxChat extends ClaudeStreamSession {
   private awake: (() => void) | null = null
   protected state() {
     super.state()
-    if (this.busy && !this.awake) this.awake = holdAwake()
-    else if (!this.busy && this.awake) { this.awake(); this.awake = null }
+    const working = this.busy || this.tasks > 0 // también con subagentes en segundo plano
+    if (working && !this.awake) this.awake = holdAwake()
+    else if (!working && this.awake) { this.awake(); this.awake = null }
   }
 
   /** "Aceptar ediciones": como en la PC, escribir archivos del proyecto no pide permiso. */
@@ -116,7 +117,7 @@ function options(projectId: string, resume?: string): ChatOptions {
 
 function snapshot(chat: TermuxChat) {
   const o = chat.opts
-  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined }
+  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined, tasks: chat.tasks }
 }
 
 export async function createChat(projectId: string, o?: { resume?: string }) {

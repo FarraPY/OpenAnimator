@@ -193,9 +193,9 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
     const media = !it.isError && it.result ? /guardad[oa] en (assets\/\S+?\.(png|jpe?g|webp|mp3|wav))/i.exec(it.result) : null
     return (
       <Fragment key={it.id}>
-        <details className="tool-card">
+        <details className={`tool-card ${it.parent ? 'sub' : ''}`}>
           <summary>
-            <span className="tool-state">{it.status === 'ejecutando' ? <Spinner size={12} /> : <Icon name={it.isError ? 'x-circle' : 'check-circle'} size={13} style={{ color: it.isError ? 'var(--err)' : 'var(--ok)' }} />}</span>
+            <span className="tool-state">{it.status === 'ejecutando' || it.status === 'trabajando' ? <Spinner size={12} /> : <Icon name={it.isError ? 'x-circle' : 'check-circle'} size={13} style={{ color: it.isError ? 'var(--err)' : 'var(--ok)' }} />}</span>
             <Icon name={m.icon} size={13} /><b>{m.name}</b>
             <span className="t3 ellipsis grow mono" style={{ fontSize: 11 }}>{m.arg || (it.status === 'ejecutando' && it.streamed ? `escribiendo… ${kSize(it.streamed)}` : '')}</span><Icon name="chevron-down" size={12} />
           </summary>
@@ -297,6 +297,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const [session, setSession] = useState<string | null>(null)
   const [items, setItems] = useState<ChatItem[]>([])
   const [busy, setBusy] = useState(false)
+  const [tasks, setTasks] = useState(0) // subagentes trabajando en segundo plano
   const [text, setText] = useState('')
   const [attach, setAttach] = useState<{ t: number; data: string } | null>(null)
   const [files, setFiles] = useState<Attachment[]>([])
@@ -322,7 +323,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
 
   const load = (r: any) => {
     sid.current = r.id; setSession(r.id); setItems(r.items); setBusy(!!r.busy); setOpts(r.options); setStats(r.stats || null)
-    setLiveModel(r.model); setGone(false); setClaudeSession(r.sessionId); setSignalAt(r.signalAt || 0)
+    setLiveModel(r.model); setGone(false); setClaudeSession(r.sessionId); setSignalAt(r.signalAt || 0); setTasks(r.tasks || 0)
     for (const it of r.items as ChatItem[]) seen.current.set(it.id, Date.now())
   }
   const start = async (resume?: string) => load(await call('chat:create', projectId, resume ? { resume } : undefined))
@@ -356,6 +357,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
         if (e.state?.stats) setStats(e.state.stats)
         if (e.state?.sessionId) setClaudeSession(e.state.sessionId)
         if (e.state?.signalAt) setSignalAt(e.state.signalAt)
+        setTasks(e.state?.tasks || 0)
       }
     })
     const offPop = on('chat:popout', (e: { projectId: string; open: boolean }) => {
@@ -384,10 +386,10 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const lastStatus = useRef('')
   useEffect(() => {
     if (!onStatus) return
-    const st: ChatStatus = { busy, waiting: items.some((x) => x.kind === 'permission' && x.status === 'pendiente'), assistant: items.filter((x) => x.kind === 'assistant' && !!x.text && x.status !== 'streaming').length, session }
+    const st: ChatStatus = { busy: busy || tasks > 0, waiting: items.some((x) => x.kind === 'permission' && x.status === 'pendiente'), assistant: items.filter((x) => x.kind === 'assistant' && !!x.text && x.status !== 'streaming').length, session }
     const k = JSON.stringify(st)
     if (k !== lastStatus.current) { lastStatus.current = k; onStatus(st) }
-  }, [busy, items, session])
+  }, [busy, tasks, items, session])
   useEffect(() => { if (inject?.text) { setText(inject.text); setTimeout(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, 60) } }, [inject?.n])
   // ── ir al último mensaje ──
   // La lista sigue al último mensaje (stick) salvo que el usuario haya subido. Oculta (la otra pestaña en la tablet,
@@ -597,12 +599,12 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDrag(true) } }} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false) }} onDrop={onDrop}>
       {drag && <div className="chat-drop"><Icon name="paperclip" size={26} /><b>Soltá para adjuntar</b><span>Imágenes, PDF, guiones, audio, video…</span></div>}
       {head ? head({
-        busy, model: opts.model, modelValue: models.value(opts.model), effort: opts.effort, permissionMode: opts.permissionMode, saver,
+        busy: busy || tasks > 0, model: opts.model, modelValue: models.value(opts.model), effort: opts.effort, permissionMode: opts.permissionMode, saver,
         modelName: (v) => models.name(v), models: models.options as ChatHeadApi['models'], perms: PERMS, setOption,
         history: () => setHistory(true), newChat, compact: () => compact(),
         context: stats?.context ? { used: stats.context, window: stats.window, pct, turns: stats.turns } : null,
       }) : <div className={`pane-head ${windowMode ? 'drag-region' : ''}`} style={{ gap: 4, height: windowMode ? 38 : 38, paddingLeft: 12, paddingRight: windowMode ? 140 : undefined }}>
-        {busy ? <span className="row t2" style={{ gap: 6, fontSize: 12 }}><Spinner size={12} />Trabajando…</span>
+        {busy || tasks ? <span className="row t2" style={{ gap: 6, fontSize: 12 }}><Spinner size={12} />{busy ? 'Trabajando…' : `${tasks} subagente${tasks === 1 ? '' : 's'} trabajando…`}</span>
           : <span className="row t3" style={{ gap: 6, fontSize: 12 }} data-tip="Modelo de la sesión"><span className="sys-dot ok" style={{ marginLeft: 0, width: 6, height: 6 }} />{liveModel ? models.name(liveModel) : 'Listo'}</span>}
         <div className="grow" />
         <button className={`ctx-meter no-drag ${level === 2 ? 'err' : level === 1 ? 'warn' : ''}`} onClick={ctxMenu.open}

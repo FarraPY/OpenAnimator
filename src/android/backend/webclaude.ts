@@ -9,7 +9,7 @@
  * inicio de sesión del propio Claude Code, con la página de Claude que abre iOS); si no, se pega el de setup-token.
  * Va cifrado (secrets.ts) y sólo al Worker, como CLAUDE_CODE_OAUTH_TOKEN.
  */
-import { ClaudeStreamSession, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
+import { ClaudeStreamSession, sceneAgent, type ChatItem, type ChatOptions } from '../../../electron/claude-session'
 import { parseTranscript, sessionInfo, sessionsSlug } from '../../../electron/claude-transcript'
 import type { WebHost } from '../../iphone/host/webhost'
 import { b64encode, nativeCall } from '../../iphone/host/native'
@@ -445,8 +445,9 @@ class WebChat extends ClaudeStreamSession {
         '--permission-prompt-tool', 'stdio', '--permission-mode', o.permissionMode || 'acceptEdits',
         '--mcp-config', JSON.stringify({ mcpServers: { openanimator: { type: 'http', url: 'http://oa.mcp/mcp' } } }), '--strict-mcp-config',
         // Como en la tablet: sin la configuración del usuario ni las herramientas propias de Claude Code (no hay
-        // terminal ni disco): todo pasa por las de OpenAnimator.
-        '--setting-sources', '', '--tools', '', '--append-system-prompt', system, '--allowedTools', READONLY.join(',')]
+        // terminal ni disco): todo pasa por las de OpenAnimator. Salvo los subagentes (Task, que en Claude Code 2.x es
+        // Agent): trabajan en paralelo con las mismas herramientas, p. ej. una escena cada uno.
+        '--setting-sources', '', '--tools', 'Task', '--agents', JSON.stringify(sceneAgent(system)), '--append-system-prompt', system, '--allowedTools', [...READONLY, 'Agent', 'Task'].join(',')]
       if (o.model) args.push('--model', o.model)
       if (o.effort) args.push('--effort', o.effort)
       if (o.resume) args.push('--resume', o.resume)
@@ -514,8 +515,9 @@ class WebChat extends ClaudeStreamSession {
   private awake: (() => void) | null = null
   protected state() {
     super.state()
-    if (this.busy && !this.awake) this.awake = holdAwake()
-    else if (!this.busy && this.awake) { this.awake(); this.awake = null }
+    const working = this.busy || this.tasks > 0 // también con subagentes en segundo plano
+    if (working && !this.awake) this.awake = holdAwake()
+    else if (!working && this.awake) { this.awake(); this.awake = null }
   }
 
   /** "Aceptar ediciones": como en la PC, escribir archivos del proyecto no pide permiso. */
@@ -544,7 +546,7 @@ function options(projectId: string, resume?: string): ChatOptions {
 
 function snapshot(chat: WebChat) {
   const o = chat.opts
-  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined }
+  return { id: chat.id, items: chat.items, busy: chat.busy, sessionId: chat.sessionId, options: { model: o.model || '', effort: o.effort || '', permissionMode: o.permissionMode }, stats: chat.stats(), model: chat.model, signalAt: chat.lastSignal || undefined, tasks: chat.tasks }
 }
 
 export async function listSessions(projectId: string) {

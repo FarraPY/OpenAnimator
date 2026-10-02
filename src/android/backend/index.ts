@@ -472,7 +472,7 @@ setInterval(async () => {
   for (const [projectId, p] of [...parked]) {
     const s = await (await engine(p.id)).getChat(p.id)
     if (!s) { parked.delete(projectId); continue }
-    if (s.busy) { p.since = Date.now(); continue }
+    if (s.busy || ('tasks' in s && s.tasks)) { p.since = Date.now(); continue }
     if (Date.now() - p.since > PARK_MS) await killChat(p.id)
   }
 }, 60e3)
