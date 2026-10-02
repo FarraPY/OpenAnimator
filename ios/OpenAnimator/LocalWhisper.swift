@@ -13,7 +13,8 @@ import WhisperKit
 /// La primera vez que se carga un modelo, Core ML lo prepara para este chip (~1 min con turbo); iOS guarda eso y lo
 /// borra con cada actualización del sistema.
 ///
-/// Operaciones del puente: whisper.status, whisper.install {model}, whisper.remove {model},
+/// Operaciones del puente: whisper.status, whisper.install {model}, whisper.remove {model}, whisper.preload {model}
+/// (cargarlo antes de necesitarlo: al abrir la app, así la primera transcripción no espera la carga),
 /// whisper.transcribe {path, model, lang?, maxSec?} y whisper.test {model}. El avance va como evento "whisper".
 final class LocalWhisper {
     static let shared = LocalWhisper()
@@ -65,6 +66,10 @@ final class LocalWhisper {
                 case "whisper.test":
                     let m = try self.model(a["model"])
                     reply(try await self.serial { try await self.test(m) }, nil)
+                case "whisper.preload":
+                    let m = try self.model(a["model"])
+                    guard self.installed(m) else { reply(false, nil); return }
+                    reply(try await self.serial { _ = try await self.load(m); return true }, nil)
                 default: throw Failure(errorDescription: "Operación desconocida: \(op)")
                 }
             } catch {

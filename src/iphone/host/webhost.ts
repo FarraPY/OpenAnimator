@@ -148,7 +148,27 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'cap.available': () => native, 'cap.close': () => { if (native) void nativeCall('cap.close').catch(() => {}); return true },
     // Whisper en el iPhone (ios/OpenAnimator/LocalWhisper.swift, WhisperKit): sólo en la app.
     'whisper.available': () => native,
+    // Medir videos para «Crear plantilla desde un video» (ios/OpenAnimator/VideoAnalysis.swift): sólo en la app.
+    'vana.available': () => native,
     'snap.close': () => { if (native) void nativeCall('snap.close').catch(() => {}); return true },
+  }
+  /**
+   * Medir un video en Swift (VideoAnalysis.swift): el avance (evento "vana" de ese trabajo) va al que lo pidió y los
+   * archivos que escribe (fotogramas, hoja, tiras) entran al índice de la página.
+   */
+  const vana = (op: string) => async (a: any, emitEvent: (e: any) => void) => {
+    if (!native) throw unavailable('Analizar videos')
+    await fs.flush() // el video tiene que estar en el disco
+    const off = host.onEvent('vana', (e: any) => { if (e?.job === a.job) emitEvent(e) })
+    try {
+      const r = await nativeCall<any>(op, a)
+      const note = (x: any): void => {
+        if (Array.isArray(x)) x.forEach(note)
+        else if (x && typeof x === 'object') { if (typeof x.file === 'string' && typeof x.size === 'number') fs.noteFile(x.file, x.size); Object.values(x).forEach(note) }
+      }
+      note(r)
+      return r
+    } finally { off() }
   }
   /** Una operación de Whisper en Swift; su avance (evento nativo "whisper") va al que la pidió. */
   const whisper = (op: string) => async (a: any, emitEvent: (e: any) => void) => {
@@ -183,7 +203,15 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'snap.reload': async () => { await fs.flush(); return nativeCall('snap.reload') },
     'snap.frame': async (a) => nativeCall('snap.frame', { t: a.t, width: a.width, format: a.format, quality: a.quality, cost: !!a.cost }),
     'enc.frame': async (a) => Enc.frame(a), 'enc.frames': async () => Enc.frames(), 'enc.mix': async (a, ev) => Enc.mix(fs, a, ev), 'enc.finish': async () => Enc.finish(fs),
-    ...Object.fromEntries(['status', 'install', 'remove', 'transcribe', 'test'].map((k) => [`whisper.${k}`, whisper(`whisper.${k}`)])),
+    ...Object.fromEntries(['status', 'install', 'remove', 'transcribe', 'test', 'preload'].map((k) => [`whisper.${k}`, whisper(`whisper.${k}`)])),
+    ...Object.fromEntries(['info', 'scan', 'frames', 'audio'].map((k) => [`vana.${k}`, vana(`vana.${k}`)])),
+    'vana.cancel': async (a) => (native ? nativeCall('vana.cancel', { job: a.job }) : true),
+    // Un video de YouTube para analizar (youtube.ts: youtubei.js por la red de iOS; los bytes los baja Swift).
+    'yt.download': async (a, ev) => {
+      if (!native) throw unavailable('Bajar videos de YouTube')
+      const { ytDownload } = await import('./youtube')
+      return ytDownload(a, ev, host.onEvent.bind(host), (p, t) => fs.writeText(p, t), (p, n) => fs.noteFile(p, n))
+    },
   }
   const unavailable = (m: string) => new Error(`${m} no está disponible en el iPhone`)
   const host: WebHost = {

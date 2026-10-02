@@ -34,7 +34,7 @@ export function createProcess(o) {
   Object.assign(p, {
     title: 'claude', version: 'v22.12.0', versions: { node: '22.12.0', v8: '12.4.254.21-node.33', uv: '1.49.2', zlib: '1.3.0.1', modules: '127', openssl: '3.0.15', unicode: '15.1', ares: '1.34.3', napi: '9' },
     platform: 'linux', arch: 'arm64', release: { name: 'node', lts: 'Jod', sourceUrl: '', headersUrl: '' },
-    env: o.env, argv: o.argv, argv0: 'node', execArgv: [], execPath: '/usr/local/bin/node', pid: 4242, ppid: 1, exitCode: undefined,
+    env: o.env, argv: o.argv, argv0: 'node', execArgv: [], execPath: '/usr/local/bin/node', pid: 1000 + Math.floor(Math.random() * 60000), ppid: 1, exitCode: undefined,
     config: { variables: {} }, features: { inspector: false, ipv6: true, tls: true, typescript: false }, allowedNodeEnvironmentFlags: new Set(), noDeprecation: true, throwDeprecation: false,
     stdin, stdout: writer(1, o.stdout), stderr: writer(2, o.stderr),
     cwd: () => cwd,
@@ -47,7 +47,14 @@ export function createProcess(o) {
     emitWarning: (w, ...rest) => { if (o.env.OA_DEBUG) console.warn('[aviso]', w, ...rest) },
     exit: (code) => { const c = code ?? p.exitCode ?? 0; p.exitCode = c; try { p.emit('exit', c) } catch { /* ignore */ } o.exit(c); throw new ProcessExit(c) },
     reallyExit: (code) => p.exit(code), abort: () => p.exit(134),
-    kill: (pid, sig) => { if (pid === p.pid) p.emit(sig || 'SIGTERM', sig || 'SIGTERM'); return true },
+    // Sólo existen este proceso y su padre: los de otras veces (Claude Code anota su número en ~/.claude) ya no están.
+    // La señal 0 sólo pregunta si existe: Claude Code lo hace al retomar una conversación y, cuando el 0 se tomaba
+    // como SIGTERM y todos los procesos eran el 4242, se cerraba solo (código 143).
+    kill: (pid, sig) => {
+      if (pid !== p.pid && pid !== p.ppid) throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH', errno: -3, syscall: 'kill' })
+      if (pid === p.pid && sig !== 0 && sig !== '0') p.emit(sig || 'SIGTERM', sig || 'SIGTERM')
+      return true
+    },
     binding: (n) => { throw new Error(`process.binding('${n}') no existe`) }, dlopen: () => { throw new Error('No se pueden cargar complementos nativos') },
     getBuiltinModule: (n) => o.builtin(n),
     report: { getReport: () => ({ header: { glibcVersionRuntime: '2.39', osName: 'Linux', osRelease: '6.1.0', osMachine: 'aarch64' }, sharedObjects: [] }), excludeNetwork: true },

@@ -71,6 +71,8 @@ function projectRoot(ctx: ToolCtx, id?: string) {
 function resolvePath(ctx: ToolCtx, p: string) {
   let r = String(p || '').replace(/\\/g, '/').trim()
   const root = projectRoot(ctx)
+  // Claude Code en el iPhone trabaja en /home/user/proyectos/<id> (webclaude.ts): una ruta absoluta de ahí es del proyecto.
+  r = r.replace(/^\/?home\/[^/]+\/proyectos\/[^/]+(\/|$)/, '')
   r = r.replace(/^\/?(proyecto|project)\//i, '').replace(/^\.\//, '').replace(/^\/+/, '')
   if (r.startsWith(root + '/')) r = r.slice(root.length + 1)
   const rel = normalizeRel(r)

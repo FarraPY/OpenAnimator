@@ -14,6 +14,7 @@ import * as PL from './plugins'
 import { basename, dirname, fs, join, normalizeRel, uniqueName } from './fsx'
 import { copy, on as onEvent, projectChanged, send, touched } from './events'
 import { holdAwake, holdWhileEditing } from './wake'
+import { PHASES } from '../../../electron/analyzer-core'
 
 /** Trabajo largo con la pantalla encendida (si se apaga, Android pausa la página y el trabajo se frena). */
 async function awake<T>(work: () => Promise<T>): Promise<T> {
@@ -405,9 +406,18 @@ h('templates:delete', (id) => P.deleteTemplate(id))
 h('templates:update', (id, patch) => P.updateTemplate(id, patch))
 h('templates:openFolder', () => true)
 
-// ── analizador de video (PC) ──────────────────────────────────────────────────
-h('analyze:phases', () => [])
-for (const ch of ['analyze:pickFile', 'analyze:start', 'analyze:cancel', 'analyze:discard', 'analyze:save']) h(ch, notAvailable('Crear plantillas analizando un video'))
+// ── analizador de video: en el iPhone, la app (analyzer.ts); en la tablet no hay cómo medir el video ─────────────
+const analyzing = () => isWeb() && !!host().call<boolean>('vana.available')
+const AN = async () => {
+  if (!analyzing()) throw new Error('Crear plantillas analizando un video se puede en la PC y en la app del iPhone.')
+  return import('./analyzer')
+}
+h('analyze:phases', () => (analyzing() ? PHASES : []))
+h('analyze:pickFile', async () => (await AN()).pickFile())
+h('analyze:start', async (o) => (await AN()).start(o))
+h('analyze:cancel', async (id) => (await AN()).cancel(String(id)))
+h('analyze:discard', async (id) => (await AN()).discard(String(id)))
+h('analyze:save', async (id, o) => (await AN()).save(String(id), o))
 
 // ── chat con Claude: por la API (agent.ts) o con Claude Code en Termux (code.ts) ─
 const agent = () => import('./agent')
@@ -524,7 +534,12 @@ export function installBackend(platform: 'android' | 'iphone' = 'android') {
     fs.mkdir(P.PROJECTS)
     S.ensureNotes()
     applyAndroidPrefs()
-    setTimeout(() => { P.emptyTrash(30).catch(() => {}); for (const e of fs.list('.incoming')) if (Date.now() - e.mtime > 86400000) fs.deleteAsync(join('.incoming', e.name)).catch(() => {}) }, 5000)
+    setTimeout(() => {
+      P.emptyTrash(30).catch(() => {})
+      for (const e of fs.list('.incoming')) if (Date.now() - e.mtime > 86400000) fs.deleteAsync(join('.incoming', e.name)).catch(() => {})
+      if (analyzing()) void import('./analyzer').then((A) => A.cleanup()).catch(() => {})
+      void PL.whisperPreload().catch((e) => console.warn('No se pudo cargar Whisper:', e))
+    }, 5000)
   } catch (e) { console.error(e) }
   hst.onEvent('open', () => send('app:open', null))
   hst.onEvent('pause', () => send('app:pause', null))

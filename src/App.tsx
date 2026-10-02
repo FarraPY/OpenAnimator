@@ -10,7 +10,7 @@ import { isAndroid, recoveredBoot } from './platform'
 import AndroidIntegration from './android/ui/Integration'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
-export type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route }
+export type Route = { page: 'home' } | { page: 'editor'; id: string } | { page: 'settings'; section?: string; from?: Route } | { page: 'analyze' }
 type Ctx = {
   toast: (t: string, err?: boolean | 'ok' | 'info') => void
   info: AppInfo | null

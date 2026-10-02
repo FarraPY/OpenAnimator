@@ -77,7 +77,24 @@ export async function runE2E() {
       R.chatItems = (items || []).map((x: any) => `${x.kind}${x.name ? ':' + x.name : ''}${x.status ? '(' + x.status + ')' : ''} ${String(x.text || x.result || '').slice(0, 160)}`)
       const files = await call<any[]>('project:files', project.id).catch(() => [])
       R.sceneWritten = JSON.stringify(files).includes('e2e.html')
+      const sid = (await call<any>('chat:get', chat.id).catch(() => null))?.sessionId as string | undefined
       await call('chat:kill', chat.id).catch(() => {})
+      // Retomarla (como «Conversaciones anteriores» o al volver al proyecto) y escribir: Claude Code arranca con --resume.
+      // Se cerraba solo (código 143): preguntaba si seguía vivo el proceso anterior y la emulación lo tomaba como SIGTERM.
+      if (sid) await step(R, 'chat:resume', async () => {
+        await new Promise((r) => setTimeout(r, 3500)) // el anterior termina y guarda la conversación
+        const listed = (await call<Array<{ id: string }>>('chat:sessions', project.id)).some((x) => x.id === sid)
+        const again = await call<any>('chat:create', project.id, { resume: sid })
+        const items = await turn(again.id, () => call('chat:send', again.id, 'Seguimos', [], []))
+        await call('chat:kill', again.id).catch(() => {})
+        const bad = items.filter((x) => (x.kind === 'notice' && x.level === 'error') || (x.kind === 'result' && x.isError))
+        if (bad.length) throw new Error(bad.map((x) => x.text).join(' · '))
+        const said = items.filter((x) => x.kind === 'assistant').map((x) => String(x.text || '')).join(' ')
+        // La API de mentira dice cuántos mensajes le llegaron: con el historial son más que el nuevo.
+        const n = Number(/Mensajes: (\d+)/.exec(said)?.[1] || 0)
+        if (n < 3) throw new Error(`Claude no recibió la conversación anterior (${n} mensajes): ${said}`)
+        return { listed, loaded: again.items.length, messages: n }
+      }, 180000)
       // Si Claude no la escribió, la escena igual existe (la exportación se prueba aparte).
       if (!R.sceneWritten) (host() as WebHost).fs.writeText(`projects/${project.id}/scenes/e2e.html`, scene)
     }
@@ -116,7 +133,24 @@ export async function runE2E() {
       const r = await nativeCall('venc.finish')
       return { ...r, probe: await nativeCall('probe', { path }) }
     }, 60000)
-    const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
+    // «Crear plantilla desde un video» con ese video: medirlo en Swift (VideoAnalysis.swift), que Claude escriba el
+    // análisis (la API de mentira escribe uno mínimo) y guardarlo como plantilla.
+    await step(R, 'analyzer', async () => {
+      await (host() as WebHost).fs.copy('exports/avf-prueba.mp4', '.incoming/e2e/avf.mp4')
+      const id = await call<string>('analyze:start', { source: '.incoming/e2e/avf.mp4', name: 'avf.mp4', transcribe: false, maxMinutes: 1 })
+      const phases: string[] = []
+      const res = await new Promise<any>((resolve, reject) => {
+        const off = on('analyze:event', (e: any) => {
+          if (e.id !== id) return
+          if (e.status && e.status !== 'run') phases.push(`${e.phase}: ${e.status} ${e.message || ''}`)
+          if (e.done) { off(); if (e.error) reject(new Error(`${e.error} · ${phases.join(' · ')}`)); else resolve(e.result) }
+        })
+      })
+      const t = await call<{ id: string }>('analyze:save', id, { name: 'Plantilla E2E', analysis: res.analysis, stats: res.stats, source: res.source, title: res.title })
+      if (!(await call<any[]>('projects:templates')).some((x) => x.id === t.id)) throw new Error('La plantilla no aparece en la lista')
+      return { phases, stats: res.stats, analysis: res.analysis, template: t.id }
+    }, 300000)
+    const out = await step(R, 'export',() => new Promise<any>((resolve, reject) => {
       let id = ''
       let shown = 0
       const off = on('export:progress', (p: any) => {

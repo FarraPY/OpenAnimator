@@ -49,6 +49,7 @@
     "@anthropic-ai/sdk": "^0.129.0",
     "modern-screenshot": "^4.7.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "youtubei.js": "18.1.0"
   }
 }

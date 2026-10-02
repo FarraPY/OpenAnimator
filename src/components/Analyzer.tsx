@@ -141,7 +141,7 @@ export default function Analyzer({ onClose, onSaved }: { onClose: () => void; on
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="an-phase-l">{p.label}</div>
                   {p.message && <div className="an-phase-m">{p.message}</div>}
-                  {p.status === 'run' && p.progress != null && <div style={{ marginTop: 6 }}><Progress value={p.progress} /></div>}
+                  {p.status === 'run' && p.progress != null && <div style={{ marginTop: 6 }}><Progress value={p.progress * 100} /></div>}
                 </div>
               </div>
             ))}

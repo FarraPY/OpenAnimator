@@ -16,6 +16,7 @@ import { recoveredBoot } from '../../platform'
 import Projects from './Projects'
 import PhoneEditor from './PhoneEditor'
 import PhoneSettings from './PhoneSettings'
+import PhoneAnalyzer from './PhoneAnalyzer'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
 
@@ -110,7 +111,8 @@ export default function PhoneApp() {
       <div className="ph">
         {route.page === 'editor' ? <PhoneEditor key={route.id} projectId={route.id} onClose={() => go({ page: 'home' })} />
           : route.page === 'settings' ? <PhoneSettings section={route.section} onBack={() => { refreshInfo(); go(route.from || { page: 'home' }) }} />
-            : <Projects />}
+            : route.page === 'analyze' ? <PhoneAnalyzer onClose={() => go({ page: 'home' })} />
+              : <Projects />}
       </div>
       <div className="ph-toasts">
         {toasts.map((t) => (

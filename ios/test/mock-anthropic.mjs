@@ -32,6 +32,8 @@ function reply(body) {
   const tools = (body.tools || []).map((t) => t.name)
   const start = ['message_start', { message: { id: 'msg_' + Date.now(), type: 'message', role: 'assistant', model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } }]
   const m = /\[mcp\]\s+(\S+)\s*(\{.*\})?/s.exec(texts[ask] || '')
+    // El analizador de videos («Crear plantilla desde un video»): escribe un análisis mínimo.
+    || (/_analisis\/analisis\.json/.test(texts[ask] || '') ? [null, 'Write', JSON.stringify({ file_path: '_analisis/analisis.json', content: JSON.stringify({ titulo: 'Estilo de prueba', resumen: 'Lo escribió la API de mentira.' }) })] : null)
   if (m && !answered) {
     const name = tools.find((t) => t.endsWith(m[1])) || m[1]
     return [start,
@@ -42,7 +44,7 @@ function reply(body) {
       ['message_stop', {}]]
   }
   const result = /\[tool_result\] (.*)/.exec(texts.slice(ask).join(' '))
-  const text = answered ? `Listo: usé la herramienta y respondió ${result ? result[1].slice(0, 160) : ''}` : `Hola, soy el Claude de prueba. Herramientas: ${tools.length}.`
+  const text = answered ? `Listo: usé la herramienta y respondió ${result ? result[1].slice(0, 160) : ''}` : `Hola, soy el Claude de prueba. Herramientas: ${tools.length}. Mensajes: ${msgs.length}.`
   return [start,
     ['content_block_start', { index: 0, content_block: { type: 'text', text: '' } }],
     ...text.match(/.{1,16}/gs).map((t) => ['content_block_delta', { index: 0, delta: { type: 'text_delta', text: t } }]),

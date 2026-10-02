@@ -40,6 +40,8 @@ export default function Projects() {
   const dlg = useDialogs()
   const [list, setList] = useState<ProjectSummary[] | null>(lastList)
   const [templates, setTemplates] = useState<Template[]>([])
+  // «Plantilla desde un video» (sólo en la app: la mide AVFoundation).
+  const [canAnalyze, setCanAnalyze] = useState(false)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
   const [q, setQ] = useState('')
@@ -57,6 +59,7 @@ export default function Projects() {
   useEffect(() => {
     refresh()
     call<Template[]>('projects:templates').then(setTemplates).catch(() => {})
+    call<unknown[]>('analyze:phases').then((p) => setCanAnalyze(!!p?.length)).catch(() => {})
     return on('projects:changed', refresh)
   }, [])
 
@@ -95,6 +98,7 @@ export default function Projects() {
         right={<>
           <MenuButton className="tap" label="Más" items={[
             { label: importing ? 'Importando…' : 'Importar proyecto (.zip)', icon: 'import', disabled: importing, onSelect: importZip },
+            ...(canAnalyze ? [{ label: 'Plantilla desde un video', icon: 'wand' as const, onSelect: () => go({ page: 'analyze' }) }] : []),
             { label: 'Ajustes', icon: 'settings', onSelect: () => go({ page: 'settings' }) },
           ]}><Icon name="more" size={22} /></MenuButton>
           <Tap icon="settings" label="Ajustes" onClick={() => go({ page: 'settings' })} />
@@ -156,13 +160,14 @@ export default function Projects() {
       </div>
       {!!list?.length && <button className="fab" data-glass="accent" onClick={() => setCreating(true)}><Icon name="plus" size={22} />Nuevo proyecto</button>}
 
-      {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }} />}
+      {creating && <NewProject templates={templates} onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); open(id) }}
+        onAnalyze={canAnalyze ? () => { setCreating(false); go({ page: 'analyze' }) } : undefined} />}
       {dlg.element}
     </>
   )
 }
 
-function NewProject({ templates, onClose, onCreated }: { templates: Template[]; onClose: () => void; onCreated: (id: string) => void }) {
+function NewProject({ templates, onClose, onCreated, onAnalyze }: { templates: Template[]; onClose: () => void; onCreated: (id: string) => void; onAnalyze?: () => void }) {
   const { toast } = useApp()
   const [name, setName] = useState('Mi video')
   const [fmt, setFmt] = useState('v')
@@ -195,9 +200,14 @@ function NewProject({ templates, onClose, onCreated }: { templates: Template[]; 
       <label className="ph-label">Cuadros por segundo</label>
       <Chips value={fps} onChange={setFps} options={[{ value: 24, label: '24' }, { value: 30, label: '30' }, { value: 60, label: '60' }]} />
       <label className="ph-label">Plantilla</label>
+      {onAnalyze && <button className="banner tpl-video" onClick={onAnalyze}>
+        <span className="banner-ic"><Icon name="wand" size={22} /></span>
+        <span className="grow"><b>Desde un video</b><small>Un enlace de YouTube o un video del teléfono: Claude arma una plantilla con su estilo.</small></span>
+        <Icon name="chevron-right" size={18} />
+      </button>}
       <div className="tpls">
         {templates.map((t) => (
-          <button key={t.id} className={`tpl ${tpl === t.id ? 'on' : ''}`} onClick={() => setTpl(t.id)}>
+          <button key={t.id} className={`tpl ${tpl === t.id ? 'on' : ''}`} onClick={() => { setTpl(t.id); const f = t.user && t.width && t.height ? FORMATS.find((x) => x.w * t.height! === x.h * t.width!) : null; if (f) setFmt(f.id) }}>
             <span className="tpl-img" style={t.preview ? { backgroundImage: `url("${t.preview}")` } : undefined}>{!t.preview && <Icon name="template" size={26} stroke={1.3} />}</span>
             <b className="ellipsis">{t.name}</b>
             <small>{t.description}</small>

@@ -94,7 +94,10 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "open": open(a, replyHandler)
         case "probe": probe(a, replyHandler)
         case "venc.start", "venc.frame", "venc.frames", "venc.audio", "venc.finish", "venc.cancel": NativeEncoder.handle(op, a, replyHandler)
-        case "whisper.status", "whisper.install", "whisper.remove", "whisper.transcribe", "whisper.test":
+        case "vana.info", "vana.scan", "vana.frames", "vana.audio", "vana.download", "vana.cancel":
+            VideoAnalysis.emit = { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
+            VideoAnalysis.handle(op, a, replyHandler)
+        case "whisper.status", "whisper.install", "whisper.remove", "whisper.transcribe", "whisper.test", "whisper.preload":
             LocalWhisper.shared.emit = { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
             LocalWhisper.shared.handle(op, a, replyHandler)
         case "login.open": login(a, replyHandler)

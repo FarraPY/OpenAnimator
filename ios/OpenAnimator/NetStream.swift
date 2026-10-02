@@ -24,10 +24,11 @@ final class NetStream: NSObject, URLSessionDataDelegate {
 
     init(emit: @escaping (String, [String: Any]) -> Void) { self.emit = emit }
 
-    /// Sólo Anthropic (https) o la propia máquina (http: la API de mentira de las pruebas).
+    /// Sólo Anthropic y YouTube (https; YouTube para bajar un video a analizar, src/iphone/host/youtube.ts) o la propia
+    /// máquina (http: la API de mentira de las pruebas).
     static func allowed(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased(), let scheme = url.scheme?.lowercased() else { return false }
-        if scheme == "https" { return ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com"].contains(host) }
+        if scheme == "https" { return ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "www.youtube.com", "youtube.com", "m.youtube.com", "youtubei.googleapis.com"].contains(host) }
         return scheme == "http" && (host == "127.0.0.1" || host == "localhost")
     }
 

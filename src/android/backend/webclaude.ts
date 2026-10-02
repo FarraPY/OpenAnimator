@@ -587,6 +587,62 @@ export function setChatOptions(id: string, patch: any, label: string) {
   chats.get(id)?.setOptions(o, String(label || 'Opciones actualizadas.'))
 }
 
+/**
+ * Un pedido a Claude Code sin chat, hasta que termina (el analizador de videos, como `claude -p` en la PC): sólo las
+ * herramientas de `tools` (las de OpenAnimator, por MCP, sobre el proyecto `projectId`) y el pedido por la entrada.
+ * `onTool` y `onText` cuentan lo que va haciendo; `cancel` lo corta.
+ */
+export function runAgent(o: { projectId: string; prompt: string; system?: string; tools: string[]; model?: string; effort?: string; timeoutMs?: number; onTool?: (name: string, input: any) => void; onText?: (text: string) => void }) {
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', 'acceptEdits',
+    '--mcp-config', JSON.stringify({ mcpServers: { openanimator: { type: 'http', url: 'http://oa.mcp/mcp' } } }), '--strict-mcp-config',
+    '--setting-sources', '', '--tools', '', '--allowedTools', o.tools.join(',')]
+  if (o.system) args.push('--append-system-prompt', o.system)
+  if (o.model) args.push('--model', o.model)
+  if (o.effort) args.push('--effort', o.effort)
+  let out = '', err = '', failed = '', gotResult = false, over = false
+  let settle: (e?: Error) => void = () => {}
+  const done = new Promise<void>((resolve, reject) => { settle = (e) => (e ? reject(e) : resolve()) })
+  const release = holdAwake()
+  const l = launch(args, {
+    projectId: o.projectId,
+    onMessage: (_w, m) => {
+      if (m.type === 'stdout') {
+        out += m.data
+        for (let i; (i = out.indexOf('\n')) >= 0;) {
+          const line = out.slice(0, i)
+          out = out.slice(i + 1)
+          let x: any
+          try { x = JSON.parse(line) } catch { continue }
+          if (x.type === 'assistant') {
+            for (const b of x.message?.content || []) {
+              if (b.type === 'tool_use') o.onTool?.(b.name, b.input)
+              else if (b.type === 'text' && b.text?.trim()) o.onText?.(b.text.trim())
+            }
+          } else if (x.type === 'result') { gotResult = true; if (x.is_error) failed = String(x.result || x.subtype || 'error') }
+        }
+      } else if (m.type === 'stderr') err = (err + m.data).slice(-3000)
+      else if (m.type === 'exit' || m.type === 'crash') {
+        if (failed) end(new Error('Claude: ' + failed.slice(0, 400)))
+        else if (!gotResult) end(new Error(`Claude Code terminó antes de tiempo. ${String(m.error || err.trim().split('\n').slice(-2).join(' ')).slice(0, 400)}`))
+        else end()
+      }
+    },
+  })
+  const ms = o.timeoutMs || 45 * 60000
+  const timer = setTimeout(() => end(new Error(`Claude tardó más de ${Math.round(ms / 60000)} minutos`)), ms)
+  function end(e?: Error) {
+    if (over) return
+    over = true
+    clearTimeout(timer)
+    netDrop(l.w)
+    l.w.terminate()
+    release()
+    settle(e)
+  }
+  l.started.then(() => { if (!over) { l.w.postMessage({ type: 'stdin', data: o.prompt }); l.w.postMessage({ type: 'stdin-end' }) } }, (e) => end(e))
+  return { done, cancel: () => end(new Error('cancelado')) }
+}
+
 /** Prueba de conexión (Ajustes): arranca Claude Code y le pide una respuesta mínima con Haiku (casi no gasta el plan). */
 export function testClaude(): Promise<string> {
   const t0 = Date.now()

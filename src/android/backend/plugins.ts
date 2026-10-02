@@ -541,6 +541,20 @@ async function iosTranscribe(rel: string, o: { maxSec?: number; lang?: string })
   } finally { release() }
 }
 
+/**
+ * Al abrir la app: el modelo elegido se carga en segundo plano, así la primera transcripción (oa_transcribir, la voz
+ * generada) no espera la carga. En el iPhone tarda: Core ML lo prepara para el chip la primera vez y después de cada
+ * actualización de iOS o de la app (~1 min); si no, unos segundos.
+ */
+export async function whisperPreload() {
+  if (!iosWhisper() || getSettings().plugins.whisper?.enabled === false) return
+  const w = await whisperState()
+  if (!w.ready || !w.ios) return
+  const t0 = performance.now()
+  await host().callAsync('whisper.preload', { model: w.ios.id })
+  console.info(`[whisper] ${w.ios.label} cargado al abrir la app en ${((performance.now() - t0) / 1000).toFixed(1)} s`)
+}
+
 /** La voz de iOS dice una frase en español y Whisper la transcribe: si anda y a qué velocidad. */
 async function iosTest(model?: string): Promise<string> {
   const st = await iosStatus()
