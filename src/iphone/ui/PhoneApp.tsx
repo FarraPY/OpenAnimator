@@ -17,6 +17,7 @@ import Projects from './Projects'
 import PhoneEditor from './PhoneEditor'
 import PhoneSettings from './PhoneSettings'
 import PhoneAnalyzer from './PhoneAnalyzer'
+import Crash from '../../components/Crash'
 
 type ToastT = { id: number; text: string; kind: 'ok' | 'err' | 'info' }
 
@@ -109,10 +110,12 @@ export default function PhoneApp() {
   return (
     <AppCtx.Provider value={{ toast, info, settings, updateSettings, go, route, refreshInfo }}>
       <div className="ph">
+        <Crash resetKey={JSON.stringify(route)} onHome={() => go({ page: 'home' })}>
         {route.page === 'editor' ? <PhoneEditor key={route.id} projectId={route.id} onClose={() => go({ page: 'home' })} />
           : route.page === 'settings' ? <PhoneSettings section={route.section} onBack={() => { refreshInfo(); go(route.from || { page: 'home' }) }} />
             : route.page === 'analyze' ? <PhoneAnalyzer onClose={() => go({ page: 'home' })} />
               : <Projects />}
+        </Crash>
       </div>
       <div className="ph-toasts">
         {toasts.map((t) => (

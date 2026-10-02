@@ -3,6 +3,7 @@ import Home from './pages/Home'
 import Editor from './pages/Editor'
 import SettingsPage from './pages/Settings'
 import ChatPanel from './components/ChatPanel'
+import Crash from './components/Crash'
 import { afterPaint, AppInfo, call, Settings, SettingsPatch } from './api'
 import { Icon } from './ui/icons'
 import { TooltipLayer } from './ui/kit'
@@ -88,9 +89,11 @@ export default function App() {
       <div className={`app ${chatWin ? 'chat-window' : ''}`}>
         {chatWin ? <ChatPanel projectId={chatWin.project} windowMode attachTo={chatWin.session} visible
           context={async () => (await call('chat:getCtx', chatWin.project)) || { timeline: 'main', t: 0 }} />
-          : route.page === 'editor' ? <Editor key={route.id} projectId={route.id} onClose={() => go({ page: 'home' })} />
-          : route.page === 'settings' ? <SettingsPage section={route.section} onBack={() => go(route.from || { page: 'home' })} />
-            : <Home onOpen={(id) => go({ page: 'editor', id })} />}
+          : <Crash resetKey={JSON.stringify(route)} onHome={() => go({ page: 'home' })}>
+            {route.page === 'editor' ? <Editor key={route.id} projectId={route.id} onClose={() => go({ page: 'home' })} />
+              : route.page === 'settings' ? <SettingsPage section={route.section} onBack={() => go(route.from || { page: 'home' })} />
+                : <Home onOpen={(id) => go({ page: 'editor', id })} />}
+          </Crash>}
       </div>
       <div className="toasts">
         {toasts.map((t) => (

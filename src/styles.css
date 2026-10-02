@@ -760,3 +760,8 @@ details.think summary:hover { color: var(--t2); }
 .to-bottom.has-new { background: var(--accent); border-color: transparent; color: #fff; padding: 0 12px 0 9px; }
 .to-bottom .think-dot { margin: 0 2px 0 0; }
 @keyframes toBottomIn { from { opacity: 0; transform: translate(-50%, 6px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* Una pantalla que falló al dibujarse (components/Crash.tsx) */
+.crash { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px 20px; text-align: center; color: var(--t1); background: var(--bg-1); }
+.crash h2 { margin: 0; font-size: 18px; }
+.crash p { margin: 0 0 6px; max-width: 520px; font-size: 13px; line-height: 1.5; word-break: break-word; }
