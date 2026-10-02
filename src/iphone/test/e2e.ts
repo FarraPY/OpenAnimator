@@ -233,6 +233,7 @@ export async function runE2E() {
         let app = 'aislado'; try { app = 'VE LA APP: ' + parent.document.title } catch (e) { app = 'aislado (' + e.name + ')' }
         let red = 'sin red'; try { await fetch('https://api.iconify.design/'); red = 'HAY RED' } catch (e) {}
         return { app, red }` })
+      log(`  recorte: ${recorte.split('\n')[0]}\n  código: ${js.replace(/\s+/g, ' ').slice(0, 300)}`) // en el registro: el JSON entero no entra en la anotación
       if (!fsw.exists(`projects/${project.id}/assets/sfx/bip.wav`) || /VE LA APP|HAY RED/.test(js)) throw new Error('oa_ejecutar_js: ' + js)
       return { iconos: iconos.split('\n')[0], fuente: fuente.split('\n')[0], recorte, js }
     }, 120000)
