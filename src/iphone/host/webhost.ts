@@ -180,6 +180,8 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     try { return await nativeCall(op, a) } finally { off() }
   }
   const async: Record<string, (a: any, emitEvent: (e: any) => void, o: AsyncOpts) => Promise<any>> = {
+    // Un binario entero (el backend lo manda como Blob: en el iPhone no hace falta pasar por base64 ni por partes).
+    'fs.writeBlob': async (a) => { await fs.writeBlob(a.path, a.blob); return true },
     'fs.delete': async (a) => fs.delete(a.path), 'fs.copy': async (a) => { fs.copy(a.from, a.to); await fs.flush(); return true }, 'fs.du': async (a) => fs.du(a.path),
     'pick.files': async (a) => pick(a.accept || [], a.multiple !== false),
     'file.share': async (a) => share(a.path, a.name, a.mime, a.title),

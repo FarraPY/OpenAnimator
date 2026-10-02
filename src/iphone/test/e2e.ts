@@ -233,7 +233,15 @@ export async function runE2E() {
         let app = 'aislado'; try { app = 'VE LA APP: ' + parent.document.title } catch (e) { app = 'aislado (' + e.name + ')' }
         let red = 'sin red'; try { await fetch('https://api.iconify.design/'); red = 'HAY RED' } catch (e) {}
         return { app, red }` })
-      log(`  recorte: ${recorte.split('\n')[0]}\n  código: ${js.replace(/\s+/g, ' ').slice(0, 300)}`) // en el registro: el JSON entero no entra en la anotación
+      // Un archivo grande desde el código aislado (pasado 1,5 MB fallaba: el backend agregaba partes a un archivo que no
+      // estaba en memoria): 20 s de audio estéreo, ~3,8 MB.
+      await text('oa_ejecutar_js', { codigo: `
+        const sr = 48000, ctx = new OfflineAudioContext(2, sr * 20, sr), o = ctx.createOscillator()
+        o.connect(ctx.destination); o.start()
+        await guardar('assets/musica/larga.wav', wav(await ctx.startRendering()))` })
+      const larga = fsw.stat(`projects/${project.id}/assets/musica/larga.wav`)
+      if (!larga || (larga.size || 0) < 3_500_000) throw new Error('No se guardó el WAV grande: ' + JSON.stringify(larga))
+      log(`  recorte: ${recorte.split('\n')[0]}\n  código: ${js.replace(/\s+/g, ' ').slice(0, 300)} · WAV de 20 s: ${larga.size} bytes`) // en el registro: el JSON entero no entra en la anotación
       if (!fsw.exists(`projects/${project.id}/assets/sfx/bip.wav`) || /VE LA APP|HAY RED/.test(js)) throw new Error('oa_ejecutar_js: ' + js)
       return { iconos: iconos.split('\n')[0], fuente: fuente.split('\n')[0], recorte, js }
     }, 120000)

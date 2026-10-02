@@ -44,6 +44,8 @@ export const fs = {
   /** Escribe binario por partes (el puente sólo lleva texto: base64). */
   async writeBytes(path: string, data: ArrayBuffer | Uint8Array | Blob) {
     const blob = data instanceof Blob ? data : new Blob([data as BlobPart])
+    // iPhone: el archivo entero de una vez (agregar por partes a uno grande fallaba pasado 1,5 MB: no queda en memoria).
+    if (host().kind === 'web') { await host().callAsync('fs.writeBlob', { path, blob }); return }
     const CHUNK = 3 * 512 * 1024 // múltiplo de 3: cada parte es base64 válido por sí sola
     if (!blob.size) { call('fs.writeBase64', { path, data: '', append: false }); return }
     for (let off = 0; off < blob.size; off += CHUNK) {

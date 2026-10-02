@@ -56,7 +56,11 @@
       var fn = new AsyncFunction('guardar', 'leer', 'leerTexto', 'decodificarAudio', 'wav', 'console', e.data.code)
       var value = await fn(api.guardar, api.leer, api.leerTexto, api.decodificarAudio, api.wav, con)
       port.postMessage({ type: 'done', logs: logs, value: value === undefined ? undefined : show(value).slice(0, 20000) })
-    } catch (err) { port.postMessage({ type: 'done', logs: logs, error: String((err && err.stack) || err).slice(0, 4000) }) }
+    } catch (err) {
+      // En WebKit la pila no trae el mensaje (en Chrome sí): van los dos.
+      var msg = err && err.message ? err.name + ': ' + err.message + (err.stack && err.stack.indexOf(err.message) < 0 ? '\n' + err.stack : '') : String((err && err.stack) || err)
+      port.postMessage({ type: 'done', logs: logs, error: msg.slice(0, 4000) })
+    }
   })
   parent.postMessage({ type: 'oa-sandbox-ready' }, '*')
 })()
