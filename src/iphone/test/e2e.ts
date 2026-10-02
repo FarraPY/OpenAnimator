@@ -86,14 +86,28 @@ export async function runE2E() {
         const listed = (await call<Array<{ id: string }>>('chat:sessions', project.id)).some((x) => x.id === sid)
         const again = await call<any>('chat:create', project.id, { resume: sid })
         const items = await turn(again.id, () => call('chat:send', again.id, 'Seguimos', [], []))
-        await call('chat:kill', again.id).catch(() => {})
         const bad = items.filter((x) => (x.kind === 'notice' && x.level === 'error') || (x.kind === 'result' && x.isError))
-        if (bad.length) throw new Error(bad.map((x) => x.text).join(' · '))
+        if (bad.length) { await call('chat:kill', again.id).catch(() => {}); throw new Error(bad.map((x) => x.text).join(' · ')) }
         const said = items.filter((x) => x.kind === 'assistant').map((x) => String(x.text || '')).join(' ')
         // La API de mentira dice cuántos mensajes le llegaron: con el historial son más que el nuevo.
         const n = Number(/Mensajes: (\d+)/.exec(said)?.[1] || 0)
-        if (n < 3) throw new Error(`Claude no recibió la conversación anterior (${n} mensajes): ${said}`)
-        return { listed, loaded: again.items.length, messages: n }
+        if (n < 3) { await call('chat:kill', again.id).catch(() => {}); throw new Error(`Claude no recibió la conversación anterior (${n} mensajes): ${said}`) }
+        // Escribir mientras Claude trabaja: el segundo queda en cola y sale solo cuando termina el primero.
+        const queued = await new Promise<any[]>((resolve, reject) => {
+          const got: any[] = []
+          const off = on('chat:event', (e: any) => {
+            if (e.session !== again.id) return
+            if (e.type === 'item') got.push({ ...e.item, wasQueued: !!e.item.queued })
+            if (e.type === 'patch') { const it = got.find((x) => x.id === e.item.id); if (it) Object.assign(it, e.item) }
+            if (got.filter((x) => x.kind === 'result').length === 2) { off(); resolve(got) }
+          })
+          call('chat:send', again.id, 'Primero', [], []).then(() => call('chat:send', again.id, 'Segundo', [], [])).catch((err) => { off(); reject(err) })
+        })
+        await call('chat:kill', again.id).catch(() => {})
+        const second = queued.find((x) => x.kind === 'user' && x.text === 'Segundo')
+        const order = queued.map((x) => (x.kind === 'user' ? `${x.text}${x.wasQueued ? ' (en cola)' : ''}` : x.kind)).join(' → ')
+        if (!second?.wasQueued || second.queued) throw new Error('La cola no funcionó: ' + order)
+        return { listed, loaded: again.items.length, messages: n, queue: order }
       }, 180000)
       // Si Claude no la escribió, la escena igual existe (la exportación se prueba aparte).
       if (!R.sceneWritten) (host() as WebHost).fs.writeText(`projects/${project.id}/scenes/e2e.html`, scene)

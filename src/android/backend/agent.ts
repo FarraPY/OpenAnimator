@@ -254,7 +254,8 @@ class AgentChat {
   private stats: ChatStats
   private alwaysAllow = new Set<string>()
   private notes: string[] = []
-  private queue: Array<{ text: string; images: Array<{ mediaType: string; data: string }>; files: string[] }> = []
+  /** Lo que se escribió mientras Claude trabajaba (el item ya está en la conversación, «En cola»). */
+  private queue: Array<{ id: string; text: string; images: Array<{ mediaType: string; data: string }> }> = []
   private pendingPerms = new Map<string, (ok: boolean) => void>()
   private abort: AbortController | null = null
   private interrupted = false
@@ -278,7 +279,7 @@ class AgentChat {
       this.title = stored.title
       this.first = stored.first
       this.summary = stored.summary
-      this.items = stored.items || []
+      this.items = (stored.items || []).filter((it: ChatItem) => !it.queued) // la cola no sobrevive a un cierre
       this.stats = { ...stored.stats, window: win }
       this.alwaysAllow = new Set(stored.alwaysAllow || [])
       this.saved = true
@@ -376,9 +377,22 @@ class AgentChat {
   // ── mensajes del usuario ──
   send(text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) {
     if (this.killed) return
-    if (this.busy) { this.queue.push({ text, images, files }); this.notice('Mensaje en cola: se envía cuando Claude termine lo que está haciendo.'); return }
-    this.push({ id: nid('u'), kind: 'user', text, images: images.length || undefined, files: files.length ? files : undefined })
+    const it: ChatItem = { id: nid('u'), kind: 'user', text, images: images.length || undefined, files: files.length ? files : undefined }
+    if (this.busy) { this.queue.push({ id: it.id, text, images }); this.push({ ...it, queued: true }); return }
+    this.push(it)
     this.run(text, images).catch((e) => console.error(e))
+  }
+  /** Saca de la cola uno (o todos, sin `itemId`) sin mandarlo; devuelve sus textos para volver a editarlos. */
+  unqueue(itemId?: string) {
+    const texts: string[] = []
+    this.queue = this.queue.filter((q) => {
+      if (itemId && q.id !== itemId) return true
+      texts.push(q.text)
+      this.items = this.items.filter((x) => x.id !== q.id); this.index.delete(q.id)
+      this.emit({ type: 'remove', item: { id: q.id } })
+      return false
+    })
+    return texts
   }
 
   private async prepare() {
@@ -505,7 +519,12 @@ class AgentChat {
       release()
       this.state()
       const next = this.queue.shift()
-      if (next && !this.killed) setTimeout(() => this.send(next.text, next.images, next.files), 30)
+      if (next && !this.killed) setTimeout(() => {
+        if (this.killed) return
+        if (this.busy) { this.queue.unshift(next); return }
+        this.patch(next.id, { queued: false })
+        this.run(next.text, next.images).catch((e) => console.error(e))
+      }, 30)
     }
   }
 
@@ -698,7 +717,6 @@ class AgentChat {
   interrupt() {
     if (!this.busy) return
     this.interrupted = true
-    this.queue.length = 0
     try { this.abort?.abort() } catch { /* ignore */ }
     this.onInterrupt?.()
     for (const [id, res] of [...this.pendingPerms]) { this.pendingPerms.delete(id); this.patch(id, { status: 'rechazado' }); res(false) }
@@ -789,6 +807,7 @@ export function createChat(projectId: string, o?: { resume?: string }) {
 export function getChat(id: string) { return chats.get(id)?.snapshot() || null }
 export function sendChat(id: string, text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) { chats.get(id)?.send(String(text || ''), images || [], files || []) }
 export function interruptChat(id: string) { chats.get(id)?.interrupt() }
+export function unqueueChat(id: string, itemId?: string) { return chats.get(id)?.unqueue(itemId) || [] }
 export function respondPermission(id: string, itemId: string, allow: boolean, always: boolean) { chats.get(id)?.respondPermission(itemId, allow, always) }
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function setChatOptions(id: string, patch: any, label: string) { chats.get(id)?.setOptions(patch || {}, String(label || 'Opciones actualizadas.')) }

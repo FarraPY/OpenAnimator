@@ -283,16 +283,17 @@ html.phone .perm-card .b { height: 38px; }
 .cl-chips { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 0 14px; }
 .cl-chips::-webkit-scrollbar { display: none; }
 .cl-chip { flex: none; height: 34px; padding: 0 14px; border-radius: 17px; border: 1px solid rgba(255, 255, 255, .12); background: rgba(255, 255, 255, .06); color: var(--t1); font: 500 14px var(--font-display); }
-html.phone .ed-sheet .composer { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; grid-template-areas: "chips chips chips" "att text send"; align-items: end; padding: 4px; border-radius: 25px; }
+html.phone .ed-sheet .composer { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; grid-template-areas: "chips chips chips" "att text send"; align-items: end; padding: 4px; border-radius: 26px; }
 html.phone .ed-sheet .composer .att-chips { grid-area: chips; }
-html.phone .ed-sheet .composer textarea { grid-area: text; min-height: 40px; padding: 10px 6px; }
+html.phone .ed-sheet .composer textarea { grid-area: text; min-height: 44px; padding: 10px 4px; }
 html.phone .ed-sheet .composer .composer-bar { display: contents; }
 html.phone .ed-sheet .composer .composer-bar > .grow { display: none; }
-html.phone .ed-sheet .composer .composer-bar > .b:first-child { grid-area: att; width: 40px; height: 40px; border-radius: 20px; }
-html.phone .ed-sheet .composer .send-btn { grid-area: send; width: 40px; height: 40px; padding: 0; border-radius: 20px; }
+/* Clip y enviar: círculos de 36 px en el medio de su columna y a la altura del último renglón (el de enviar tiene que
+   ganarle al .send-btn de 30 px de la PC, que va con !important). */
+html.phone .ed-sheet .composer .composer-bar > .b:first-child { grid-area: att; justify-self: center; width: 36px; height: 36px; margin-bottom: 4px; padding: 0; border-radius: 18px; }
+html.phone .ed-sheet .composer .send-btn { grid-area: send; justify-self: center; width: 36px !important; height: 36px !important; margin-bottom: 4px; padding: 0; border-radius: 18px !important; }
 html.phone .ed-sheet .chat-list { padding: 4px 14px 8px; }
 html.phone .ed-sheet .composer-wrap { padding: 6px 12px calc(var(--safe-b) + 4px); }
-html.phone .ed-sheet .composer { border-radius: 24px; }
 html.phone .ed-sheet .msg-user { background: var(--accent); color: #fff; border-color: transparent; }
 
 /* ── timeline del teléfono ────────────────────────────────────────────────

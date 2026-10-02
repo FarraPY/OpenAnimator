@@ -504,6 +504,7 @@ h('chat:popin', () => true)
 h('chat:isPopped', () => false)
 h('chat:send', async (id, text, images, files) => (await engine(id)).sendChat(id, text, images || [], files || []))
 h('chat:interrupt', async (id) => (await engine(id)).interruptChat(id))
+h('chat:unqueue', async (id, itemId) => (await engine(id)).unqueueChat(id, itemId))
 h('chat:permission', async (id, itemId, allow, always) => (await engine(id)).respondPermission(id, itemId, allow, !!always))
 h('chat:kill', (id) => killChat(id))
 h('chat:setOptions', async (id, patch, label) => {

@@ -576,6 +576,7 @@ export async function createChat(projectId: string, o?: { resume?: string }) {
 export function getChat(id: string) { const c = chats.get(id); return c ? snapshot(c) : null }
 export function sendChat(id: string, text: string, images: Array<{ mediaType: string; data: string }>, files: string[]) { chats.get(id)?.send(String(text || ''), images || [], files || []) }
 export function interruptChat(id: string) { chats.get(id)?.interrupt() }
+export function unqueueChat(id: string, itemId?: string) { return chats.get(id)?.unqueue(itemId) || [] }
 export function respondPermission(id: string, itemId: string, allow: boolean, always: boolean) { chats.get(id)?.respondPermission(itemId, allow, always) }
 export function killChat(id: string) { const c = chats.get(id); if (c) { c.kill(); chats.delete(id) } }
 export function compactChat(id: string, instructions?: string) { chats.get(id)?.compact(instructions) }

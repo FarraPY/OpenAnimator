@@ -75,6 +75,11 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Cambiar opciones NO debe cortar el turno: `setOptions` usa `control_request` `set_permission_mode` y
   `set_model` en caliente; esfuerzo/modo ahorro relanzan el proceso con `--resume` recién al terminar el turno
   (`restartWhenIdle`). El `close` de un proceso viejo no pisa `this.proc` del nuevo.
+- Cola (como en Claude Code): lo que se escribe mientras Claude trabaja entra como item `queued` («En cola») y sale solo
+  al terminar el turno (`next()` en claude-session.ts; agent.ts igual). La ✕ del mensaje o Detener lo sacan
+  (`chat:unqueue`, evento `remove`) y el texto vuelve al cuadro. Si Claude Code se cierra, `closed()` deja
+  `opts.resume`: lo próximo retoma la conversación (antes empezaba otra sin decirlo). Prueba:
+  `node --experimental-transform-types scripts/check-chat-queue.mts`.
 - Historial: `listSessions`/`loadTranscript` leen `~/.claude/projects/<ruta con [^a-zA-Z0-9]→->/*.jsonl`
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
 - Salir del editor NO corta a Claude: ChatPanel manda `chat:leave` (la conversación queda "estacionada" por
@@ -251,6 +256,21 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   exportación se repite con AVFoundation (`NativeEncoder.swift`: JPEG + PCM por el puente, video y audio aparte y
   juntados sin recodificar) y las siguientes van directo por ahí (`enc.fallback`). En el simulador de CI
   `<video>`/`<audio>` dan error 4 aun desde blob:.
+- Trampa de la emulación de Node (claude/node/process.js): Claude Code pregunta si sigue vivo el proceso que usaba una
+  conversación con `process.kill(pid, 0)` (el número lo anotó en ~/.claude); con el 0 tomado como SIGTERM y todos los
+  procesos con el número 4242, al retomar una conversación se cerraba solo («Claude terminó (código 143)»). Cada Worker
+  tiene su número y los demás procesos no existen (ESRCH). La prueba del simulador retoma una conversación y escribe.
+- «Plantilla desde un video» (PhoneAnalyzer.tsx → backend `analyzer.ts`, como electron/analyzer.ts; lo común —pedido a
+  Claude, cortes, fotogramas clave, paleta, VTT— en `electron/analyzer-core.ts`, sin Node): Swift mide con AVFoundation
+  (`VideoAnalysis.swift`, `vana.*`: info; scan = puntaje de cortes como el de FFmpeg sobre YUV a 5 fps + píxeles para
+  la paleta; frames = fotogramas, hoja de contactos y tiras; audio = silencios y LUFS BS.1770; download = googlevideo
+  por tramos de 10 MB). YouTube con youtubei.js (`youtube.ts`: cliente VISIONOS y si no IOS, sin PO token ni firmas;
+  con `generate_session_locally` YouTube pedía «confirmá que no sos un robot»; todo por `http.stream`, los hosts de
+  YouTube están en `NetStream.allowed`). Claude escribe el análisis con `runAgent` (webclaude.ts: `-p` con las
+  herramientas de OpenAnimator por MCP; `resolvePath` acepta la ruta virtual `/home/user/proyectos/<id>/…`). La prueba
+  del simulador lo corre entero con el video de prueba (la API de mentira escribe un análisis mínimo).
+- Whisper al abrir la app: `whisperPreload` (plugins.ts, 5 s después de arrancar) carga el modelo en segundo plano
+  (`whisper.preload`); sin eso la primera transcripción de cada vez esperaba la carga (~1 min).
 
 ## Android (tablet) — `android/`, `src/android/`
 - Misma interfaz React; `src/android/backend/` implementa los canales de `electron/main.ts` sobre el puente

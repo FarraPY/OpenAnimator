@@ -397,6 +397,7 @@ function registerIpc() {
   h('chat:isPopped', (projectId) => !!chatWins.get(projectId))
   h('chat:send', (id, text, images, files) => chats.get(id)?.send(text, images || [], files || []))
   h('chat:interrupt', (id) => chats.get(id)?.interrupt())
+  h('chat:unqueue', (id, itemId) => chats.get(id)?.unqueue(itemId) || [])
   h('chat:permission', (id, itemId, allow, always) => chats.get(id)?.respondPermission(itemId, allow, !!always))
   h('chat:kill', (id) => {
     chats.get(id)?.kill(); chats.delete(id)

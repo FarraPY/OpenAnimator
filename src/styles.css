@@ -454,6 +454,11 @@ html:not(.touch) .tl-resize:hover::after { content: ''; position: absolute; left
 .msg-user { align-self: flex-end; max-width: 88%; padding: 9px 13px; border-radius: 14px 14px 4px 14px; background: var(--bg-4); border: 1px solid var(--line-2); white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; }
 .msg-user .att { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--t2); padding: 2px 7px 2px 5px; border-radius: 6px; background: var(--bg-2); border: 1px solid var(--line); }
 .msg-user .att-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; white-space: normal; }
+/* Escrito mientras Claude trabajaba: espera en la cola (sale solo al terminar el turno). */
+.msg-user.queued { opacity: .62; border-style: dashed; }
+.msg-queued { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11.5px; white-space: normal; }
+.msg-unqueue { flex: none; display: grid; place-items: center; width: 22px; height: 22px; margin: -3px -6px -3px 0; padding: 0; border: 0; border-radius: 11px; background: rgba(127, 127, 127, .22); color: inherit; cursor: pointer; }
+html.touch .msg-unqueue, html.phone .msg-unqueue { width: 30px; height: 30px; border-radius: 15px; }
 .msg-ai { display: flex; gap: 10px; }
 .msg-ai-avatar { width: 24px; height: 24px; border-radius: 7px; flex: none; display: grid; place-items: center; background: linear-gradient(135deg, #d97757, #b95c3e); color: #fff; margin-top: 1px; }
 .msg-ai-body { flex: 1; min-width: 0; line-height: 1.6; word-wrap: break-word; }

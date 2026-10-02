@@ -17,11 +17,13 @@ export type ChatItem = {
   at?: number
   /** Herramienta: caracteres de la entrada que ya llegaron mientras Claude la escribe (p. ej. un archivo largo). */
   streamed?: number
+  /** Pedido escrito mientras Claude trabajaba: espera en la cola y sale solo cuando termina el turno. */
+  queued?: boolean
 }
 /** Consumo de la conversación: contexto ocupado (tokens del último pedido al modelo) y ventana del modelo. */
 export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
 export type ChatEvent = {
-  session: string; type: 'item' | 'patch' | 'state'; item?: Partial<ChatItem> & { id: string }
+  session: string; type: 'item' | 'patch' | 'remove' | 'state'; item?: Partial<ChatItem> & { id: string }
   /** signalAt: la última vez que Claude Code mandó algo (si pasa mucho sin nada mientras piensa, puede estar trabado). */
   state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number }
 }
@@ -95,20 +97,51 @@ export abstract class ClaudeStreamSession {
   protected closed(code: number | null, errTail: string) {
     if (this.busy) this.busy = false
     if (code && code !== 0) this.notice(`Claude terminó (código ${code}). ${errTail.trim().split('\n').slice(-3).join(' ')}`, 'error')
+    // Lo próximo retoma esta conversación (si no, empezaba otra sin decirlo, con la anterior todavía en pantalla).
+    if (this.sessionId) this.opts.resume = this.sessionId
     this.state()
+    this.next()
   }
+
+  /** Lo que se escribió mientras Claude trabajaba, en orden: sale cuando termina el turno (como en Claude Code). */
+  private waiting: Array<{ id: string; content: any[] }> = []
 
   send(text: string, images: Array<{ mediaType: string; data: string }> = [], files: string[] = []) {
     if (!this.alive && !this.start()) return
     const content: any[] = []
     for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
     content.push({ type: 'text', text })
-    this.push({ id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined })
+    const it: ChatItem = { id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined }
+    if (this.busy) { this.waiting.push({ id: it.id, content }); this.push({ ...it, queued: true }); return }
+    this.push(it)
+    this.deliver(content)
+  }
+  private deliver(content: any[]) {
     this.streamedText = false
     this.busy = true
     this.signalAt = Date.now()
     this.state()
     this.writeLine({ type: 'user', message: { role: 'user', content } })
+  }
+  /** El próximo de la cola, si Claude quedó libre. */
+  private next() {
+    if (this.busy || !this.waiting.length) return
+    if (!this.alive && !this.start()) return
+    const q = this.waiting.shift()!
+    this.patch(q.id, { queued: false })
+    this.deliver(q.content)
+  }
+  /** Saca de la cola uno (o todos, sin `itemId`) sin mandarlo; devuelve sus textos para volver a editarlos. */
+  unqueue(itemId?: string) {
+    const texts: string[] = []
+    this.waiting = this.waiting.filter((q) => {
+      if (itemId && q.id !== itemId) return true
+      const i = this.items.findIndex((x) => x.id === q.id)
+      if (i >= 0) { texts.push(this.items[i].text || ''); this.items.splice(i, 1) }
+      this.emit({ session: this.id, type: 'remove', item: { id: q.id } })
+      return false
+    })
+    return texts
   }
 
   /** Resume la conversación para liberar contexto (el /compact de Claude Code). */
@@ -245,7 +278,8 @@ export abstract class ClaudeStreamSession {
           this.push({ id: nid('r'), kind: 'result', isError: !!m.is_error, cost: m.total_cost_usd, durationMs: m.duration_ms, text: m.is_error ? String(m.result || m.subtype || 'error') : '' })
         }
         this.state()
-        if (this.restartPending) setTimeout(() => this.restartWhenIdle(), 50)
+        if (this.restartPending) setTimeout(() => { this.restartWhenIdle(); this.next() }, 50)
+        else this.next()
         break
       case 'control_response': {
         const r = m.response || {}

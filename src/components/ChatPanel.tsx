@@ -1,4 +1,4 @@
-import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ClipboardEvent as RClipboardEvent, DragEvent as RDragEvent, Fragment, KeyboardEvent as RKeyboardEvent, memo, ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { afterPaint, Attachment, call, ChatEvent, ChatItem, ChatStats, EFFORTS, fileUrl, fmtSize, on } from '../api'
 import { useModels } from '../claudeModels'
 import { isAndroid, isIphone } from '../platform'
@@ -138,6 +138,9 @@ const ctxLevel = (tokens: number, pct: number) => (tokens >= 250000 || pct >= 80
 const kTok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)} M` : n >= 1000 ? `${Math.round(n / 1000)} mil` : String(n))
 const kSize = (chars: number) => (chars >= 1024 ? `${(chars / 1024).toFixed(chars >= 10240 ? 0 : 1).replace('.', ',')} KB` : `${chars} B`)
 
+/** Lo que escribió el usuario, sin el contexto del editor que se le agrega al mandarlo. */
+const userText = (t?: string) => (t || '').replace(/\n\n\(Contexto del editor:[\s\S]*$/, '')
+
 /** Anillo con el porcentaje de la ventana de contexto que ocupa la conversación. */
 function ContextRing({ pct, level }: { pct: number; level: number }) {
   const r = 6.5, c = 2 * Math.PI * r
@@ -154,15 +157,18 @@ function ContextRing({ pct, level }: { pct: number; level: number }) {
  * Un mensaje del chat. Memoizado: mientras Claude escribe sólo cambia el último, y re-dibujar (y volver a
  * leer el markdown de) toda la conversación con cada palabra trababa la tablet en conversaciones largas.
  */
-const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, showCost, since }: {
-  it: ChatItem; session: string | null; projectId: string; showThinking: boolean; showCost: boolean; since?: number
+const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, showCost, since, onUnqueue }: {
+  it: ChatItem; session: string | null; projectId: string; showThinking: boolean; showCost: boolean; since?: number; onUnqueue: (id: string) => void
 }) {
   if (it.kind === 'user') return (
-    <div key={it.id} className="msg-user">{it.text?.replace(/\n\n\(Contexto del editor:[\s\S]*$/, '').split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
+    <div key={it.id} className={`msg-user ${it.queued ? 'queued' : ''}`}>{userText(it.text).split(/((?:^|\s)@[^\s@]+)/).map((part, i) => /^\s?@/.test(part) ? <Fragment key={i}>{part.startsWith(' ') ? ' ' : ''}<span className="mention">{part.trim()}</span></Fragment> : part)}
       {it.files?.length || it.images ? <div className="att-row">
         {it.files?.map((f) => <span key={f} className="att"><Icon name={/\.(png|jpe?g|webp|gif)$/i.test(f) ? 'image' : 'file'} size={12} />{f.split('/').pop()}</span>)}
         {(it.images || 0) > (it.files?.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length || 0) && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
-      </div> : null}</div>
+      </div> : null}
+      {it.queued && <div className="msg-queued"><Icon name="clock" size={12} /><span className="grow">En cola: sale cuando Claude termine</span>
+        <button className="msg-unqueue" data-tip="Sacarlo de la cola (vuelve al cuadro de texto)" onClick={() => onUnqueue(it.id)}><Icon name="x" size={13} /></button></div>}
+    </div>
   )
   if (it.kind === 'assistant') return it.text ? (
     <div key={it.id} className="msg-ai"><span className="msg-ai-avatar"><Icon name="sparkles" size={13} stroke={2} /></span><div className="msg-ai-body"><Markdown text={it.text} /></div></div>
@@ -343,6 +349,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
       if (e.session !== sid.current) return
       if (e.type === 'item') { seen.current.set(e.item!.id, Date.now()); setItems((xs) => [...xs, e.item as ChatItem]) }
       else if (e.type === 'patch') setItems((xs) => xs.map((x) => (x.id === e.item!.id ? { ...x, ...e.item } : x)))
+      else if (e.type === 'remove') setItems((xs) => xs.filter((x) => x.id !== e.item!.id))
       else if (e.type === 'state') {
         setBusy(!!e.state?.busy)
         if (e.state?.model) setLiveModel(e.state.model)
@@ -482,6 +489,14 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     toBottom()
     await call('chat:send', session, full, images, files.map((f) => f.rel))
   }
+  // Lo que sale de la cola vuelve al cuadro de texto, para editarlo (como en Claude Code).
+  const restore = (texts: string[]) => { if (texts.length) setText((t) => [...texts.map(userText), t].filter((x) => x.trim()).join('\n\n')) }
+  const unqueue = useCallback(async (itemId: string) => { if (sid.current) restore(await call<string[]>('chat:unqueue', sid.current, itemId).catch(() => [])) }, [])
+  const stop = async () => {
+    if (!session) return
+    restore(await call<string[]>('chat:unqueue', session).catch(() => []))
+    call('chat:interrupt', session)
+  }
   const addFiles = async (paths: string[]) => {
     if (!paths.length) return
     try { const r = await call<Attachment[]>('chat:attach', projectId, paths); setFiles((xs) => [...xs, ...r.filter((a) => !xs.some((x) => x.rel === a.rel))]) } catch (e: any) { toast(e.message, true) }
@@ -527,7 +542,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
     // En la tablet, Enter del teclado en pantalla hace un salto de línea (se envía con el botón);
     // con teclado físico y mouse/trackpad (DeX, funda con teclado) Enter envía, como en la PC.
     const enterSends = !touchUi || e.ctrlKey || matchMedia('(any-pointer: fine)').matches
-    if (e.key === 'Enter' && !e.shiftKey && enterSends) { e.preventDefault(); if (!busy) send() }
+    if (e.key === 'Enter' && !e.shiftKey && enterSends) { e.preventDefault(); send() }
     e.stopPropagation()
   }
 
@@ -625,7 +640,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             </div>
           </div>
         )}
-        {items.map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} />)}
+        {items.map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
         {busy && !activeNow && <div className="think live"><span className="think-dot" /><span>{last?.kind === 'tool' ? 'Procesando el resultado…' : 'Pensando…'}</span><Elapsed since={busySince || Date.now()} /></div>}
         {busy && !!signalAt && !(last?.kind === 'tool' && last.status === 'ejecutando' && !last.streamed) && !(last?.kind === 'permission' && last.status === 'pendiente') && <Stall key={signalAt} at={signalAt} />}
       </div>
@@ -663,7 +678,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               <span className="ellipsis" style={{ maxWidth: 150 }}>{f.name}</span><span className="t4" style={{ fontSize: 11 }}>{fmtSize(f.size)}</span>
               <Button size="xs" variant="ghost" icon="x" tip="Quitar" onClick={() => setFiles((xs) => xs.filter((x) => x.rel !== f.rel))} /></div>)}
           </div>}
-          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? 'Claude está trabajando… podés escribir el próximo pedido' : touchUi ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
+          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? (phone ? 'Escribí el próximo pedido…' : 'Claude está trabajando… lo que escribas queda en cola') : phone ? 'Pedile algo a Claude…' : touchUi ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
             onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)} onBlur={() => setTimeout(() => setMention(null), 150)}
             onKeyDown={onKey} />
           <div className="composer-bar">
@@ -686,9 +701,10 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               onClick={() => setOption({ saver: !saver }, saver ? 'Modo ahorro desactivado (se aplica al próximo mensaje).' : 'Modo ahorro activado (se aplica al próximo mensaje).')} />
             </>}
             <div className="grow" />
-            {busy
-              ? <Button variant="danger" className="send-btn" icon="stop" tip="Detener" onClick={() => session && call('chat:interrupt', session)} />
-              : <Button variant="primary" className="send-btn" icon="send" tip="Enviar" kbd="Enter" onClick={send} disabled={!text.trim() && !files.length} />}
+            {/* Trabajando: con algo escrito, el botón lo pone en cola; vacío, detiene a Claude. */}
+            {busy && !text.trim() && !files.length
+              ? <Button variant="danger" className="send-btn" icon="stop" tip="Detener" onClick={stop} />
+              : <Button variant="primary" className="send-btn" icon="send" tip={busy ? 'Poner en cola: sale cuando Claude termine' : 'Enviar'} kbd="Enter" onClick={send} disabled={!text.trim() && !files.length} />}
           </div>
         </div>
       </div>
