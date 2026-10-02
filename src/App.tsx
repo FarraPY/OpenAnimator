@@ -1,3 +1,4 @@
+import { mergeSettings } from '../electron/settings-defaults'
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Home from './pages/Home'
 import Editor from './pages/Editor'
@@ -47,12 +48,9 @@ export default function App() {
 
   const updateSettings = useCallback(async (patch: SettingsPatch) => {
     // Optimista: la interfaz cambia al instante y se guarda en segundo plano.
-    setSettings((s) => {
-      if (!s) return s
-      const n: any = { ...s }
-      for (const k of Object.keys(patch) as Array<keyof Settings>) n[k] = typeof (patch as any)[k] === 'object' && !Array.isArray((patch as any)[k]) && k !== 'export' ? { ...(s as any)[k], ...(patch as any)[k] } : (patch as any)[k]
-      return n
-    })
+    // Mezcla profunda, como la del backend (con un nivel, elegir una voz dejaba plugins.fish sin temperatura y la
+    // pantalla se rompía hasta reabrir la app).
+    setSettings((s) => (s ? mergeSettings(s, patch) : s))
     try { setSettings(await call<Settings>('settings:set', patch)) } catch (e: any) { toast(e.message, true) }
   }, [toast])
 

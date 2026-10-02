@@ -3,6 +3,7 @@
  * mismo backend que la tablet (window.oa) y algunas piezas de la PC (el chat con Claude, la vista previa); la
  * navegación, el inicio, el editor, el timeline y los ajustes son propios del teléfono.
  */
+import { mergeSettings } from '../../../electron/settings-defaults'
 import { handleBack } from '../../android/ui/back'
 import { CSSProperties, ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -80,12 +81,9 @@ export default function PhoneApp() {
   }, [])
 
   const updateSettings = useCallback(async (patch: SettingsPatch) => {
-    setSettings((s) => {
-      if (!s) return s
-      const n: any = { ...s }
-      for (const k of Object.keys(patch) as Array<keyof Settings>) n[k] = typeof (patch as any)[k] === 'object' && !Array.isArray((patch as any)[k]) && k !== 'export' ? { ...(s as any)[k], ...(patch as any)[k] } : (patch as any)[k]
-      return n
-    })
+    // Mezcla profunda, como la del backend (con un nivel, elegir una voz dejaba plugins.fish sin temperatura y la
+    // pantalla se rompía hasta reabrir la app).
+    setSettings((s) => (s ? mergeSettings(s, patch) : s))
     try { setSettings(await call<Settings>('settings:set', patch)) } catch (e: any) { toast(e.message, true) }
   }, [toast])
 
