@@ -255,6 +255,14 @@ function transcript(project, session) {
     try { m = JSON.parse(line) } catch { continue }
     if (m.isSidechain) continue
     if (m.type === 'system' && m.subtype === 'compact_boundary') { items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
+    // Lo que el usuario mandó mientras Claude trabajaba y Claude leyó en el mismo turno (como midTurnPrompt en claude-transcript.ts).
+    const a = m.type === 'attachment' ? m.attachment : null
+    if (a?.type === 'queued_command' && (!a.commandMode || a.commandMode === 'prompt')) {
+      const p = a.prompt
+      const text = typeof p === 'string' ? p : Array.isArray(p) ? p.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : ''
+      if (text.trim()) items.push({ id: nid('u'), kind: 'user', text, images: (Array.isArray(p) ? p.filter((b) => b?.type === 'image').length : 0) || undefined, midTurn: true })
+      continue
+    }
     const c = m.message?.content
     if (m.type === 'user') {
       if (m.isMeta || m.isCompactSummary) continue
@@ -524,7 +532,8 @@ async function fromApp(m) {
     case 'in': {
       const p = procs.get(String(m.proc))
       if (!p) return
-      if (m.msg?.type === 'user') { p.busy = true; p.inflight = []; p.history.push(userEcho(m.msg)) }
+      // A mitad del turno (Claude lo lee sin cortarlo) lo que está llegando del mensaje en curso sigue siendo de ese mensaje.
+      if (m.msg?.type === 'user') { if (!p.busy) p.inflight = []; p.busy = true; p.history.push(userEcho(m.msg)) }
       if (m.msg?.type === 'control_response') p.perms.delete(m.msg.response?.request_id)
       if (!p.child.stdin.destroyed) p.child.stdin.write(JSON.stringify(m.msg) + '\n')
       return

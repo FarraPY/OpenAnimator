@@ -78,11 +78,19 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
 - Cambiar opciones NO debe cortar el turno: `setOptions` usa `control_request` `set_permission_mode` y
   `set_model` en caliente; esfuerzo/modo ahorro relanzan el proceso con `--resume` recién al terminar el turno
   (`restartWhenIdle`). El `close` de un proceso viejo no pisa `this.proc` del nuevo.
-- Cola (como en Claude Code): lo que se escribe mientras Claude trabaja entra como item `queued` («En cola») y sale solo
-  al terminar el turno (`next()` en claude-session.ts; agent.ts igual). La ✕ del mensaje o Detener lo sacan
-  (`chat:unqueue`, evento `remove`) y el texto vuelve al cuadro. Si Claude Code se cierra, `closed()` deja
-  `opts.resume`: lo próximo retoma la conversación (antes empezaba otra sin decirlo). Prueba:
-  `node --experimental-transform-types scripts/check-chat.mts`.
+- Escribir mientras Claude trabaja (como en Claude Code): con Claude Code 2.1+ el mensaje se le manda enseguida (con un
+  `uuid` de verdad: va al registro) y Claude Code lo lee en la próxima pausa del MISMO turno (llega con el resultado de la
+  próxima herramienta como «The user sent a new message while you were working», sin cortarlo) o, si el turno ya
+  terminaba, enseguida como un turno nuevo. Avisa con `command_lifecycle` (queued → started → completed, o cancelled) por
+  `command_uuid`: hasta «started» el item es `queued` + `midTurn` y la interfaz lo muestra abajo de todo; al leerlo se
+  quita y vuelve a entrar donde Claude lo leyó. La ✕ o Detener lo retiran con `cancel_async_message` (si ya lo leyó,
+  contesta `cancelled: false` y queda: «Claude ya lo leyó»). En el registro de la conversación queda como `attachment`
+  `queued_command` (modo `prompt`; `midTurnPrompt` en claude-transcript.ts y bridge.mjs). Si Claude Code no manda
+  `command_lifecycle` (una versión vieja; agent.ts igual) sigue la cola de la app: item `queued` que sale al terminar el
+  turno (`next()`). Con un mensaje sin leer no se relanza el proceso (opciones); si Claude Code se cierra, lo no leído
+  vuelve a la cola de la app y `closed()` deja `opts.resume`: lo próximo retoma la conversación. Pruebas:
+  `node --experimental-transform-types scripts/check-chat.mts` y, con el Claude Code de la PC contra una API de mentira
+  local (no gasta el plan), `scripts/check-chat-midturn.mts`.
 - Subagentes (herramienta Agent de Claude Code; en el iPhone y Termux `--tools Task`, que en 2.x es Agent): corren en
   segundo plano y el turno que los lanza termina antes; al terminar, Claude Code empieza solo otro turno (`system/init`
   sin pedido → busy). En el flujo: `background_tasks_changed` (la lista entera), `task_started`/`task_notification`

@@ -168,8 +168,8 @@ const ChatRow = memo(function ChatRow({ it, session, projectId, showThinking, sh
         {it.files?.map((f) => <span key={f} className="att"><Icon name={/\.(png|jpe?g|webp|gif)$/i.test(f) ? 'image' : 'file'} size={12} />{f.split('/').pop()}</span>)}
         {(it.images || 0) > (it.files?.filter((f) => /\.(png|jpe?g|webp|gif)$/i.test(f)).length || 0) && <span className="att"><Icon name="camera" size={12} />fotograma</span>}
       </div> : null}
-      {it.queued && <div className="msg-queued"><Icon name="clock" size={12} /><span className="grow">En cola: sale cuando Claude termine</span>
-        <button className="msg-unqueue" data-tip="Sacarlo de la cola (vuelve al cuadro de texto)" onClick={() => onUnqueue(it.id)}><Icon name="x" size={13} /></button></div>}
+      {it.queued && <div className="msg-queued"><Icon name="clock" size={12} /><span className="grow">{it.midTurn ? 'Claude lo lee en la próxima pausa, sin cortar lo que hace' : 'En cola: sale cuando Claude termine'}</span>
+        <button className="msg-unqueue" data-tip={it.midTurn ? 'Retirarlo antes de que Claude lo lea (vuelve al cuadro de texto)' : 'Sacarlo de la cola (vuelve al cuadro de texto)'} onClick={() => onUnqueue(it.id)}><Icon name="x" size={13} /></button></div>}
     </div>
   )
   if (it.kind === 'assistant') return it.text ? (
@@ -495,7 +495,11 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   }
   // Lo que sale de la cola vuelve al cuadro de texto, para editarlo (como en Claude Code).
   const restore = (texts: string[]) => { if (texts.length) setText((t) => [...texts.map(userText), t].filter((x) => x.trim()).join('\n\n')) }
-  const unqueue = useCallback(async (itemId: string) => { if (sid.current) restore(await call<string[]>('chat:unqueue', sid.current, itemId).catch(() => [])) }, [])
+  const unqueue = useCallback(async (itemId: string) => {
+    if (!sid.current) return
+    const texts = await call<string[]>('chat:unqueue', sid.current, itemId).catch(() => [])
+    if (texts.length) restore(texts); else toast('Claude ya lo leyó')
+  }, [])
   const stop = async () => {
     if (!session) return
     restore(await call<string[]>('chat:unqueue', session).catch(() => []))
@@ -594,7 +598,10 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
   const perm = PERMS.find((p) => p.value === opts.permissionMode) || PERMS[1]
   const pct = stats && stats.context && stats.window ? Math.round((stats.context / stats.window) * 100) : 0
   const level = stats?.context ? ctxLevel(stats.context, pct) : 0
-  const last = items[items.length - 1]
+  // Lo que Claude todavía no leyó va siempre abajo (como en Claude Code); al leerlo, el backend lo pone donde lo leyó.
+  const queuedN = items.reduce((n, x) => n + (x.queued ? 1 : 0), 0)
+  const shown = queuedN ? [...items.filter((x) => !x.queued), ...items.filter((x) => x.queued)] : items
+  const last = shown[shown.length - 1 - queuedN]
   const activeNow = last && ((last.kind === 'thinking' || last.kind === 'assistant') && last.status === 'streaming' || last.kind === 'tool' && last.status === 'ejecutando' || last.kind === 'permission' && last.status === 'pendiente')
   return (
     <div style={{ display: visible ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }}
@@ -644,9 +651,10 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             </div>
           </div>
         )}
-        {items.map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
+        {shown.slice(0, shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
         {busy && !activeNow && <div className="think live"><span className="think-dot" /><span>{last?.kind === 'tool' ? 'Procesando el resultado…' : 'Pensando…'}</span><Elapsed since={busySince || Date.now()} /></div>}
         {busy && !!signalAt && !(last?.kind === 'tool' && last.status === 'ejecutando' && !last.streamed) && !(last?.kind === 'permission' && last.status === 'pendiente') && <Stall key={signalAt} at={signalAt} />}
+        {shown.slice(shown.length - queuedN).map((it) => <ChatRow key={it.id} it={it} session={session} projectId={projectId} showThinking={showThinking} showCost={showCost} since={seen.current.get(it.id)} onUnqueue={unqueue} />)}
       </div>
       {away && (
         <button className={`to-bottom ${unread ? 'has-new' : ''}`} onClick={() => toBottom()} data-tip="Ir al último mensaje (Ctrl+Fin)">
@@ -682,7 +690,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
               <span className="ellipsis" style={{ maxWidth: 150 }}>{f.name}</span><span className="t4" style={{ fontSize: 11 }}>{fmtSize(f.size)}</span>
               <Button size="xs" variant="ghost" icon="x" tip="Quitar" onClick={() => setFiles((xs) => xs.filter((x) => x.rel !== f.rel))} /></div>)}
           </div>}
-          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? (phone ? 'Escribí el próximo pedido…' : 'Claude está trabajando… lo que escribas queda en cola') : phone ? 'Pedile algo a Claude…' : touchUi ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
+          <textarea ref={ta} rows={1} onPaste={onPaste} placeholder={busy ? (phone ? 'Escribile mientras trabaja…' : 'Escribile mientras trabaja: no lo interrumpe') : phone ? 'Pedile algo a Claude…' : touchUi ? 'Pedile algo a Claude… (@ menciona archivos del proyecto)' : 'Pedile algo a Claude… (@ para mencionar archivos)'} value={text}
             onChange={(e) => onTextChange(e.target.value, e.target.selectionStart)} onBlur={() => setTimeout(() => setMention(null), 150)}
             onKeyDown={onKey} />
           <div className="composer-bar">
@@ -708,7 +716,7 @@ export default function ChatPanel({ projectId, context, visible, windowMode, att
             {/* Trabajando: con algo escrito, el botón lo pone en cola; vacío, detiene a Claude. */}
             {busy && !text.trim() && !files.length
               ? <Button variant="danger" className="send-btn" icon="stop" tip="Detener" onClick={stop} />
-              : <Button variant="primary" className="send-btn" icon="send" tip={busy ? 'Poner en cola: sale cuando Claude termine' : 'Enviar'} kbd="Enter" onClick={send} disabled={!text.trim() && !files.length} />}
+              : <Button variant="primary" className="send-btn" icon="send" tip={busy ? 'Enviar sin interrumpir: Claude lo lee mientras trabaja' : 'Enviar'} kbd="Enter" onClick={send} disabled={!text.trim() && !files.length} />}
           </div>
         </div>
       </div>

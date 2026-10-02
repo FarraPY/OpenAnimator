@@ -17,8 +17,10 @@ export type ChatItem = {
   at?: number
   /** Herramienta: caracteres de la entrada que ya llegaron mientras Claude la escribe (p. ej. un archivo largo). */
   streamed?: number
-  /** Pedido escrito mientras Claude trabajaba: espera en la cola y sale solo cuando termina el turno. */
+  /** Pedido escrito mientras Claude trabajaba que todavía no leyó (ver `midTurn`). */
   queued?: boolean
+  /** Se le mandó a Claude Code a mitad del turno: lo lee en la próxima pausa del mismo turno, sin cortarlo. */
+  midTurn?: boolean
   /** Herramienta de un subagente: el id del item de la llamada que lo lanzó. */
   parent?: string
 }
@@ -34,6 +36,8 @@ export type ChatOptions = { projectId: string; permissionMode: string; model?: s
 
 let seq = 0
 export const nid = (p: string) => `${p}-${Date.now().toString(36)}-${(seq++).toString(36)}`
+/** Claude Code usa el uuid de cada mensaje del usuario como el del registro de la conversación: tiene que ser uno de verdad. */
+const uuid = () => globalThis.crypto?.randomUUID?.() || '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (+c ^ (Math.random() * 16) >> (+c / 4)).toString(16))
 
 /**
  * El subagente «escena» (`--agents`): para repartir un video entre varios Claude a la vez, uno por escena. Un subagente
@@ -123,13 +127,27 @@ export abstract class ClaudeStreamSession {
     if (code && code !== 0) this.notice(`Claude terminó (código ${code}). ${errTail.trim().split('\n').slice(-3).join(' ')}`, 'error')
     // Lo próximo retoma esta conversación (si no, empezaba otra sin decirlo, con la anterior todavía en pantalla).
     if (this.sessionId) this.opts.resume = this.sessionId
+    // Lo que Claude todavía no había leído se pierde con el proceso: vuelve a la cola de la app y sale al relanzarlo.
+    this.waiting.unshift(...[...this.unread.values()].map(({ id, content }) => ({ id, content })))
+    for (const { id } of this.unread.values()) this.patch(id, { midTurn: false })
+    this.unread.clear()
     this.dropTasks()
     this.state()
     this.next()
   }
 
-  /** Lo que se escribió mientras Claude trabajaba, en orden: sale cuando termina el turno (como en Claude Code). */
+  /**
+   * Lo que se escribe mientras Claude trabaja. Claude Code tiene su propia cola: un mensaje que le llega a mitad del turno
+   * lo lee en la próxima pausa (con el resultado de la próxima herramienta) sin cortar lo que hace, o, si el turno ya
+   * terminaba, sale enseguida como un turno nuevo; avisa qué pasa con cada uno (`command_lifecycle`, por su uuid). Si no
+   * avisa (una versión vieja), lo escrito espera en la cola de la app (`waiting`) y sale cuando termina el turno.
+   */
+  private lifecycle = false
   private waiting: Array<{ id: string; content: any[] }> = []
+  /** Mandados a Claude Code a mitad del turno que todavía no leyó: uuid → item y contenido. */
+  private unread = new Map<string, { id: string; content: any[] }>()
+  /** Pedidos de retirar un mensaje de la cola de Claude Code (cancel_async_message) que esperan respuesta. */
+  private cancels = new Map<string, (ok: boolean) => void>()
 
   send(text: string, images: Array<{ mediaType: string; data: string }> = [], files: string[] = []) {
     if (!this.alive && !this.start()) return
@@ -137,6 +155,13 @@ export abstract class ClaudeStreamSession {
     for (const im of images) content.push({ type: 'image', source: { type: 'base64', media_type: im.mediaType, data: im.data } })
     content.push({ type: 'text', text })
     const it: ChatItem = { id: nid('u'), kind: 'user', text, images: images.length, files: files.length ? files : undefined }
+    if (this.busy && this.lifecycle) {
+      const u = uuid()
+      this.unread.set(u, { id: it.id, content })
+      this.push({ ...it, queued: true, midTurn: true })
+      this.writeLine({ type: 'user', uuid: u, message: { role: 'user', content } })
+      return
+    }
     if (this.busy) { this.waiting.push({ id: it.id, content }); this.push({ ...it, queued: true }); return }
     this.push(it)
     this.deliver(content)
@@ -146,7 +171,39 @@ export abstract class ClaudeStreamSession {
     this.busy = true
     this.signalAt = Date.now()
     this.state()
-    this.writeLine({ type: 'user', message: { role: 'user', content } })
+    this.writeLine({ type: 'user', uuid: uuid(), message: { role: 'user', content } })
+  }
+  /** Claude Code avisó qué pasó con un mensaje: «started» = lo leyó (en el turno en curso o en uno nuevo). */
+  private onLifecycle(m: any) {
+    this.lifecycle = true
+    const q = this.unread.get(m.command_uuid)
+    if (!q || m.state === 'queued') return
+    this.unread.delete(m.command_uuid)
+    const i = this.items.findIndex((x) => x.id === q.id)
+    if (i < 0) return
+    if (m.state === 'started') {
+      // Va donde Claude lo leyó: lo que hizo antes de leerlo queda arriba.
+      const [it] = this.items.splice(i, 1)
+      this.emit({ session: this.id, type: 'remove', item: { id: it.id } })
+      this.push({ ...it, queued: false })
+    } else if ((m.state === 'cancelled' || m.state === 'discarded' || m.state === 'refused') && !this.cancelling.has(m.command_uuid)) {
+      // Claude Code lo descartó sin que el usuario lo pidiera (si lo pidió, unqueue saca el item): que no quede «en cola».
+      this.patch(q.id, { queued: false })
+      this.notice('Claude no llegó a leer tu último mensaje: volvé a mandarlo.', 'warn')
+    }
+  }
+  private cancelling = new Set<string>()
+  /** Pide a Claude Code que saque un mensaje de su cola; false si ya lo leyó (o no contesta). */
+  private cancelUnread(u: string) {
+    return new Promise<boolean>((resolve) => {
+      if (!this.alive) return resolve(false)
+      const rid = nid('cancel')
+      this.cancelling.add(u) // lo saca unqueue (el «cancelled» de Claude Code puede llegar antes o después de la respuesta)
+      const done = (ok: boolean) => { clearTimeout(t); this.cancels.delete(rid); resolve(ok) }
+      const t = setTimeout(() => done(false), 4000)
+      this.cancels.set(rid, done)
+      this.writeLine({ type: 'control_request', request_id: rid, request: { subtype: 'cancel_async_message', message_uuid: u } })
+    })
   }
   /** El próximo de la cola, si Claude quedó libre. */
   private next() {
@@ -156,16 +213,26 @@ export abstract class ClaudeStreamSession {
     this.patch(q.id, { queued: false })
     this.deliver(q.content)
   }
-  /** Saca de la cola uno (o todos, sin `itemId`) sin mandarlo; devuelve sus textos para volver a editarlos. */
-  unqueue(itemId?: string) {
-    const texts: string[] = []
+  /**
+   * Saca de la cola uno (o todos, sin `itemId`) sin mandarlo; devuelve sus textos para volver a editarlos. Uno que ya se le
+   * mandó a Claude Code se le pide que lo retire: si ya lo leyó, queda (y no vuelve su texto).
+   */
+  async unqueue(itemId?: string) {
+    const ids: string[] = []
     this.waiting = this.waiting.filter((q) => {
       if (itemId && q.id !== itemId) return true
-      const i = this.items.findIndex((x) => x.id === q.id)
-      if (i >= 0) { texts.push(this.items[i].text || ''); this.items.splice(i, 1) }
-      this.emit({ session: this.id, type: 'remove', item: { id: q.id } })
+      ids.push(q.id)
       return false
     })
+    const sent = [...this.unread].filter(([, q]) => !itemId || q.id === itemId)
+    const ok = await Promise.all(sent.map(([u]) => this.cancelUnread(u)))
+    sent.forEach(([u, q], k) => { this.cancelling.delete(u); if (ok[k]) { this.unread.delete(u); ids.push(q.id) } })
+    const texts: string[] = []
+    for (const id of ids) {
+      const i = this.items.findIndex((x) => x.id === id)
+      if (i >= 0) { texts.push(this.items[i].text || ''); this.items.splice(i, 1) }
+      this.emit({ session: this.id, type: 'remove', item: { id } })
+    }
     return texts
   }
 
@@ -230,7 +297,8 @@ export abstract class ClaudeStreamSession {
   private restartPending = false
   private restartWhenIdle() {
     if (!this.alive) return
-    if (this.busy || this.bgTasks) { this.restartPending = true; return }
+    // Con mensajes que Claude todavía no leyó, sigue otro turno: relanzar ahora los perdería.
+    if (this.busy || this.bgTasks || this.unread.size) { this.restartPending = true; return }
     this.restartPending = false
     const resume = this.sessionId
     this.kill()
@@ -325,8 +393,11 @@ export abstract class ClaudeStreamSession {
         if (this.restartPending) setTimeout(() => { this.restartWhenIdle(); this.next() }, 50)
         else this.next()
         break
+      case 'command_lifecycle': this.onLifecycle(m); break
       case 'control_response': {
         const r = m.response || {}
+        const cancel = this.cancels.get(r.request_id)
+        if (cancel) { cancel(r.subtype === 'success' && !!r.response?.cancelled); break }
         const fb = this.pendingCtl.get(r.request_id)
         this.pendingCtl.delete(r.request_id)
         if (fb && r.subtype === 'error') fb()

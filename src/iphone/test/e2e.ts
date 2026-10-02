@@ -92,12 +92,18 @@ export async function runE2E() {
         // La API de mentira dice cuántos mensajes le llegaron: con el historial son más que el nuevo.
         const n = Number(/Mensajes: (\d+)/.exec(said)?.[1] || 0)
         if (n < 3) { await call('chat:kill', again.id).catch(() => {}); throw new Error(`Claude no recibió la conversación anterior (${n} mensajes): ${said}`) }
-        // Escribir mientras Claude trabaja: el segundo queda en cola y sale solo cuando termina el primero.
+        // Escribir mientras Claude trabaja: el segundo se le manda enseguida a Claude Code, que lo lee en la próxima pausa
+        // del turno o, como acá (el primero no usa herramientas), apenas termina, en un turno nuevo. Al leerlo, el item
+        // se quita y vuelve a entrar donde lo leyó (sin «queued»).
         const queued = await new Promise<any[]>((resolve, reject) => {
           const got: any[] = []
           const off = on('chat:event', (e: any) => {
             if (e.session !== again.id) return
-            if (e.type === 'item') got.push({ ...e.item, wasQueued: !!e.item.queued })
+            if (e.type === 'item') {
+              const prev = got.find((x) => x.id === e.item.id)
+              if (prev) { got.splice(got.indexOf(prev), 1); got.push(Object.assign(prev, e.item, { removed: false })) } else got.push({ ...e.item, wasQueued: !!e.item.queued })
+            }
+            if (e.type === 'remove') { const it = got.find((x) => x.id === e.item.id); if (it) it.removed = true }
             if (e.type === 'patch') { const it = got.find((x) => x.id === e.item.id); if (it) Object.assign(it, e.item) }
             if (got.filter((x) => x.kind === 'result').length === 2) { off(); resolve(got) }
           })
@@ -105,8 +111,8 @@ export async function runE2E() {
         })
         await call('chat:kill', again.id).catch(() => {})
         const second = queued.find((x) => x.kind === 'user' && x.text === 'Segundo')
-        const order = queued.map((x) => (x.kind === 'user' ? `${x.text}${x.wasQueued ? ' (en cola)' : ''}` : x.kind)).join(' → ')
-        if (!second?.wasQueued || second.queued) throw new Error('La cola no funcionó: ' + order)
+        const order = queued.filter((x) => !x.removed).map((x) => (x.kind === 'user' ? `${x.text}${x.wasQueued ? (x.midTurn ? ' (a mitad del turno)' : ' (en cola)') : ''}` : x.kind)).join(' → ')
+        if (!second?.wasQueued || second.queued || second.removed) throw new Error('La cola no funcionó: ' + order)
         return { listed, loaded: again.items.length, messages: n, queue: order }
       }, 180000)
       // Un subagente «escena» en segundo plano: arranca con sus instrucciones y su fila termina con el resumen.

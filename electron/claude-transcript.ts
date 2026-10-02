@@ -29,6 +29,19 @@ export function sessionInfo(head: string, tail: string): { title: string; first:
   return { title: title || first.split('\n')[0].slice(0, 80), first: first.slice(0, 220) }
 }
 
+/**
+ * Un mensaje que el usuario mandó mientras Claude trabajaba y que Claude leyó en el mismo turno: Claude Code no lo guarda
+ * como mensaje sino como un agregado del resultado de la herramienta (attachment `queued_command`, modo `prompt`; los
+ * avisos de los subagentes que terminan van igual, con otro modo).
+ */
+export function midTurnPrompt(m: any): { text: string; images: number } | null {
+  const a = m?.type === 'attachment' ? m.attachment : null
+  if (a?.type !== 'queued_command' || (a.commandMode && a.commandMode !== 'prompt')) return null
+  const p = a.prompt
+  const text = typeof p === 'string' ? p : Array.isArray(p) ? p.filter((b: any) => b?.type === 'text').map((b: any) => b.text).join('\n') : ''
+  return text.trim() ? { text, images: Array.isArray(p) ? p.filter((b: any) => b?.type === 'image').length : 0 } : null
+}
+
 /** Reconstruye lo que se ve en el chat a partir del archivo de la conversación. */
 export function parseTranscript(text: string): ChatItem[] {
   const items: ChatItem[] = []
@@ -38,6 +51,8 @@ export function parseTranscript(text: string): ChatItem[] {
     try { m = JSON.parse(line) } catch { continue }
     if (m.isSidechain) continue
     if (m.type === 'system' && m.subtype === 'compact_boundary') { items.push({ id: nid('n'), kind: 'notice', text: 'Conversación compactada.', level: 'info' }); continue }
+    const mid = midTurnPrompt(m)
+    if (mid) { items.push({ id: nid('u'), kind: 'user', text: mid.text, images: mid.images || undefined, midTurn: true }); continue }
     const c = m.message?.content
     if (m.type === 'user') {
       if (m.isMeta || m.isCompactSummary) continue

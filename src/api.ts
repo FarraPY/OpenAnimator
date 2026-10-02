@@ -72,7 +72,7 @@ export type Attachment = { rel: string; name: string; size: number; image?: stri
 type NN<T> = NonNullable<T>
 export type SettingsPatch = { [K in keyof Settings]?: NN<Settings[K]> extends object ? { [J in keyof NN<Settings[K]>]?: NN<Settings[K]>[J] extends object ? Partial<NN<Settings[K]>[J]> : NN<Settings[K]>[J] } : Settings[K] }
 
-export type ChatItem = { id: string; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'permission' | 'result' | 'notice'; text?: string; name?: string; input?: any; status?: string; result?: string; isError?: boolean; requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: string; tokens?: number; streamed?: number; at?: number; queued?: boolean; parent?: string }
+export type ChatItem = { id: string; kind: 'user' | 'assistant' | 'thinking' | 'tool' | 'permission' | 'result' | 'notice'; text?: string; name?: string; input?: any; status?: string; result?: string; isError?: boolean; requestId?: string; images?: number; files?: string[]; cost?: number; durationMs?: number; level?: string; tokens?: number; streamed?: number; at?: number; queued?: boolean; midTurn?: boolean; parent?: string }
 export type ChatEvent = { session: string; type: 'item' | 'patch' | 'remove' | 'state'; item?: Partial<ChatItem> & { id: string }; state?: { busy: boolean; alive: boolean; sessionId?: string; model?: string; effort?: string; permissionMode?: string; stats?: ChatStats; signalAt?: number; tasks?: number } }
 export type ChatStats = { context: number; window: number; cost: number; turns: number; compactions: number; output: number }
 
