@@ -28,7 +28,10 @@ final class NetStream: NSObject, URLSessionDataDelegate {
     /// máquina (http: la API de mentira de las pruebas).
     static func allowed(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased(), let scheme = url.scheme?.lowercased() else { return false }
-        if scheme == "https" { return ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "www.youtube.com", "youtube.com", "m.youtube.com", "youtubei.googleapis.com"].contains(host) }
+        if scheme == "https" { return ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com", "www.youtube.com", "youtube.com", "m.youtube.com", "youtubei.googleapis.com",
+                                       // Plugins (sin CORS: la voz de Fish no contesta el OPTIONS), íconos y tipografías (webhost.ts, NATIVE_HTTP).
+                                       "api.openai.com", "generativelanguage.googleapis.com", "openrouter.ai", "api.elevenlabs.io", "api.fish.audio",
+                                       "api.iconify.design", "api.fontsource.org", "cdn.jsdelivr.net"].contains(host) }
         return scheme == "http" && (host == "127.0.0.1" || host == "localhost")
     }
 

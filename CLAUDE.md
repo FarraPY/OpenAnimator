@@ -97,6 +97,10 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   hosts, sólo adónde van las claves). Búsqueda web: el WebSearch de Claude Code (corre en Anthropic; en el iPhone y Termux
   `--tools Task,WebSearch`). Quitar el fondo, sólo en el iPhone: `Cutout.swift` (VNGenerateForegroundInstanceMaskRequest
   de Vision, iOS 17); `toolDefs()` no se lo ofrece a Claude donde no anda.
+- En la app del iPhone, los pedidos de los plugins (y de íconos y tipografías) van por la red de iOS (`NATIVE_HTTP` en
+  webhost.ts → nativeFetch → NetStream.swift, que tiene esos hosts): con el fetch de la página rige CORS y la voz de Fish
+  no contesta el OPTIONS (404) → «Load failed» sin más datos. Diagnóstico para Claude: `oa_registro_app` lee
+  logs/app.log (errores con su mensaje, cierres del motor web, memoria; sin claves).
 - `~/.claude/sessions/` (el registro de los Claude Code vivos) no se guarda ni se copia entre Workers (`RUNTIME` en
   webclaude.ts): cada conversación es un proceso nuevo. Para ver qué hace Claude Code en el iPhone: `oa.claudeDev` con
   `"debug": true` → `--debug-file` en claude/home/oa-debug/<chat>.log (lo usa la integración continua).

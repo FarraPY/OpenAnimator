@@ -16,7 +16,7 @@
  */
 import type { Host, DeviceInfo, AsyncOpts } from '../../android/host'
 import { WebFS } from './webfs'
-import { nativeCall } from './native'
+import { nativeCall, nativeFetch } from './native'
 import { Secrets } from './secrets'
 import * as Enc from './encoder'
 import * as Aud from './audio'
@@ -197,7 +197,7 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
       const b = await fs.fileBlob(a.path); window.open(URL.createObjectURL(new Blob([b], { type: guessMime(a.path) })), '_blank'); return true
     },
     'clipboard.image': async (a) => { const b = await fs.fileBlob(a.path); await navigator.clipboard.write([new ClipboardItem({ [b.type || 'image/png']: b })]); return true },
-    'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal),
+    'http.request': async (a, ev, o) => httpRequest(fs, secrets, a, ev, o.signal, native ? (netFetch ||= nativeFetch(host.onEvent.bind(host))) : undefined),
     'zip.import': async (a, ev) => Zip.unzipTo(fs, a.zip, a.dest, ev), 'zip.export': async (a, ev) => Zip.zipDir(fs, a.dir, a.out, a.prefix, a.skip, ev),
     'audio.peaks': async (a) => Aud.peaks(fs, a.path, a.perSec || 100), 'audio.decode': async (a) => Aud.decodePcm(fs, a),
     'cap.start': async (a) => nativeCall('cap.start', { url: a.url, width: a.width, height: a.height, workers: a.workers, prefs: a.prefs }),
@@ -260,7 +260,14 @@ const SECRET_HOSTS: Record<string, RegExp> = {
   'plugin.openai': /^api\.openai\.com$/, 'plugin.gemini': /^generativelanguage\.googleapis\.com$/, 'plugin.openrouter': /^openrouter\.ai$/,
   'plugin.elevenlabs': /^api\.elevenlabs\.io$/, 'plugin.fish': /^api\.fish\.audio$/, claude: /^api\.anthropic\.com$/,
 }
-async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => void, signal?: AbortSignal) {
+/**
+ * Los servidores de los plugins (y de íconos y tipografías) van, en la app, por la red de iOS (NetStream.swift): con el
+ * fetch de la página rige CORS y algunos no lo contestan (la voz de Fish: su OPTIONS da 404, «Load failed» sin más),
+ * y además esconde los errores reales.
+ */
+const NATIVE_HTTP = /^(api\.(openai\.com|elevenlabs\.io|fish\.audio|iconify\.design|fontsource\.org)|generativelanguage\.googleapis\.com|openrouter\.ai|cdn\.jsdelivr\.net)$/
+let netFetch: typeof fetch | undefined
+async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => void, signal?: AbortSignal, nfetch?: typeof fetch) {
   const url = String(a.url)
   if (!/^https:\/\//.test(url)) throw new Error('URL inválida')
   const hostName = new URL(url).hostname
@@ -277,7 +284,11 @@ async function httpRequest(fs: WebFS, secrets: Secrets, a: any, ev: (e: any) => 
   signal?.addEventListener('abort', () => ac.abort(), { once: true })
   const timer = a.timeoutMs ? setTimeout(() => ac.abort(), a.timeoutMs) : 0
   try {
-    const r = await fetch(url, { method: a.method || 'GET', headers, body, signal: ac.signal })
+    const go = nfetch && NATIVE_HTTP.test(hostName) ? nfetch : fetch
+    const r = await go(url, { method: a.method || 'GET', headers, body, signal: ac.signal }).catch((e: any) => {
+      if (e?.name === 'AbortError') throw e
+      throw new Error(`No se pudo conectar con ${hostName}: ${e?.message || e}`)
+    })
     const hs: Record<string, string> = {}
     r.headers.forEach((v, k) => { hs[k] = v })
     if (a.saveTo && r.ok) { const blob = await r.blob(); await fs.writeBlob(a.saveTo, blob); return { status: r.status, headers: hs, size: blob.size } }

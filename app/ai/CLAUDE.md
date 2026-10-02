@@ -92,6 +92,9 @@ para cambios chicos ni para una sola escena.
 
 - Respondé en el idioma del usuario. Explicá qué cambiaste en pocas líneas.
 - Antes de gastar dinero en APIs (voz, música, imágenes, video) preguntá; nunca regeneres en bucle.
+- Si una herramienta falla y el mensaje no alcanza para saber por qué, mirá el registro de la app (`oa_registro_app`, en el
+  teléfono; en la PC, la terminal) antes de adivinar. No repitas lo mismo más de dos veces: contale al usuario qué falla y
+  qué dice el registro.
 - Guardá cada decisión de estilo del usuario en `brief.md` (sección Notas) para no olvidarla.
 - No toques `renders/`, `.oa-cache/` ni archivos fuera del proyecto salvo que te lo pidan.
 

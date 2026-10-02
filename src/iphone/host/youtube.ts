@@ -7,51 +7,10 @@
  * (VideoAnalysis.swift vana.download, por tramos). Se baja hasta 720p en H.264 y el audio AAC aparte; para analizar no
  * hace falta juntarlos. Si el video trae subtítulos (español, si no inglés), también.
  */
-import { b64decode, b64encode, nativeCall } from './native'
+import { nativeCall, nativeFetch } from './native'
 
-type OnEvent = (name: string, cb: (d: any) => void) => () => void
+import type { OnEvent } from './native'
 export type YtResult = { title: string; channel: string; duration: number; description: string; video: string; audio: string | null; subs: string | null; client: string }
-
-/** fetch por la red de iOS, con la respuesta por partes (evento "net": head, chunk, end, error). */
-export function nativeFetch(onEvent: OnEvent) {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const req = input instanceof Request ? input : null
-    const url = req ? req.url : String(input)
-    const method = (init?.method || req?.method || 'GET').toUpperCase()
-    const headers: Record<string, string> = {}
-    // Los de la librería vienen en init.headers (un Headers suelto: conserva User-Agent y Origin).
-    if (req) req.headers.forEach((v, k) => { headers[k] = v })
-    if (init?.headers) new Headers(init.headers).forEach((v, k) => { headers[k] = v })
-    const raw = init?.body ?? (req && method !== 'GET' && method !== 'HEAD' ? await req.arrayBuffer() : null)
-    let body = ''
-    if (raw != null) {
-      const bytes = typeof raw === 'string' ? new TextEncoder().encode(raw) : raw instanceof ArrayBuffer ? new Uint8Array(raw)
-        : ArrayBuffer.isView(raw) ? new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength) : new Uint8Array(await new Response(raw as BodyInit).arrayBuffer())
-      body = b64encode(bytes)
-    }
-    const id = 'yt' + Math.random().toString(36).slice(2)
-    return new Promise<Response>((resolve, reject) => {
-      let ctrl: ReadableStreamDefaultController<Uint8Array> | null = null
-      const stream = new ReadableStream<Uint8Array>({ start: (c) => { ctrl = c } })
-      const off = onEvent('net', (ev) => {
-        if (ev?.id !== id) return
-        if (ev.type === 'head') {
-          const empty = [101, 204, 205, 304].includes(ev.status)
-          resolve(new Response(empty ? null : stream, { status: ev.status, headers: ev.headers }))
-        } else if (ev.type === 'chunk') ctrl?.enqueue(b64decode(ev.data))
-        else if (ev.type === 'end') { off(); ctrl?.close() }
-        else if (ev.type === 'error') {
-          off()
-          const e = new Error(ev.message || 'Error de red')
-          reject(e)
-          try { ctrl?.error(e) } catch { /* ya cerrado */ }
-        }
-      })
-      init?.signal?.addEventListener('abort', () => { void nativeCall('http.cancel', { id }).catch(() => {}) })
-      nativeCall('http.stream', { id, url, method, headers, body }).catch((e) => { off(); reject(e) })
-    })
-  }
-}
 
 /** El id de un enlace de YouTube (watch?v=, youtu.be/, shorts/, embed/, live/), o null. */
 export function videoId(link: string): string | null {

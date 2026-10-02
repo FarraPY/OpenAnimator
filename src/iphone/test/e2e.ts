@@ -224,6 +224,9 @@ export async function runE2E() {
         await fsw.writeBytes(`projects/${project.id}/assets/figura.png`, Uint8Array.from(atob(cv.toDataURL('image/png').split(',')[1]), (ch) => ch.charCodeAt(0)))
         recorte = await text('oa_quitar_fondo', { imagen: 'assets/figura.png' })
       } catch (e: any) { recorte = 'ERROR ' + (e?.message || e) }
+      // Diagnóstico: el registro de la app (lo escribe AppLog.swift; la línea «Arranca» está siempre).
+      const reg = await text('oa_registro_app', { buscar: 'Arranca', lineas: 5 })
+      if (!/Arranca OpenAnimator/.test(reg)) throw new Error('oa_registro_app: ' + reg.slice(0, 300))
       // Borrar: a la papelera; project.json no se puede.
       await text('oa_borrar', { rutas: ['assets/figura.png', 'project.json'] })
       if (fsw.exists(`projects/${project.id}/assets/figura.png`) || !fsw.exists(`projects/${project.id}/project.json`)) throw new Error('oa_borrar no hizo lo esperado')
