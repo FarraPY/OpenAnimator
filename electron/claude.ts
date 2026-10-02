@@ -21,7 +21,8 @@ import { parseTranscript, sessionInfo, sessionsSlug } from './claude-transcript'
 
 export type { ChatEvent, ChatItem, ChatOptions, ChatStats } from './claude-session'
 
-const READONLY_TOOLS = ['oa_proyecto', 'oa_ver_fotogramas', 'oa_hoja_contactos', 'oa_auditar_layout', 'oa_medios', 'oa_info_medio', 'oa_resolver_nota', 'oa_plugins', 'oa_voces']
+const READONLY_TOOLS = ['oa_proyecto', 'oa_ver_fotogramas', 'oa_hoja_contactos', 'oa_auditar_layout', 'oa_medios', 'oa_info_medio', 'oa_resolver_nota', 'oa_plugins', 'oa_voces',
+  'oa_buscar_iconos', 'oa_guardar_iconos', 'oa_buscar_fuentes', 'oa_usar_fuente'] // gratis y sólo escriben en assets/
 const SYSTEM_APPEND = [
   'Estás trabajando dentro de OpenAnimator, un estudio de video donde las escenas son HTML/SVG/JS en función del tiempo.',
   'Antes de crear o cambiar escenas leé CLAUDE.md y las skills de OpenAnimator (dirección artística, escenas, voz y tiempos).',

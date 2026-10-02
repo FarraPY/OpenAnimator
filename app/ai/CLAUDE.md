@@ -112,6 +112,15 @@ cuando aporten, no en cada paso. Consultá `oa_plugins` para saber cuáles está
 - Después de generar una imagen, MIRALA (la herramienta devuelve una vista previa) antes de usarla.
 - Desde una escena en `scenes/`, las rutas a medios son relativas: `../assets/ia/fondo.png`.
 
+## Recursos libres (gratis, sin clave)
+
+| Herramienta | Para qué |
+|---|---|
+| `oa_buscar_iconos`, `oa_guardar_iconos` | íconos SVG de Iconify (buscá en inglés) → `assets/iconos/`. Una sola colección por video (lucide, tabler, ph, material-symbols…); logos de marcas: `simple-icons` o `logos` |
+| `oa_buscar_fuentes`, `oa_usar_fuente` | cualquier tipografía libre (las de Google Fonts) → `assets/fuentes/<id>.css`; en la escena, `<link rel="stylesheet" href="../assets/fuentes/<id>.css">`. Mejor que las del sistema: se ve igual en todos los equipos y al exportar |
+| `WebSearch` | datos, cifras y referencias para el guion; anotá en `brief.md` de dónde sale lo que uses |
+| `oa_quitar_fondo` | (sólo en el iPhone) recorta personas, animales u objetos de una imagen → PNG transparente en `assets/recortes/` |
+
 ## Archivos adjuntos y plantillas
 
 - Lo que el usuario adjunta en el chat se copia a `adjuntos/` del proyecto (PDF, imágenes, guiones, audio…).

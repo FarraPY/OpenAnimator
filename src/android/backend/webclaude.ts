@@ -18,7 +18,7 @@ import { projectChanged, send } from './events'
 import { projectDir } from './projects'
 import { buildSystem } from './prompt'
 import { getSettings, setSettings } from './settings'
-import { TOOL_DEFS, runTool, toolKind, validateInput, type ToolContent } from './tools'
+import { TOOL_DEFS, runTool, toolDefs, toolKind, validateInput, type ToolContent } from './tools'
 import { holdAwake } from './wake'
 
 const MCP = 'mcp__openanimator__'
@@ -61,7 +61,7 @@ export async function manifest(version?: string): Promise<Manifest | null> {
 }
 
 /** Pruebas en la PC (sólo en localhost): la API de mentira y un paquete local en vez de npm. */
-function dev(): { env?: Record<string, string>; tarball?: string } {
+function dev(): { env?: Record<string, string>; tarball?: string; debug?: boolean } {
   if (!/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return {}
   try { return JSON.parse(localStorage.getItem('oa.claudeDev') || '{}') } catch { return {} }
 }
@@ -351,19 +351,25 @@ async function homeFiles(projectId: string, resume?: string) {
   const keep = dir ? `${dir.slice(SAVED.length + 1)}/${resume}` : null
   const out: Array<[string, Uint8Array]> = []
   for (const e of fs.walk(SAVED, { depth: 12, max: 20000, skipHidden: false })) {
-    if (e.dir || !e.path) continue
+    if (e.dir || !e.path || RUNTIME.test(e.path)) continue
     if (e.path.startsWith('.claude/projects/') && !(keep && (e.path === `${keep}.jsonl` || e.path.startsWith(`${keep}/`)))) continue
     out.push([`${HOME}/${e.path}`, new Uint8Array(await (await fs.fileBlob(`${SAVED}/${e.path}`)).arrayBuffer())])
   }
   return out
 }
 
+/**
+ * Lo que es de un proceso vivo y no se lleva a otro: el registro de los Claude Code que están corriendo
+ * (~/.claude/sessions/<pid>.json). Cada conversación es un Worker nuevo y los de antes ya no existen para él.
+ */
+const RUNTIME = /^\.claude\/sessions\//
+
 /** Lo que Claude Code escribió en su carpeta personal, a la carpeta de datos. */
 function save(files: Array<[string, Uint8Array | null]>) {
   for (const [p, data] of files) {
-    if (!p.startsWith(HOME + '/')) continue
+    if (!p.startsWith(HOME + '/') || RUNTIME.test(p.slice(HOME.length + 1))) continue
     const to = `${SAVED}/${p.slice(HOME.length + 1)}`
-    try { if (data) wfs().writeBytes(to, data); else wfs().delete(to) } catch (e) { console.error('No se pudo guardar', to, e) }
+    try { if (data) wfs().writeBytes(to, data); else if (wfs().exists(to)) wfs().delete(to) } catch (e) { console.error('No se pudo guardar', to, e) }
   }
 }
 
@@ -380,7 +386,7 @@ async function mcp(m: { method: string; body: string }, projectId: string) {
   switch (req.method) {
     case 'initialize': return ok({ protocolVersion: req.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'openanimator', version: '1' } })
     case 'ping': return ok({})
-    case 'tools/list': return ok({ tools: TOOL_DEFS.map((t) => ({ name: t.name, description: phone(t.description), inputSchema: t.input_schema })) })
+    case 'tools/list': return ok({ tools: toolDefs().map((t) => ({ name: t.name, description: phone(t.description), inputSchema: t.input_schema })) })
     case 'tools/call': {
       const name = String(req.params?.name || ''), input = req.params?.arguments || {}
       const bad = validateInput(name, input)
@@ -447,10 +453,12 @@ class WebChat extends ClaudeStreamSession {
         // Como en la tablet: sin la configuración del usuario ni las herramientas propias de Claude Code (no hay
         // terminal ni disco): todo pasa por las de OpenAnimator. Salvo los subagentes (Task, que en Claude Code 2.x es
         // Agent): trabajan en paralelo con las mismas herramientas, p. ej. una escena cada uno.
-        '--setting-sources', '', '--tools', 'Task', '--agents', JSON.stringify(sceneAgent(system)), '--append-system-prompt', system, '--allowedTools', [...READONLY, 'Agent', 'Task'].join(',')]
+        '--setting-sources', '', '--tools', 'Task,WebSearch', '--agents', JSON.stringify(sceneAgent(system)), '--append-system-prompt', system, '--allowedTools', [...READONLY, 'Agent', 'Task', 'WebSearch'].join(',')]
       if (o.model) args.push('--model', o.model)
       if (o.effort) args.push('--effort', o.effort)
       if (o.resume) args.push('--resume', o.resume)
+      // Pruebas: el registro de depuración de Claude Code queda en claude/home/oa-debug/<chat>.log.
+      if (dev().debug) args.push('--debug-file', `${HOME}/oa-debug/${this.id}.log`)
       if (p.w !== this.w) return // se cerró mientras arrancaba
       const { w, started } = launch(args, { projectId: o.projectId, resume: o.resume, onMessage: (w, m) => { if (mine(w)) this.fromWorker(w, m) } })
       this.w = p.w = w

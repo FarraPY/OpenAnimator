@@ -108,7 +108,7 @@ jobs:
           node ios/test/mock-anthropic.mjs 8899 > mock.log 2>&1 &
           UDID=$(cat udid.txt)
           xcrun simctl launch --console-pty --terminate-running-process "$UDID" com.openanimator.app -OATest e2e \
-            -OADev '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8899","ANTHROPIC_API_KEY":"sk-ant-api03-prueba"}}' > e2e.log 2>&1 &
+            -OADev '{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:8899","ANTHROPIC_API_KEY":"sk-ant-api03-prueba"},"debug":true}' > e2e.log 2>&1 &
           PID=$!
           for i in $(seq 1 900); do grep -q "OA-DIAG-" e2e.log && break; sleep 1; done
           sleep 1; kill $PID 2>/dev/null || true

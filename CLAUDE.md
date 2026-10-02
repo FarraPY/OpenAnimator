@@ -87,6 +87,16 @@ HTML/SVG/JS generados por IA, timeline, voz y exportación con GPU (NVENC).
   subagente NO ve las instrucciones del que lo lanza: el subagente propio `escena` (`sceneAgent` en claude-session.ts,
   `--agents`; en la PC por archivo) lleva las de la app. Con subagentes trabajando no se relanza el proceso (opciones) ni
   se cierra una conversación estacionada. Guía para Claude en app/ai/CLAUDE.md («Subagentes»).
+- Recursos libres para Claude, gratis y sin clave (`electron/web-assets.ts`, sin Node): íconos de Iconify y tipografías de
+  Fontsource (todas las de Google Fonts: su API da la lista y los rangos unicode; los woff2 salen de jsDelivr; se bajan
+  latin y latin-ext con su CSS a assets/fuentes/). En la PC por server.js → api.ts (fetch de Node); en el teléfono y la
+  tablet, tools.ts con el http.request del puente (la CSP de la página de la tablet no deja pedir afuera; Java no limita
+  hosts, sólo adónde van las claves). Búsqueda web: el WebSearch de Claude Code (corre en Anthropic; en el iPhone y Termux
+  `--tools Task,WebSearch`). Quitar el fondo, sólo en el iPhone: `Cutout.swift` (VNGenerateForegroundInstanceMaskRequest
+  de Vision, iOS 17); `toolDefs()` no se lo ofrece a Claude donde no anda.
+- `~/.claude/sessions/` (el registro de los Claude Code vivos) no se guarda ni se copia entre Workers (`RUNTIME` en
+  webclaude.ts): cada conversación es un proceso nuevo. Para ver qué hace Claude Code en el iPhone: `oa.claudeDev` con
+  `"debug": true` → `--debug-file` en claude/home/oa-debug/<chat>.log (lo usa la integración continua).
 - Historial: `listSessions`/`loadTranscript` leen `~/.claude/projects/<ruta con [^a-zA-Z0-9]→->/*.jsonl`
   (título = último `aiTitle`); retomar = `chat:create` con `resume`.
 - Salir del editor NO corta a Claude: ChatPanel manda `chat:leave` (la conversación queda "estacionada" por

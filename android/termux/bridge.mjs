@@ -121,13 +121,15 @@ async function startProc(procId, o) {
   const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--permission-prompt-tool', 'stdio', '--permission-mode', MODES.has(o.permissionMode) ? o.permissionMode : 'acceptEdits',
     '--mcp-config', mcpFile, '--strict-mcp-config', '--setting-sources', '']
-  // Sólo los subagentes (Task; Agent en Claude Code 2.x) de las herramientas propias: trabajan en paralelo con las de la app.
-  if (await supportsToolsFlag()) args.push('--tools', 'Task')
-  else args.push('--disallowedTools', BUILTIN.filter((t) => t !== 'Task').join(','))
+  // De las herramientas propias, sólo los subagentes (Task; Agent en Claude Code 2.x), que trabajan en paralelo con las
+  // de la app, y la búsqueda web (corre en los servidores de Anthropic, no ve el disco de Termux).
+  const OWN = ['Task', 'WebSearch']
+  if (await supportsToolsFlag()) args.push('--tools', OWN.join(','))
+  else args.push('--disallowedTools', BUILTIN.filter((t) => !OWN.includes(t)).join(','))
   if (typeof o.system === 'string' && o.system) args.push('--append-system-prompt', o.system)
   if (agentsFlag && o.agents && typeof o.agents === 'object') args.push('--agents', JSON.stringify(o.agents))
   const allowed = (Array.isArray(o.allowedTools) ? o.allowedTools : []).filter((t) => /^[\w-]+$/.test(t))
-  if (allowed.length) args.push('--allowedTools', [...allowed, 'Agent', 'Task'].join(','))
+  if (allowed.length) args.push('--allowedTools', [...allowed, 'Agent', 'Task', 'WebSearch'].join(','))
   if (typeof o.model === 'string' && /^[\w.[\]-]+$/.test(o.model)) args.push('--model', o.model)
   if (EFFORTS.has(o.effort)) args.push('--effort', o.effort)
   if (typeof o.resume === 'string' && /^[\w-]+$/.test(o.resume)) args.push('--resume', o.resume)

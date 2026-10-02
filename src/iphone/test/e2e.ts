@@ -122,8 +122,14 @@ export async function runE2E() {
           })
         })
         await call('chat:send', c.id, `[mcp] Agent ${JSON.stringify({ description: 'Escena E2E', prompt: 'Escribí la escena de prueba', subagent_type: 'escena' })}`, [], [])
-        await done
+        const late = await Promise.race([done.then(() => false), new Promise<boolean>((r) => setTimeout(() => r(true), 150000))])
         await call('chat:kill', c.id).catch(() => {})
+        if (late) {
+          // El registro de depuración de Claude Code (oa.claudeDev con debug, como en la integración continua).
+          let dbg = ''
+          try { dbg = (host() as WebHost).fs.readText(`claude/home/oa-debug/${c.id}.log`).slice(-6000) } catch (e: any) { dbg = 'sin registro: ' + e.message }
+          throw new Error(`El subagente no terminó en 150 s. Items: ${got.map((x) => `${x.kind}${x.name ? ':' + x.name : ''}(${x.status || ''}) ${String(x.text || x.result || '').slice(0, 120)}`).join(' | ')}\nRegistro de Claude Code:\n${dbg}`)
+        }
         const agent = got.find((x) => x.name === 'Agent')
         if (!/Subagente con guía/.test(String(agent?.result || ''))) throw new Error('El subagente no recibió sus instrucciones: ' + String(agent?.result || '').slice(0, 200))
         return { result: String(agent.result).slice(0, 160), items: got.map((x) => `${x.kind}${x.name ? ':' + x.name : ''}${x.status ? '(' + x.status + ')' : ''}`) }
@@ -195,6 +201,31 @@ export async function runE2E() {
       if (!tpl) throw new Error('La plantilla no aparece en la lista')
       return { id: t.id, description: tpl.description, guide: guide.slice(0, 200) }
     }, 180000)
+    // Recursos libres de Claude: íconos (Iconify), tipografías (Fontsource) y quitar el fondo (Vision).
+    await step(R, 'tools:recursos', async () => {
+      const { runTool } = await import('../../android/backend/tools')
+      const ctx = { projectId: project.id, changed: () => {} }
+      const text = async (name: string, input: any) => ((await runTool(name, input, ctx))[0] as any).text as string
+      const fsw = (host() as WebHost).fs
+      const iconos = await text('oa_buscar_iconos', { buscar: 'rocket' })
+      if (!/:rocket/.test(iconos)) throw new Error('Búsqueda de íconos: ' + iconos.slice(0, 300))
+      await text('oa_guardar_iconos', { iconos: ['lucide:rocket'] })
+      if (!fsw.exists(`projects/${project.id}/assets/iconos/lucide-rocket.svg`)) throw new Error('No se guardó el ícono')
+      const fuente = await text('oa_usar_fuente', { familia: 'Inter' })
+      if (!fsw.exists(`projects/${project.id}/assets/fuentes/inter.css`) || !fsw.exists(`projects/${project.id}/assets/fuentes/inter/latin-400-normal.woff2`)) throw new Error('No se guardó la tipografía: ' + fuente)
+      // Quitar el fondo: una figura dibujada sobre un fondo liso (el simulador puede no tener Vision completo: no corta la prueba).
+      let recorte = ''
+      try {
+        const cv = document.createElement('canvas'); cv.width = cv.height = 512
+        const g = cv.getContext('2d')!
+        g.fillStyle = '#f2f2f2'; g.fillRect(0, 0, 512, 512)
+        g.fillStyle = '#d33'; g.beginPath(); g.arc(256, 230, 140, 0, Math.PI * 2); g.fill()
+        g.fillStyle = '#333'; g.fillRect(226, 360, 60, 120)
+        await fsw.writeBytes(`projects/${project.id}/assets/figura.png`, Uint8Array.from(atob(cv.toDataURL('image/png').split(',')[1]), (ch) => ch.charCodeAt(0)))
+        recorte = await text('oa_quitar_fondo', { imagen: 'assets/figura.png' })
+      } catch (e: any) { recorte = 'ERROR ' + (e?.message || e) }
+      return { iconos: iconos.split('\n')[0], fuente: fuente.split('\n')[0], recorte }
+    }, 120000)
     const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''
       let shown = 0

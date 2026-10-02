@@ -21,7 +21,7 @@ import { basename, blobToBase64, canvasBase64, dirname, fs, hash, join, uniqueNa
 import { projectDir } from './projects'
 import { buildSystem, PLAN_NOTE, SAVER_API as SAVER } from './prompt'
 import { getSettings } from './settings'
-import { runTool, TOOL_DEFS, toolKind, type ToolContent, validateInput } from './tools'
+import { runTool, toolDefs, toolKind, type ToolContent, validateInput } from './tools'
 import { holdAwake } from './wake'
 
 type Msg = { role: 'user' | 'assistant'; content: any[] }
@@ -130,7 +130,7 @@ function explain(e: any): string {
 
 /** Herramientas tal como se mandan a la API (con streaming ansioso de la entrada). */
 function apiTools() {
-  return TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema, eager_input_streaming: true }))
+  return toolDefs().map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema, eager_input_streaming: true }))
 }
 
 // ── guardado de conversaciones: <proyecto>/.oa-chat/ ──────────────────────────

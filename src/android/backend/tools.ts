@@ -10,6 +10,7 @@ import * as M from './media'
 import * as PL from './plugins'
 import { host } from '../host'
 import { getSettings } from './settings'
+import * as WA from '../../../electron/web-assets'
 
 export type ToolContent = Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string } }>
 export type ToolKind = 'read' | 'edit' | 'cost'
@@ -41,7 +42,33 @@ export const TOOL_DEFS: Array<{ name: string; description: string; input_schema:
   { name: 'oa_consultar_ia', kind: 'cost', description: 'Consulta a otro modelo de IA configurado por el usuario (OpenAI API, Gemini u OpenRouter): segunda opinión, ideas, revisión de un guion o de fotogramas (imagenes = rutas del proyecto).', input_schema: { type: 'object', properties: { project: P, consulta: { type: 'string' }, proveedor: { type: 'string', enum: ['openai', 'gemini', 'openrouter'] }, modelo: { type: 'string' }, imagenes: { type: 'array', items: { type: 'string' } }, sistema: { type: 'string', description: 'Instrucciones de sistema opcionales' } }, required: ['consulta'] } },
   { name: 'oa_resolver_nota', kind: 'edit', description: 'Borra una nota del usuario del timeline. Llamala apenas terminás el cambio que pedía esa nota (las notas resueltas no deben quedar en el timeline); no borres notas pendientes.', input_schema: { type: 'object', properties: { project: P, timeline: TL, id: { type: 'string' } }, required: ['id'] } },
 ]
+TOOL_DEFS.push(
+  // Íconos y tipografías libres (electron/web-assets.ts; las mismas descripciones que en app/mcp/server.js).
+  { name: 'oa_buscar_iconos', kind: 'read', description: 'Busca íconos libres en Iconify (más de 200 mil SVG de unas 150 colecciones, con logos de marcas y emoji). Buscá en inglés ("rocket", "chart", "user"). Devuelve nombres «colección:ícono» para oa_guardar_iconos. Gratis.', input_schema: { type: 'object', properties: { project: P, buscar: { type: 'string' }, coleccion: { type: 'string', description: 'Prefijo de una colección, p. ej. "lucide" o "simple-icons"' }, limite: { type: 'number', description: '32-200 (por defecto 64)' } }, required: ['buscar'] } },
+  { name: 'oa_guardar_iconos', kind: 'edit', description: 'Baja íconos (nombres de oa_buscar_iconos) a assets/iconos/ como SVG y devuelve los chicos para pegarlos en la escena. Gratis.', input_schema: { type: 'object', properties: { project: P, iconos: { type: 'array', items: { type: 'string' }, description: 'Nombres «colección:ícono»' }, color: { type: 'string', description: '#rrggbb para los de un color (si no, usan currentColor)' } }, required: ['iconos'] } },
+  { name: 'oa_buscar_fuentes', kind: 'read', description: 'Busca tipografías libres (las de Google Fonts y otras, vía Fontsource) por nombre o por estilo: sans-serif, serif, display (títulos), handwriting (manuscrita) o monospace. Sin parámetros, las más usadas. Gratis.', input_schema: { type: 'object', properties: { project: P, buscar: { type: 'string' }, categoria: { type: 'string', enum: ['sans-serif', 'serif', 'display', 'handwriting', 'monospace'] } } } },
+  { name: 'oa_usar_fuente', kind: 'edit', description: 'Baja una tipografía al proyecto (assets/fuentes/<id>.css y sus woff2, para español y portugués) y dice cómo usarla en la escena: se ve igual en la vista previa, al exportar y en cualquier equipo. Gratis.', input_schema: { type: 'object', properties: { project: P, familia: { type: 'string', description: 'Nombre, p. ej. "Space Grotesk"' }, pesos: { type: 'array', items: { type: 'number' }, description: 'Por defecto [400, 700]' }, cursiva: { type: 'boolean' } }, required: ['familia'] } },
+  { name: 'oa_quitar_fondo', kind: 'edit', description: 'Quita el fondo de una imagen del proyecto (personas, animales u objetos) y guarda un PNG con transparencia en assets/recortes/. Corre en el teléfono y es gratis. Devuelve una vista previa sobre un damero para revisar el recorte.', input_schema: { type: 'object', properties: { project: P, imagen: { type: 'string', description: 'Ruta relativa de la imagen (png, jpg, webp, heic)' }, nombre: { type: 'string', description: 'Nombre del PNG (sin extensión)' }, recortar: { type: 'boolean', description: 'Recortar al tamaño de la figura (por defecto, el mismo tamaño que la original)' } }, required: ['imagen'] } },
+)
+/** Las que se le ofrecen a Claude en este equipo: quitar el fondo, sólo donde se puede (la app del iPhone, con Vision). */
+export const toolDefs = () => TOOL_DEFS.filter((t) => t.name !== 'oa_quitar_fondo' || (host().kind === 'web' && !!host().call<boolean>('img.cutoutAvailable')))
 export const toolKind = (name: string): ToolKind => TOOL_DEFS.find((t) => t.name === name)?.kind || 'cost'
+
+/** Íconos y tipografías por el http.request del puente (en la tablet va por Java: la CSP de la página no deja pedir afuera). */
+function webNet(project: string, ctx?: ToolCtx): WA.Net {
+  const dir = projectDir(project)
+  if (!dir) throw new Error('Proyecto no encontrado')
+  const get = async (url: string, saveTo?: string) => {
+    const r = await host().callAsync<{ status: number; text?: string; size?: number }>('http.request', { method: 'GET', url, headers: {}, body: null, saveTo: saveTo || null, timeoutMs: 60000 })
+    if (r.status < 200 || r.status >= 300) throw new Error(`${new URL(url).host} respondió ${r.status}`)
+    return r
+  }
+  return {
+    text: async (url) => (await get(url)).text || '',
+    download: async (url, rel) => { const r = await get(url, join(dir, rel)); ctx?.changed(rel); return r.size || 0 },
+    save: (rel, text) => { fs.writeText(join(dir, rel), text); ctx?.changed(rel) },
+  }
+}
 
 // ── validación mínima de entradas (con streaming ansioso la API no valida) ─────
 export function validateInput(name: string, input: any): string | null {
@@ -355,6 +382,20 @@ export async function runTool(name: string, input: any, ctx: ToolCtx): Promise<T
       writeTimeline(project, tid, tl)
       ctx.changed(p.timelines.find((t) => t.id === tid)?.file || 'timelines/main.json')
       return txt(JSON.stringify({ removed: before - tl.notes.length }))
+    }
+    case 'oa_buscar_iconos': return txt(await WA.searchIcons(webNet(project), input.buscar, { limite: input.limite, coleccion: input.coleccion }))
+    case 'oa_guardar_iconos': return txt(await WA.saveIcons(webNet(project, ctx), input.iconos, { color: input.color }))
+    case 'oa_buscar_fuentes': return txt(await WA.searchFonts(webNet(project), input.buscar, input.categoria))
+    case 'oa_usar_fuente': return txt(await WA.saveFont(webNet(project, ctx), input.familia, { pesos: input.pesos, cursiva: input.cursiva }))
+    case 'oa_quitar_fondo': {
+      if (!toolDefs().some((t) => t.name === 'oa_quitar_fondo')) throw new Error('Quitar el fondo por ahora funciona en la app del iPhone.')
+      const { rel, abs } = resolvePath({ ...ctx, projectId: project }, input.imagen)
+      const base = String(input.nombre || rel.split('/').pop()!.replace(/\.[^.]+$/, '')).replace(/[^\w-]+/g, '-').slice(0, 60) || 'recorte'
+      const outRel = `assets/recortes/${base}.png`
+      const r = await host().callAsync<{ width: number; height: number; instances: number; preview: string }>('img.cutout', { path: abs, out: join(projectDir(project)!, outRel), crop: !!input.recortar })
+      ctx.changed(outRel)
+      return [{ type: 'text', text: `Recorte guardado en ${outRel} (${r.width}×${r.height}, PNG con transparencia; ${r.instances} figura${r.instances === 1 ? '' : 's'}). Desde una escena en scenes/: <img src="../${outRel}">. La vista previa va sobre un damero: lo gris es lo que se quitó.` },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: r.preview } }]
     }
   }
   throw new Error('Herramienta desconocida: ' + name)

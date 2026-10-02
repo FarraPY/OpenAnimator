@@ -13,6 +13,20 @@ import { readProject, readTimeline, writeTimeline, listAssets, projectDir } from
 import { probeMedia } from './ffmpeg'
 import { nativeImage } from 'electron'
 import * as PL from './plugins'
+import * as WA from './web-assets'
+
+/** Íconos y tipografías (web-assets.ts): por la red de la PC, guardados en la carpeta del proyecto. */
+function webNet(project: string): WA.Net {
+  const dir = projectDir(project)
+  if (!dir) throw new Error('Proyecto no encontrado')
+  const put = (rel: string, data: string | Uint8Array) => { const f = path.join(dir, rel); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, data) }
+  const get = async (u: string) => { const r = await fetch(u); if (!r.ok) throw new Error(`${new URL(u).host} respondió ${r.status}`); return r }
+  return {
+    text: async (u) => (await get(u)).text(),
+    download: async (u, rel) => { const b = new Uint8Array(await (await get(u)).arrayBuffer()); put(rel, b); return b.length },
+    save: put,
+  }
+}
 
 /** Miniatura JPEG (base64) para que la IA vea lo que se generó sin mandarle el PNG entero. */
 function preview(abs: string, w = 640) {
@@ -83,6 +97,10 @@ const handlers: Record<string, (b: any) => Promise<any>> = {
   async sfx(b) { const r = await PL.sfx(b.project, { text: b.text, seconds: b.seconds, name: b.name }); return { path: r.path, duration: r.duration, provider: r.provider } },
   async transcribe(b) { return PL.transcribe(abs(b.project, b.path), { provider: b.provider, lang: b.lang }) },
   async ask(b) { return PL.ask({ prompt: b.prompt, provider: b.provider, model: b.model, images: (b.images || []).map((f: string) => abs(b.project, f)), system: b.system }) },
+  async iconSearch(b) { return WA.searchIcons(webNet(b.project), String(b.query || ''), { limite: b.limit, coleccion: b.collection }) },
+  async iconSave(b) { return WA.saveIcons(webNet(b.project), b.icons || [], { color: b.color }) },
+  async fontSearch(b) { return WA.searchFonts(webNet(b.project), b.query, b.category) },
+  async fontSave(b) { return WA.saveFont(webNet(b.project), String(b.family || ''), { pesos: b.weights, cursiva: b.italic }) },
   async resolveNote(b) {
     const p = readProject(b.project)
     const tid = b.timeline || p.activeTimeline

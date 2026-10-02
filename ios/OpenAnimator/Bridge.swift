@@ -97,6 +97,8 @@ final class Bridge: NSObject, WKScriptMessageHandlerWithReply {
         case "vana.info", "vana.scan", "vana.frames", "vana.audio", "vana.download", "vana.cancel":
             VideoAnalysis.emit = { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
             VideoAnalysis.handle(op, a, replyHandler)
+        case "img.cutout":
+            Cutout.handle(a, replyHandler)
         case "whisper.status", "whisper.install", "whisper.remove", "whisper.transcribe", "whisper.test", "whisper.preload":
             LocalWhisper.shared.emit = { [weak self] name, data in DispatchQueue.main.async { self?.controller?.emit(name, data) } }
             LocalWhisper.shared.handle(op, a, replyHandler)

@@ -9,13 +9,13 @@ import { projectDir } from './projects'
 import { buildSystem } from './prompt'
 import { getSettings } from './settings'
 import * as T from './termux'
-import { TOOL_DEFS, toolKind } from './tools'
+import { TOOL_DEFS, toolDefs, toolKind } from './tools'
 import { holdAwake } from './wake'
 
 const MCP = 'mcp__openanimator__'
 // Lo que sólo lee o renderiza no pide permiso (como en la PC).
 const READONLY = TOOL_DEFS.filter((t) => t.kind === 'read').map((t) => MCP + t.name)
-const mcpTools = () => TOOL_DEFS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema }))
+const mcpTools = () => toolDefs().map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema }))
 
 class TermuxChat extends ClaudeStreamSession {
   private running = false

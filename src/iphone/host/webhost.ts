@@ -150,6 +150,8 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     'whisper.available': () => native,
     // Medir videos para «Crear plantilla desde un video» (ios/OpenAnimator/VideoAnalysis.swift): sólo en la app.
     'vana.available': () => native,
+    // Quitar el fondo de una imagen (ios/OpenAnimator/Cutout.swift, Vision): sólo en la app.
+    'img.cutoutAvailable': () => native,
     'snap.close': () => { if (native) void nativeCall('snap.close').catch(() => {}); return true },
   }
   /**
@@ -206,6 +208,13 @@ export async function createWebHost(base: string, native = false): Promise<WebHo
     ...Object.fromEntries(['status', 'install', 'remove', 'transcribe', 'test', 'preload'].map((k) => [`whisper.${k}`, whisper(`whisper.${k}`)])),
     ...Object.fromEntries(['info', 'scan', 'frames', 'audio'].map((k) => [`vana.${k}`, vana(`vana.${k}`)])),
     'vana.cancel': async (a) => (native ? nativeCall('vana.cancel', { job: a.job }) : true),
+    'img.cutout': async (a) => {
+      if (!native) throw unavailable('Quitar el fondo')
+      await fs.flush() // la imagen tiene que estar en el disco
+      const r = await nativeCall<{ file: string; size: number }>('img.cutout', { path: a.path, out: a.out, crop: !!a.crop })
+      fs.noteFile(r.file, r.size)
+      return r
+    },
     // Un video de YouTube para analizar (youtube.ts: youtubei.js por la red de iOS; los bytes los baja Swift).
     'yt.download': async (a, ev) => {
       if (!native) throw unavailable('Bajar videos de YouTube')
