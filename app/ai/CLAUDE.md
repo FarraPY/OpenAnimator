@@ -120,6 +120,7 @@ cuando aporten, no en cada paso. Consultá `oa_plugins` para saber cuáles está
 | `oa_buscar_fuentes`, `oa_usar_fuente` | cualquier tipografía libre (las de Google Fonts) → `assets/fuentes/<id>.css`; en la escena, `<link rel="stylesheet" href="../assets/fuentes/<id>.css">`. Mejor que las del sistema: se ve igual en todos los equipos y al exportar |
 | `WebSearch` | datos, cifras y referencias para el guion; anotá en `brief.md` de dónde sale lo que uses |
 | `oa_quitar_fondo` | (sólo en el iPhone) recorta personas, animales u objetos de una imagen → PNG transparente en `assets/recortes/` |
+| `oa_ejecutar_js` | (teléfono y tablet, donde no hay terminal) JavaScript aislado que guarda en el proyecto: sintetizar efectos de sonido con Web Audio (whoosh, pop, impacto, riser, bip: `OfflineAudioContext` → `wav()` → `guardar`), dibujar imágenes con canvas o calcular. Sin plugin de sonido, es la forma de tener efectos gratis |
 
 ## Archivos adjuntos y plantillas
 

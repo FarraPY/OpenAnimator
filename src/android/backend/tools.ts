@@ -11,6 +11,7 @@ import * as PL from './plugins'
 import { host } from '../host'
 import { getSettings } from './settings'
 import * as WA from '../../../electron/web-assets'
+import { runJs } from './sandbox'
 
 export type ToolContent = Array<{ type: 'text'; text: string } | { type: 'image'; source: { type: 'base64'; media_type: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string } }>
 export type ToolKind = 'read' | 'edit' | 'cost'
@@ -48,6 +49,7 @@ TOOL_DEFS.push(
   { name: 'oa_guardar_iconos', kind: 'edit', description: 'Baja íconos (nombres de oa_buscar_iconos) a assets/iconos/ como SVG y devuelve los chicos para pegarlos en la escena. Gratis.', input_schema: { type: 'object', properties: { project: P, iconos: { type: 'array', items: { type: 'string' }, description: 'Nombres «colección:ícono»' }, color: { type: 'string', description: '#rrggbb para los de un color (si no, usan currentColor)' } }, required: ['iconos'] } },
   { name: 'oa_buscar_fuentes', kind: 'read', description: 'Busca tipografías libres (las de Google Fonts y otras, vía Fontsource) por nombre o por estilo: sans-serif, serif, display (títulos), handwriting (manuscrita) o monospace. Sin parámetros, las más usadas. Gratis.', input_schema: { type: 'object', properties: { project: P, buscar: { type: 'string' }, categoria: { type: 'string', enum: ['sans-serif', 'serif', 'display', 'handwriting', 'monospace'] } } } },
   { name: 'oa_usar_fuente', kind: 'edit', description: 'Baja una tipografía al proyecto (assets/fuentes/<id>.css y sus woff2, para español y portugués) y dice cómo usarla en la escena: se ve igual en la vista previa, al exportar y en cualquier equipo. Gratis.', input_schema: { type: 'object', properties: { project: P, familia: { type: 'string', description: 'Nombre, p. ej. "Space Grotesk"' }, pesos: { type: 'array', items: { type: 'number' }, description: 'Por defecto [400, 700]' }, cursiva: { type: 'boolean' } }, required: ['familia'] } },
+  { name: 'oa_ejecutar_js', kind: 'edit', description: 'Ejecuta JavaScript en un espacio aislado del equipo (sin internet ni acceso a la app; acá no hay terminal) para generar o procesar archivos del proyecto: sintetizar efectos de sonido o música simple con Web Audio (OfflineAudioContext → wav(buffer) → guardar), dibujar imágenes con OffscreenCanvas (convertToBlob → guardar), calcular datos o tiempos. El código es el cuerpo de una función async que recibe guardar(ruta, datos), leer(ruta) → ArrayBuffer, leerTexto(ruta), decodificarAudio(ruta) → AudioBuffer, wav(audioBuffer) → bytes de un WAV y console.log; lo que devuelve con return vuelve como texto. Rutas relativas al proyecto (p. ej. assets/sfx/whoosh.wav).', input_schema: { type: 'object', properties: { project: P, codigo: { type: 'string', description: 'Cuerpo de una función async' }, segundos: { type: 'number', description: 'Tiempo máximo, 5-120 (por defecto 60)' } }, required: ['codigo'] } },
   { name: 'oa_quitar_fondo', kind: 'edit', description: 'Quita el fondo de una imagen del proyecto (personas, animales u objetos) y guarda un PNG con transparencia en assets/recortes/. Corre en el teléfono y es gratis. Devuelve una vista previa sobre un damero para revisar el recorte.', input_schema: { type: 'object', properties: { project: P, imagen: { type: 'string', description: 'Ruta relativa de la imagen (png, jpg, webp, heic)' }, nombre: { type: 'string', description: 'Nombre del PNG (sin extensión)' }, recortar: { type: 'boolean', description: 'Recortar al tamaño de la figura (por defecto, el mismo tamaño que la original)' } }, required: ['imagen'] } },
 )
 /** Las que se le ofrecen a Claude en este equipo: quitar el fondo, sólo donde se puede (la app del iPhone, con Vision). */
@@ -387,6 +389,21 @@ export async function runTool(name: string, input: any, ctx: ToolCtx): Promise<T
     case 'oa_guardar_iconos': return txt(await WA.saveIcons(webNet(project, ctx), input.iconos, { color: input.color }))
     case 'oa_buscar_fuentes': return txt(await WA.searchFonts(webNet(project), input.buscar, input.categoria))
     case 'oa_usar_fuente': return txt(await WA.saveFont(webNet(project, ctx), input.familia, { pesos: input.pesos, cursiva: input.cursiva }))
+    case 'oa_ejecutar_js': {
+      const at = (p: string) => resolvePath({ ...ctx, projectId: project }, p)
+      const r = await runJs(project, String(input.codigo || ''), {
+        read: async (p) => (await fs.readBytes(at(p).abs)).slice(0), // una copia: se transfiere al iframe
+        write: async (p, data) => { const { rel, abs } = at(p); await fs.writeBytes(abs, data); ctx.changed(rel) },
+      }, Math.min(120, Math.max(5, Number(input.segundos) || 60)) * 1000)
+      const parts = [
+        r.saved.length ? `Guardado: ${r.saved.join(', ')}` : '',
+        r.logs.length ? `console:\n${r.logs.join('\n').slice(0, 8000)}` : '',
+        r.value !== undefined ? `Devolvió: ${r.value}` : '',
+        r.error ? `ERROR: ${r.error}` : '',
+      ].filter(Boolean)
+      if (r.error && !r.saved.length) throw new Error(parts.join('\n\n'))
+      return txt(parts.join('\n\n') || 'Listo (sin salida ni archivos).')
+    }
     case 'oa_quitar_fondo': {
       if (!toolDefs().some((t) => t.name === 'oa_quitar_fondo')) throw new Error('Quitar el fondo por ahora funciona en la app del iPhone.')
       const { rel, abs } = resolvePath({ ...ctx, projectId: project }, input.imagen)

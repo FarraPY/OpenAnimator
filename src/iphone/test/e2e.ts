@@ -224,7 +224,17 @@ export async function runE2E() {
         await fsw.writeBytes(`projects/${project.id}/assets/figura.png`, Uint8Array.from(atob(cv.toDataURL('image/png').split(',')[1]), (ch) => ch.charCodeAt(0)))
         recorte = await text('oa_quitar_fondo', { imagen: 'assets/figura.png' })
       } catch (e: any) { recorte = 'ERROR ' + (e?.message || e) }
-      return { iconos: iconos.split('\n')[0], fuente: fuente.split('\n')[0], recorte }
+      // Código aislado: un «bip» con Web Audio a un WAV del proyecto; sin ver la app ni la red.
+      const js = await text('oa_ejecutar_js', { codigo: `
+        const sr = 48000, ctx = new OfflineAudioContext(1, sr / 2, sr), o = ctx.createOscillator(), g = ctx.createGain()
+        o.frequency.value = 880; g.gain.setValueAtTime(0.5, 0); g.gain.linearRampToValueAtTime(0, 0.5)
+        o.connect(g).connect(ctx.destination); o.start()
+        await guardar('assets/sfx/bip.wav', wav(await ctx.startRendering()))
+        let app = 'aislado'; try { app = 'VE LA APP: ' + parent.document.title } catch (e) { app = 'aislado (' + e.name + ')' }
+        let red = 'sin red'; try { await fetch('https://api.iconify.design/'); red = 'HAY RED' } catch (e) {}
+        return { app, red }` })
+      if (!fsw.exists(`projects/${project.id}/assets/sfx/bip.wav`) || /VE LA APP|HAY RED/.test(js)) throw new Error('oa_ejecutar_js: ' + js)
+      return { iconos: iconos.split('\n')[0], fuente: fuente.split('\n')[0], recorte, js }
     }, 120000)
     const out = await step(R, 'export', () => new Promise<any>((resolve, reject) => {
       let id = ''

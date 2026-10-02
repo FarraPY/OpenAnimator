@@ -1,0 +1,66 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Sin red ni nada de afuera: lo único que sale de acá son los mensajes al que la abrió (oa_ejecutar_js). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; img-src data: blob:; media-src data: blob:; worker-src blob:">
+<script>
+/*
+ * Espacio aislado para el código de Claude (oa_ejecutar_js, en el teléfono y la tablet, donde no hay terminal). La abre
+ * src/android/backend/sandbox.ts en un iframe con sandbox="allow-scripts" (origen opaco: no ve la app, ni el puente,
+ * ni los proyectos) y le pasa el código y un MessageChannel. El código es el cuerpo de una función async con:
+ *   guardar(ruta, datos)        ruta del proyecto; datos: texto, ArrayBuffer, typed array o Blob
+ *   leer(ruta) → ArrayBuffer    leerTexto(ruta) → string
+ *   decodificarAudio(ruta, sr?) → AudioBuffer      wav(audioBuffer) → Uint8Array (WAV PCM de 16 bits)
+ * y console.log; lo que devuelve (return) vuelve como JSON.
+ */
+(function () {
+  var port = null, seq = 0, pending = new Map()
+  function ask(msg, transfer) {
+    return new Promise(function (res, rej) { var id = ++seq; pending.set(id, { res: res, rej: rej }); msg.id = id; port.postMessage(msg, transfer || []) })
+  }
+  async function bytes(d) {
+    if (typeof d === 'string') return new TextEncoder().encode(d)
+    if (d instanceof ArrayBuffer) return new Uint8Array(d)
+    if (ArrayBuffer.isView(d)) return new Uint8Array(d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength))
+    if (d instanceof Blob) return new Uint8Array(await d.arrayBuffer())
+    throw new Error('guardar: los datos tienen que ser texto, ArrayBuffer, typed array o Blob')
+  }
+  function wav(buf) {
+    var ch = buf.numberOfChannels, n = buf.length, sr = buf.sampleRate, size = n * ch * 2
+    var v = new DataView(new ArrayBuffer(44 + size)), o = 0
+    function s(t) { for (var i = 0; i < t.length; i++) v.setUint8(o++, t.charCodeAt(i)) }
+    function u32(x) { v.setUint32(o, x, true); o += 4 } function u16(x) { v.setUint16(o, x, true); o += 2 }
+    s('RIFF'); u32(36 + size); s('WAVE'); s('fmt '); u32(16); u16(1); u16(ch); u32(sr); u32(sr * ch * 2); u16(ch * 2); u16(16); s('data'); u32(size)
+    var data = []; for (var c = 0; c < ch; c++) data.push(buf.getChannelData(c))
+    for (var i = 0; i < n; i++) for (var c2 = 0; c2 < ch; c2++) { var x = Math.max(-1, Math.min(1, data[c2][i])); v.setInt16(o, x < 0 ? x * 0x8000 : x * 0x7fff, true); o += 2 }
+    return new Uint8Array(v.buffer)
+  }
+  var api = {
+    guardar: async function (ruta, datos) { var b = await bytes(await datos); return ask({ op: 'write', path: String(ruta), data: b.buffer }, [b.buffer]) },
+    leer: function (ruta) { return ask({ op: 'read', path: String(ruta) }) },
+    leerTexto: async function (ruta) { return new TextDecoder().decode(await api.leer(ruta)) },
+    decodificarAudio: async function (ruta, sr) { var ab = await api.leer(ruta); return new OfflineAudioContext(1, 1, sr || 48000).decodeAudioData(ab) },
+    wav: wav,
+  }
+  function show(x) { if (typeof x === 'string') return x; try { return JSON.stringify(x) } catch (e) { return String(x) } }
+  addEventListener('message', async function (e) {
+    if (!e.data || e.data.type !== 'run' || !e.ports[0] || port) return
+    port = e.ports[0]
+    port.onmessage = function (m) { var p = pending.get(m.data.id); if (!p) return; pending.delete(m.data.id); m.data.error ? p.rej(new Error(m.data.error)) : p.res(m.data.value) }
+    var logs = [], size = 0
+    var log = function () { var t = Array.prototype.map.call(arguments, show).join(' '); if (size < 20000) { logs.push(t); size += t.length } }
+    var con = { log: log, info: log, warn: log, error: log, debug: log }
+    try {
+      var AsyncFunction = Object.getPrototypeOf(async function () {}).constructor
+      var fn = new AsyncFunction('guardar', 'leer', 'leerTexto', 'decodificarAudio', 'wav', 'console', e.data.code)
+      var value = await fn(api.guardar, api.leer, api.leerTexto, api.decodificarAudio, api.wav, con)
+      port.postMessage({ type: 'done', logs: logs, value: value === undefined ? undefined : show(value).slice(0, 20000) })
+    } catch (err) { port.postMessage({ type: 'done', logs: logs, error: String((err && err.stack) || err).slice(0, 4000) }) }
+  })
+  parent.postMessage({ type: 'oa-sandbox-ready' }, '*')
+})()
+</script>
+</head>
+<body></body>
+</html>

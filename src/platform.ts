@@ -40,6 +40,9 @@ export function userTemplateUrl(templateId: string, rel: string) {
   return (o?.projectOrigin ? `${o.projectOrigin}/ut/` : 'oa://ut/') + encodeURIComponent(templateId) + '/' + enc(rel)
 }
 
+/** Un archivo de app/runtime servido junto a un proyecto (mismo origen que sus escenas), p. ej. sandbox.html. */
+export const runtimeUrl = (projectId: string, file: string) => `${projectBase(projectId)}__oa/${file}`
+
 /** Compositor del timeline (vista previa y exportación: el mismo renderizador). */
 export const compositorUrl = (projectId: string, query: Record<string, string>) =>
   `${projectBase(projectId)}__oa/compositor.html?${new URLSearchParams(query)}`
