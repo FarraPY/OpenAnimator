@@ -5,6 +5,7 @@
  *   2. El "puente nativo" (host/webhost.ts) y, encima, el backend de Android (window.oa).
  *   3. La interfaz del teléfono (ui/PhoneApp.tsx).
  */
+import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { setHost } from '../android/host'
 import { installBackend } from '../android/backend'
@@ -31,6 +32,30 @@ function fatal(e: unknown) {
   const b = document.createElement('button'); b.textContent = 'Reintentar'; b.onclick = () => location.reload()
   box.append(h, p, b)
   root.appendChild(box)
+}
+
+/**
+ * Un error al dibujar desmonta toda la interfaz: quedaba sólo el fondo de la app, sin forma de salir más que cerrarla.
+ * Así se ve qué pasó (queda en el registro) y se puede volver a cargar.
+ */
+class Crashed extends Component<{ children: ReactNode }, { error: unknown }> {
+  state: { error: unknown } = { error: null }
+  static getDerivedStateFromError(error: unknown) { return { error } }
+  componentDidCatch(e: unknown, info: ErrorInfo) {
+    console.error('[interfaz]', e)
+    appLog('ERROR', 'interfaz', `${String((e as any)?.stack || e)}${info.componentStack ? `\n${info.componentStack}` : ''}`)
+  }
+  render() {
+    const e = this.state.error as any
+    if (!e) return this.props.children
+    return (
+      <div className="boot-error">
+        <h1>Algo falló en la interfaz</h1>
+        <pre>{String(e?.message || e)}</pre>
+        <button onClick={() => location.reload()}>Volver a cargar</button>
+      </div>
+    )
+  }
 }
 
 async function serviceWorker() {
@@ -70,7 +95,7 @@ async function boot() {
   installNativeGlass()
   // La interfaz se importa después: algunos módulos miran la plataforma al cargarse (modelos de Claude…).
   const { default: PhoneApp } = await import('./ui/PhoneApp')
-  createRoot(document.getElementById('root')!).render(<PhoneApp />)
+  createRoot(document.getElementById('root')!).render(<Crashed><PhoneApp /></Crashed>)
   appLog('INFO', 'app', `Interfaz lista en ${Math.round(performance.now())} ms${location.search.includes('recovered') ? ' (después de un cierre del motor web)' : ''}`)
   // Prueba de punta a punta en el simulador (la app la abre con -OATest e2e).
   if ((window as any).__oaTest === 'e2e') void import('./test/e2e').then((m) => m.runE2E())

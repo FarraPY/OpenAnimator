@@ -1,9 +1,10 @@
 import Foundation
 
-/// La red de iOS para lo que Claude Code manda a Anthropic (el chat, la prueba, la cuenta). Desde la página no se puede:
-/// con una cuenta del plan, la API rechaza los pedidos que salen de un navegador («CORS requests are not allowed for
-/// this Organization»). La respuesta vuelve por partes a la página (evento "net": head, chunk, end, error), así el
-/// streaming de Claude sigue andando.
+/// La red de iOS para lo que Claude Code manda a Anthropic (el chat, la prueba, la cuenta) y para los plugins de IA
+/// (http.request de webhost.ts). Desde la página no se puede: con una cuenta del plan, la API de Anthropic rechaza los
+/// pedidos que salen de un navegador («CORS requests are not allowed for this Organization»), y Fish Audio no contesta
+/// la consulta previa de CORS en /v1/tts ni /v1/asr (404), así que WebKit ni manda la narración. La respuesta vuelve por
+/// partes a la página (evento "net": head, chunk, end, error), así el streaming de Claude sigue andando.
 final class NetStream: NSObject, URLSessionDataDelegate {
     private let emit: (String, [String: Any]) -> Void
     private let queue: OperationQueue = {
@@ -24,10 +25,15 @@ final class NetStream: NSObject, URLSessionDataDelegate {
 
     init(emit: @escaping (String, [String: Any]) -> Void) { self.emit = emit }
 
-    /// Sólo Anthropic (https) o la propia máquina (http: la API de mentira de las pruebas).
+    /// Anthropic y los servicios de los plugins (https; los mismos de SECRET_HOSTS en webhost.ts) o la propia máquina
+    /// (http: la API de mentira de las pruebas).
+    static let hosts: Set<String> = [
+        "api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com",
+        "api.openai.com", "generativelanguage.googleapis.com", "openrouter.ai", "api.elevenlabs.io", "api.fish.audio",
+    ]
     static func allowed(_ url: URL) -> Bool {
         guard let host = url.host?.lowercased(), let scheme = url.scheme?.lowercased() else { return false }
-        if scheme == "https" { return ["api.anthropic.com", "platform.claude.com", "claude.ai", "console.anthropic.com"].contains(host) }
+        if scheme == "https" { return hosts.contains(host) }
         return scheme == "http" && (host == "127.0.0.1" || host == "localhost")
     }
 
